@@ -4,6 +4,7 @@ from thz.data_structures.thz import THzData
 
 
 class DataSet:
+    '''Class for managing a dataset of THzData objects loaded from a directory.'''
 
     def __init__(self, file_dir: str, **kwargs) -> None:
         self.file_dir = file_dir
@@ -30,3 +31,11 @@ class DataSet:
 
         return self.data_dict
     
+    def grabone(self) -> THzData:
+        '''Returns one THzData object from the data_dict for quick access.'''
+        if self.data_dict:
+            first_data = next(iter(self.data_dict.values()))
+            return first_data
+        else:
+            print("Data dictionary is empty. Load data first.")
+            return None

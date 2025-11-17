@@ -55,14 +55,20 @@ class THzData:
         self.data_list = data  # list of BaseTHz objects for each scan
         self.raw_data = self._compile_data_array()  # np.array of compiled data from all scans
         self.headers = header if not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
-        self.data = self._average_data()  # Averaged dataset
         self.reference_data = None
         self.data_type = None  # 'sample' or 'reference'
         self.number_of_scans = len(self.data_list)
         self.filename = kwargs.get('filename', 'unknown_file')
+        self.data = self._average_data()  # Averaged dataset
 
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {self.number_of_scans}\n   -> Data type: {self.data_type}\n" 
+    
+    def _calculate_std_error(self) -> np.array:
+        '''Calculates the standard error across all scans for each time point.'''
+        data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
+        std_error = np.std(data_matrix, axis=0) / np.sqrt(self.number_of_scans)
+        return std_error
 
     def _compile_data_array(self) -> np.array:
         '''Takes the data from all scans and compiles it into a single numpy array.'''
@@ -80,10 +86,41 @@ class THzData:
     
     def _compress_dataset(self) -> None:
         '''Compresses the dataset by removing redundant X-axis data from each scan.'''
-
-
         for obj in self.data_list:
             obj._compress_data()
         
-    def _average_data(self) -> list:
-        pass
+    def _average_data(self) -> np.array:
+        '''returns array of:
+         0: time (x-axis),
+         1: averaged data across all scans (y-axis),
+         2: Standard error as third column.'''
+
+        data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
+        std_error = np.std(data_matrix, axis=0) / np.sqrt(self.number_of_scans)
+        mean_data = np.mean(data_matrix, axis=0)
+        time_axis = self.data_list[0].raw_data[:, 0]
+        averaged_data = np.column_stack((time_axis, mean_data, std_error))
+        return averaged_data
+
+    def plot_current(self, **kwargs) -> None:
+        '''Plots the current averaged data with error bars as a shaded region.'''
+        import matplotlib.pyplot as plt
+
+        if self.data is None:
+            print("No averaged data to plot.")
+            return
+
+        time = self.data[:, 0]
+        mean_amplitude = self.data[:, 1]
+        std_error = self.data[:, 2]
+
+        plt.figure(figsize=kwargs.get('figsize', (10, 6)))
+        plt.plot(time, mean_amplitude, '-', label='Mean')
+        plt.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
+                 alpha=kwargs.get('alpha', 0.3), color='tab:red', label='Std Error')
+        plt.title(kwargs.get('title', 'Averaged THz Data'))
+        plt.xlabel(kwargs.get('xlabel', 'Time (ps)'))
+        plt.ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
+        plt.legend()
+        plt.grid(True)
+        plt.show()

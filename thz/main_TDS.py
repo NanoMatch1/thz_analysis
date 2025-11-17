@@ -69,9 +69,11 @@ ns = 1.9 #substate n
 Z0 = cs.physical_constants['characteristic impedance of vacuum'][0]
 
 ref_t = di.dataimport(filepath,reference)
-sam_t = di.dataimport(filepath,sample) 
+sam_t = di.dataimport(filepath,sample)
 
+# --> Plug in from new dataimport module
 
+breakpoint()
 # %% Analysis
 
 # moves the pulse to the center an pad 0 at the edges

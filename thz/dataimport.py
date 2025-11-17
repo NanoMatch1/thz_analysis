@@ -12,6 +12,8 @@ import pandas as pd
 from os import sep
 
 def dataimport(filepath,filename):
+
+    '''Imports and processes the data file into a pandas DataFrame, with columns for time, mean, and standard error.'''
    
     # # Read the file and split it into lines
     with open(filepath+sep+filename, 'r') as file:
@@ -60,6 +62,7 @@ def dataimport(filepath,filename):
     #calculate mean and standard error
     y_values = df.iloc[:,1:]
     y_mean = y_values.mean(1)
+    breakpoint()
     y_err = y_values.sem(1)
     
     #cancel offset, computed on first 10 points of time trace
