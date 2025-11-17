@@ -2,7 +2,8 @@
 acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, and each spectrum/collection is demarcated by %%.'''
 
 import numpy as np
-from thz.data_structures.thz import THzData
+from thz.data_structures.thz import THzData, BaseTHzData
+from os import path
 
 class ACCLoader:
 
@@ -10,6 +11,7 @@ class ACCLoader:
 
     def __init__(self, filepath: str) -> None:
         self.filepath = filepath
+        self.filename = path.basename(filepath)
 
     def _simple_load(self):
         '''Reads the entire file as plain text.'''
@@ -57,19 +59,13 @@ class ACCLoader:
 
     def load(self):
         '''Loads the data using simple load and parse methods.'''
-        new_data = None
+        new_data = []
         raw_data = self._simple_load()
         parsed_data = self._simple_split(raw_data)
         for key, value in parsed_data.items():
             data = self._parse_data(value['spectrum'])
-            if new_data is None:
-                new_data = data
-            else:
-                new_data = np.column_stack((new_data, data[:, 1]))
-            breakpoint()
-            # thz = THzData(data=data, header=value['header'])
-            # new_data[key] = thz
+            new_data.append(BaseTHzData(data=data, headers=value['header'])) # parse each scan into BaseTHzData object
         
-        return THzData(data=new_data, header=[])
+        return THzData(data=new_data, header=None, filename=self.filename)
 
         

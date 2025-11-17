@@ -1,5 +1,7 @@
+import os
 from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
+
 
 class DataSet:
 
@@ -20,7 +22,6 @@ class DataSet:
 
     def load_all_data(self) -> None:
         '''Loads all acc files in the specified directory into the data_dict attribute.'''
-        import os
 
         for filename in os.listdir(self.file_dir):
             if filename.endswith('.acc'):
