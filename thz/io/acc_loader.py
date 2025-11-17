@@ -2,7 +2,7 @@
 acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, and each spectrum/collection is demarcated by %%.'''
 
 import csv
-from data_structures.thz import THzData
+from thz.data_structures.thz import THzData
 
 class ACCLoader:
 

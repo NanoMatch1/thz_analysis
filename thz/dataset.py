@@ -1,5 +1,5 @@
-from io.acc_loader import ACCLoader
-from data_structures.thz import THzData
+from thz.io.acc_loader import ACCLoader
+from thz.data_structures.thz import THzData
 
 class DataSet:
 
