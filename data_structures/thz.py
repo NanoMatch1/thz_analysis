@@ -11,6 +11,8 @@ class THzData:
         self.data = data  # List of scans, each scan is a list of [time, amplitude] pairs
         self.headers = headers  # Dictionary of header information
         self.averaged_data = self._average_data()  # Averaged dataset
+        self.reference_data = None
+        self.data_type = None  # 'sample' or 'reference'
 
     def _average_data(self) -> list:
         pass

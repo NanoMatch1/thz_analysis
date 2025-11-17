@@ -2,6 +2,7 @@
 acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, and each spectrum/collection is demarcated by %%.'''
 
 import csv
+from data_structures.thz import THzData
 
 class ACCLoader:
 
@@ -13,7 +14,6 @@ class ACCLoader:
         Returns a THzData object containing the data and headers.'''
         headers = {}
         data = []
-        current_scan = []
 
         with open(self.filepath, 'r') as file:
             reader = csv.reader(file, delimiter='\t')
