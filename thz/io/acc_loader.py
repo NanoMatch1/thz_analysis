@@ -1,42 +1,75 @@
-'''Module for loading acc files. Returns THzData class object.
+'''Module for loading acc files. Returns a dataclass placeholder object.
 acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, and each spectrum/collection is demarcated by %%.'''
 
-import csv
+import numpy as np
 from thz.data_structures.thz import THzData
 
 class ACCLoader:
 
+    errors = []
+
     def __init__(self, filepath: str) -> None:
         self.filepath = filepath
 
-    def load(self):
-        '''Loads the acc file located at self.filepath.
-        Returns a THzData object containing the data and headers.'''
-        headers = {}
-        data = []
-
+    def _simple_load(self):
+        '''Reads the entire file as plain text.'''
         with open(self.filepath, 'r') as file:
-            reader = csv.reader(file, delimiter='\t')
-            breakpoint()
-            for row in reader:
-                if not row:
-                    continue
-                if row[0].startswith('%%'):
-                    if current_scan:
-                        data.append(current_scan)
-                        current_scan = []
-                elif row[0].startswith('%'):
-                    key_value = row[0][1:].split(':', 1)
-                    if len(key_value) == 2:
-                        key, value = key_value
-                        headers[key.strip()] = value.strip()
-                else:
-                    try:
-                        numeric_row = [float(value) for value in row]
-                        current_scan.append(numeric_row)
-                    except ValueError:
-                        continue
-            if current_scan:
-                data.append(current_scan)
+            data = file.read()
+        return data
+    
+    def _parse_data(self, spectrum: list):
+        '''Parses a list of strings into numeric data.'''
+        numeric_data = []
+        for row in spectrum:
+            try:
+                string_row = row.split(' ')
+                numeric_row = [float(value) for value in string_row]
+                numeric_data.append(numeric_row)
+            except ValueError:
+                self.errors.append(f"Could not parse row: {row}")
+                continue
+        try:
+            numeric_data = np.array(numeric_data)
+        except Exception as e:
+            self.errors.append(f"Could not convert data to numpy array: {e}")
+        return numeric_data
 
-        return THzData(data=data, headers=headers)
+    def _simple_split(self, raw_data: str):
+        '''Parses the data from simple_load method.'''
+        scans = raw_data.split("%%") # split by scans
+        scan_dict = {}
+
+        for index, item in enumerate(scans):
+            header = []
+            spectrum = []
+            rows = item.split("\n")
+            for row in rows:
+                row = row.strip()
+                if row.startswith('%'):
+                    header.append(row.strip('%').strip())
+                else:
+                    if row == '': # skip empty lines
+                        continue
+                    spectrum.append(row)
+
+            scan_dict[f'scan_{index}'] = {'header': header, 'spectrum': spectrum}
+        return scan_dict
+
+    def load(self):
+        '''Loads the data using simple load and parse methods.'''
+        new_data = None
+        raw_data = self._simple_load()
+        parsed_data = self._simple_split(raw_data)
+        for key, value in parsed_data.items():
+            data = self._parse_data(value['spectrum'])
+            if new_data is None:
+                new_data = data
+            else:
+                new_data = np.column_stack((new_data, data[:, 1]))
+            breakpoint()
+            # thz = THzData(data=data, header=value['header'])
+            # new_data[key] = thz
+        
+        return THzData(data=new_data, header=[])
+
+        
