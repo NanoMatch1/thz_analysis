@@ -1,6 +1,5 @@
 from dataset import DataSet
 
-
 file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
 
 if __name__ == "__main__":
