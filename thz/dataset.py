@@ -94,6 +94,20 @@ class DataSet:
         for thz_data in self.data_dict.values():
             thz_data._interpolate_time_axis(new_limits=(min_start, max_end))
 
+
+    def prepare_all_for_fft(self, length_factor: int = 5, dc_points: int = 10) -> None:
+        """
+        Run standard preprocessing on all loaded THzData objects:
+        1) subtract DC offset
+        2) center main pulse
+        3) pad time-domain trace
+        """
+        for thz_data in self.data_dict.values():
+            thz_data.subtract_dc_offset(num_points=dc_points)
+            thz_data.center_pulse_in_window()
+            thz_data.pad_time_domain(length_factor=length_factor)
+
+
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
         for name, thz_data in self.data_dict.items():
