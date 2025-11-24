@@ -105,28 +105,17 @@ class THzData:
     
     def _interpolate_time_axis(self, new_limits: tuple) -> None:
         '''Interpolates the averaged data to a new common time axis defined by new_limits (min, max).'''
-        import matplotlib.pyplot as plt
 
         min_time, max_time = new_limits
         time_axis = self.data[:, 0]
         dataY = self.data[:, 1]
         resolution = time_axis[1] - time_axis[0]
-        min_time = min_time + resolution/2
-        max_time = max_time - resolution/2
+
         new_time_axis = np.arange(min_time, max_time, resolution)
         dataY_interp = np.interp(new_time_axis, time_axis, dataY)
         std_error_interp = np.interp(new_time_axis, time_axis, self.data[:, 2])
 
         self.data = np.column_stack((new_time_axis, dataY_interp, std_error_interp))
-
-        # plt.plot(time_axis, dataY, 'o', label='Original Data')
-        # plt.plot(new_time_axis, dataY_interp, '-', label='Interpolated Data')
-        # plt.xlabel('Time (ps)')
-        # plt.ylabel('Amplitude (a.u.)')
-        # plt.title('Interpolation of Averaged THz Data')
-        # plt.legend()
-        # plt.show()
-        
         return self.data
 
     def subtract_dc_offset(self, num_points: int = 10) -> None:
