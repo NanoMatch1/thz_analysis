@@ -2,7 +2,8 @@
 
 Future improvements:
 1. Create a method for slicing/editing the dataset for averaging, to manually or automatically excluded data from the average.
-2. reduce memory usage by storing data in more efficient formats - e.g. compile BaseTHzData objects into a single numpy array rather than storing each scan separately, use mapping to correlate data.'''
+2. reduce memory usage by storing data in more efficient formats - e.g. compile BaseTHzData objects into a single numpy array rather than storing each scan separately, use mapping to correlate data.
+3. Add methods for advanced processing - waveform fitting, deconvolution, baseline correction, etc.'''
 
 import numpy as np
 import datetime
@@ -104,12 +105,33 @@ class THzData:
     
     def _interpolate_time_axis(self, new_limits: tuple) -> None:
         '''Interpolates the averaged data to a new common time axis defined by new_limits (min, max).'''
+        import matplotlib.pyplot as plt
 
         min_time, max_time = new_limits
         time_axis = self.data[:, 0]
+        dataY = self.data[:, 1]
+        resolution = time_axis[1] - time_axis[0]
+        min_time = min_time + resolution/2
+        max_time = max_time - resolution/2
+        new_time_axis = np.arange(min_time, max_time, resolution)
+        dataY_interp = np.interp(new_time_axis, time_axis, dataY)
+        std_error_interp = np.interp(new_time_axis, time_axis, self.data[:, 2])
 
-        # Create new common time axis
+        self.data = np.column_stack((new_time_axis, dataY_interp, std_error_interp))
+
+        # plt.plot(time_axis, dataY, 'o', label='Original Data')
+        # plt.plot(new_time_axis, dataY_interp, '-', label='Interpolated Data')
+        # plt.xlabel('Time (ps)')
+        # plt.ylabel('Amplitude (a.u.)')
+        # plt.title('Interpolation of Averaged THz Data')
+        # plt.legend()
+        # plt.show()
+        
+        return self.data
+
+    def subtract_dc_offset(self, num_points: int = 10) -> None:
         pass
+
 
     def plot_current(self, **kwargs) -> None:
         '''Plots the current averaged data with error bars as a shaded region.'''
@@ -133,11 +155,11 @@ class THzData:
         ax.plot(time, mean_amplitude, '-', label='Mean')
         ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
                  alpha=kwargs.get('alpha', 0.3), color='tab:red', label='Std Error')
-        ax.title(kwargs.get('title', 'Averaged THz Data'))
-        ax.xlabel(kwargs.get('xlabel', 'Time (ps)'))
-        ax.ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
+        ax.set_title(kwargs.get('title', 'Averaged THz Data'))
+        ax.set_xlabel(kwargs.get('xlabel', 'Time (ps)'))
+        ax.set_ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
         ax.legend()
-        ax.grid(True)
+        ax.grid(kwargs.get('show_grid', True))
 
         if show_plot:
             plt.show()

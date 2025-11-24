@@ -23,6 +23,10 @@ if __name__ == "__main__":
     datadict = data_set.data_dict
     test = data_set.grabone()
     # test.plot_current()
+    # test.plot_current()
+    # test._interpolate_time_axis(new_limits=(, 140))
+    data_set.interpolate_pulse_window()
+    data_set.plot_current()
     data_set.plot_sn()
     print(datadict)
     breakpoint()  # For debugging purposes

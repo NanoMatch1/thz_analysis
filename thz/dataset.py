@@ -4,11 +4,26 @@ from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
 
 class FigureObject:
-    '''Class for managing matplotlib figure and axis objects for plotting.'''
+    """Class for managing matplotlib figure and axis objects for plotting."""
 
     def __init__(self, **kwargs) -> None:
         self.figure, self.ax = plt.subplots()
+        self.closed = False
+        # track when this figure is closed
+        self._cid = self.figure.canvas.mpl_connect('close_event', self._on_close)
         self.__dict__.update(kwargs)
+
+    def _on_close(self, event):
+        # mark as closed if this is our figure
+        if event.canvas.figure is self.figure:
+            self.closed = True
+
+    def is_alive(self) -> bool:
+        # double-check with matplotlib's figure registry
+        return (not self.closed) and plt.fignum_exists(self.figure.number)
+
+    def clear(self):
+        self.ax.clear()
 
 
 class DataSet:
@@ -22,10 +37,14 @@ class DataSet:
         self.figure_objects = {}
 
     def _generate_figure_object(self, key: str, **kwargs) -> FigureObject:
-        '''Generates and stores a FigureObject for a given key if it doesn't already exist.'''
-        if key not in self.figure_objects:
-            self.figure_objects[key] = FigureObject(**kwargs)
-        return self.figure_objects[key]
+        """Get or create a FigureObject for a given key."""
+        fig_obj = self.figure_objects.get(key, None)
+        # If it doesn't exist or has been closed, make a new one
+        if fig_obj is None or not fig_obj.is_alive():
+            fig_obj = FigureObject(**kwargs)
+            self.figure_objects[key] = fig_obj
+
+        return fig_obj
     
     def load_data(self, filename: str) -> THzData:
         '''Loads a specific acc file and returns a THzData object.'''
@@ -57,13 +76,13 @@ class DataSet:
         
     def _find_common_time_window(self):
         '''Identifies the common time window across all THzData objects.'''
-        min_start = float(-1)
-        max_end = float(1)
+        min_start = float('inf')
+        max_end = float('-inf')
 
         for thz_data in self.data_dict.values():
             time = thz_data.data[:, 0]
-            min_start = max(min_start, min(time))
-            max_end = min(max_end, max(time))
+            min_start = min(min_start, min(time))
+            max_end = max(max_end, max(time))
 
         return min_start, max_end
         
@@ -73,7 +92,16 @@ class DataSet:
         min_start, max_end = self._find_common_time_window()
 
         for thz_data in self.data_dict.values():
-            pass
+            thz_data._interpolate_time_axis(new_limits=(min_start, max_end))
+
+    def plot_current(self, key: str = None, **kwargs) -> None:
+        '''Plots the current data for all THzData objects in the dataset.'''
+        for name, thz_data in self.data_dict.items():
+            figure_obj = self._generate_figure_object('main')
+            thz_data.plot_current(figure_obj=figure_obj, **kwargs)
+        
+        plt.show()
+
 
     def plot_sn(self):
         '''Plots the signal-to-noise ratio across the time domain for the loaded THzData objects.'''
