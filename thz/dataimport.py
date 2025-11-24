@@ -62,7 +62,6 @@ def dataimport(filepath,filename):
     #calculate mean and standard error
     y_values = df.iloc[:,1:]
     y_mean = y_values.mean(1)
-    breakpoint()
     y_err = y_values.sem(1)
     
     #cancel offset, computed on first 10 points of time trace

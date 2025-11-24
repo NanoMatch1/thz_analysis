@@ -22,6 +22,7 @@ if __name__ == "__main__":
     data_set.load_all_data()
     datadict = data_set.data_dict
     test = data_set.grabone()
-    test.plot_current()
+    # test.plot_current()
+    data_set.plot_sn()
     print(datadict)
     breakpoint()  # For debugging purposes

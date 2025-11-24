@@ -73,7 +73,7 @@ sam_t = di.dataimport(filepath,sample)
 
 # --> Plug in from new dataimport module
 
-breakpoint()
+# breakpoint()
 # %% Analysis
 
 # moves the pulse to the center an pad 0 at the edges
@@ -241,7 +241,7 @@ plt.xlim(0,10)
 plt.figure(3)
 plt.plot(T['Frequency (THz)'],T['Phase'], label='transfer $\phi$' )
 plt.plot(refw['Frequency (THz)'],phidifference-phioffset, label='$\Delta \phi$',linestyle='dashed' )
-breakpoint()
+
 # plt.plot(refw['Frequency (THz)'],phidiff, label='$\omega (t_{sam}-t_{ref})$', linestyle='dotted')
 
 # plt.xlim(0.0,4)

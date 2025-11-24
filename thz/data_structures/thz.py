@@ -101,6 +101,15 @@ class THzData:
         time_axis = self.data_list[0].raw_data[:, 0]
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
         return averaged_data
+    
+    def _interpolate_time_axis(self, new_limits: tuple) -> None:
+        '''Interpolates the averaged data to a new common time axis defined by new_limits (min, max).'''
+
+        min_time, max_time = new_limits
+        time_axis = self.data[:, 0]
+
+        # Create new common time axis
+        pass
 
     def plot_current(self, **kwargs) -> None:
         '''Plots the current averaged data with error bars as a shaded region.'''
@@ -114,13 +123,21 @@ class THzData:
         mean_amplitude = self.data[:, 1]
         std_error = self.data[:, 2]
 
-        plt.figure(figsize=kwargs.get('figsize', (10, 6)))
-        plt.plot(time, mean_amplitude, '-', label='Mean')
-        plt.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
+        if 'figure_obj' in kwargs:
+            figure_obj = kwargs.get('figure_obj')
+            ax = figure_obj.ax
+            show_plot = False
+        else:
+            fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+            show_plot = True
+        ax.plot(time, mean_amplitude, '-', label='Mean')
+        ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
                  alpha=kwargs.get('alpha', 0.3), color='tab:red', label='Std Error')
-        plt.title(kwargs.get('title', 'Averaged THz Data'))
-        plt.xlabel(kwargs.get('xlabel', 'Time (ps)'))
-        plt.ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+        ax.title(kwargs.get('title', 'Averaged THz Data'))
+        ax.xlabel(kwargs.get('xlabel', 'Time (ps)'))
+        ax.ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
+        ax.legend()
+        ax.grid(True)
+
+        if show_plot:
+            plt.show()
