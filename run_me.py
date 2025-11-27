@@ -1,4 +1,4 @@
-from thz.dataset import DataSet
+from thz.dataset import DataSet, Constants
 
 file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
 
@@ -17,7 +17,16 @@ def convert_to_pandas(thzdata):
     return df
 
 
+
+
 if __name__ == "__main__":
+
+    constants = Constants(
+        thickness = 2e-4,
+        eps_inf = 1, # glass 3.42, Si 11.6
+        ns = 1.9, #substate n
+)
+
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
     datadict = data_set.data_dict
@@ -27,6 +36,14 @@ if __name__ == "__main__":
     # test._interpolate_time_axis(new_limits=(, 140))
     # data_set.interpolate_pulse_window()
     data_set.prepare_all_for_fft(length_factor=5, dc_points=10)
+
+    # LEgacy marker
+    data_set.group_reference_sample()
+
+
+
+
+    
 
 
     data_set.plot_current()

@@ -8,6 +8,7 @@ Future improvements:
 
 import numpy as np
 import datetime
+import pandas as pd
 
 class BaseTHzData:
     '''Base class for THz data structures. Holds one scan and metadata information.'''
@@ -51,7 +52,17 @@ class BaseTHzData:
 
 class THzData:
     '''Data class for holding the THz data from experiments.
-    Contains multiple BaseTHzData objects for each scan, and methods for averaging and processing the data.'''
+    Contains multiple BaseTHzData objects for each scan, and methods for averaging and processing the data.
+    
+    Old dataframe compatibility: allows access via thzdata['Mean'], thzdata['Time (ps)'], etc.
+    '''
+
+    # df compatibility mapping
+    _column_map = {
+        "Time (ps)": 0,
+        "Mean": 1,
+        "std error": 2,
+    }
 
     def __init__(self, data: list, header: list, **kwargs) -> None:
         self.data_list = data  # list of BaseTHz objects for each scan
@@ -62,6 +73,37 @@ class THzData:
         self.number_of_scans = len(self.data_list)
         self.filename = kwargs.get('filename', 'unknown_file')
         self.data = self._average_data()  # Averaged dataset
+
+    def __getitem__(self, key):
+        """
+        Backwards-compatible dictionary-style access.
+        Allows: thz['Mean'], thz['Time (ps)'], etc.
+        """
+        if key not in self._column_map:
+            raise KeyError(f"{key} not found in THzData columns {list(self._column_map)}")
+
+        col_idx = self._column_map[key]
+        return self.data[:, col_idx]
+
+    # df compatibility assignment
+    def __setitem__(self, key, value):
+        """
+        Optional: allow assignment like thz['Mean'] = new_array.
+        """
+        if key not in self._column_map:
+            raise KeyError(f"{key} not found in THzData columns {list(self._column_map)}")
+        col_idx = self._column_map[key]
+        self.data[:, col_idx] = value
+
+    # df compatibility properties
+    @property
+    def columns(self):
+        """Backwards-compatible .columns attribute, like a DataFrame."""
+        return list(self._column_map.keys())
+
+    # df compatibility contains
+    def __contains__(self, key):
+        return key in self._column_map
 
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {self.number_of_scans}\n   -> Data type: {self.data_type}\n" 
@@ -193,6 +235,7 @@ class THzData:
         ) -> float:
         """
         Estimate baseline noise sigma from the current averaged trace.
+        Legacy dataframe 
 
         Parameters
         ----------
@@ -367,3 +410,43 @@ class THzData:
 
         if show_plot:
             plt.show()
+    
+    @property
+    def time(self) -> np.array:
+        '''Returns the time axis of the averaged data.'''
+        if self.data is not None:
+            return self.data[:, 0]
+        return None
+    
+    @property
+    def y_mean(self) -> np.array:
+        '''Returns the mean amplitude of the averaged data.'''
+        if self.data is not None:
+            return self.data[:, 1]
+        return None
+    
+    @property
+    def y_err(self) -> np.array:
+        '''Returns the standard error of the averaged data.'''
+        if self.data is not None:
+            return self.data[:, 2]
+        return None
+
+    def to_legacy_dataframe(self) -> pd.DataFrame:
+        """
+        Return a pandas DataFrame mimicking the original Marco-style timedata:
+
+        Columns:
+        'Time (ps)':   time axis in ps
+        'Mean':        averaged signal
+        'std error':   standard error across scans
+        """
+        if self.data is None:
+            raise ValueError("THzData.data is None; nothing to convert.")
+
+        df = pd.DataFrame(
+            self.data,
+            columns=["Time (ps)", "Mean", "std error"],
+        )
+        return df
+
