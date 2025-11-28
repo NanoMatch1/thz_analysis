@@ -37,15 +37,15 @@ if __name__ == "__main__":
     # data_set.interpolate_pulse_window()
     data_set.group_files()
     data_set.prepare_all_for_fft(length_factor=5, dc_points=10)
+    data_set.run_fft()
 
     # LEgacy marker
 
 
-
-    for filename, thzdata in datadict.items():
-        if 'sample' in filename.lower():
-            test = data_set.grouper(filename)
-            breakpoint()
+    # for filename, thzdata in datadict.items():
+    #     if 'sample' in filename.lower():
+    #         test = data_set.grouper(filename)
+    #         breakpoint()
 
 
     data_set.plot_current()

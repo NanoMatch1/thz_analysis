@@ -72,7 +72,9 @@ class THzData:
         self.data_type = None  # 'sample' or 'reference'
         self.number_of_scans = len(self.data_list)
         self.filename = kwargs.get('filename', 'unknown_file')
-        self.data = self._average_data()  # Averaged dataset
+
+        self.data_current = self._average_data()  # Averaged dataset
+
 
     def __getitem__(self, key):
         """
@@ -83,7 +85,7 @@ class THzData:
             raise KeyError(f"{key} not found in THzData columns {list(self._column_map)}")
 
         col_idx = self._column_map[key]
-        return self.data[:, col_idx]
+        return self.data_current[:, col_idx]
 
     # df compatibility assignment
     def __setitem__(self, key, value):
@@ -93,7 +95,7 @@ class THzData:
         if key not in self._column_map:
             raise KeyError(f"{key} not found in THzData columns {list(self._column_map)}")
         col_idx = self._column_map[key]
-        self.data[:, col_idx] = value
+        self.data_current[:, col_idx] = value
 
     # @property
     # def reference_data(self):
@@ -156,16 +158,16 @@ class THzData:
         '''Interpolates the averaged data to a new common time axis defined by new_limits (min, max).'''
 
         min_time, max_time = new_limits
-        time_axis = self.data[:, 0]
-        dataY = self.data[:, 1]
+        time_axis = self.data_current[:, 0]
+        dataY = self.data_current[:, 1]
         resolution = time_axis[1] - time_axis[0]
 
         new_time_axis = np.arange(min_time, max_time, resolution)
         dataY_interp = np.interp(new_time_axis, time_axis, dataY)
-        std_error_interp = np.interp(new_time_axis, time_axis, self.data[:, 2])
+        std_error_interp = np.interp(new_time_axis, time_axis, self.data_current[:, 2])
 
-        self.data = np.column_stack((new_time_axis, dataY_interp, std_error_interp))
-        return self.data
+        self.data_current = np.column_stack((new_time_axis, dataY_interp, std_error_interp))
+        return self.data_current
     
     def center_pulse_in_window(self) -> None:
         """
@@ -175,12 +177,12 @@ class THzData:
         This keeps the time step the same, keeps the total length the same,
         but aligns the pulse to the middle of the array.
         """
-        if self.data is None:
+        if self.data_current is None:
             return
 
-        time = self.data[:, 0]
-        mean = self.data[:, 1]
-        stderr = self.data[:, 2]
+        time = self.data_current[:, 0]
+        mean = self.data_current[:, 1]
+        stderr = self.data_current[:, 2]
 
         N = len(time)
         if N < 3:
@@ -218,19 +220,19 @@ class THzData:
             ),
         )[slice_obj]
 
-        self.data = np.column_stack((time_padded, mean_padded, stderr_padded))
+        self.data_current = np.column_stack((time_padded, mean_padded, stderr_padded))
 
 
     def subtract_dc_offset(self, num_points: int = 10) -> None:
         """
         Subtract a DC offset from the averaged trace using the first `num_points`
-        as baseline. Modifies self.data in-place.
+        as baseline. Modifies self.data_current in-place.
         """
-        if self.data is None or self.data.shape[0] < num_points:
+        if self.data_current is None or self.data_current.shape[0] < num_points:
             return
 
-        baseline = np.mean(self.data[:num_points, 1])
-        self.data[:, 1] -= baseline
+        baseline = np.mean(self.data_current[:num_points, 1])
+        self.data_current[:, 1] -= baseline
         # std_error unaffected (we’re just shifting mean)
 
     def _estimate_noise_sigma(
@@ -260,11 +262,11 @@ class THzData:
         noise_sigma : float
             Estimated standard deviation of noise (same units as amplitude).
         """
-        if self.data is None:
+        if self.data_current is None:
             return 0.0
 
-        mean = self.data[:, 1]
-        stderr = self.data[:, 2]
+        mean = self.data_current[:, 1]
+        stderr = self.data_current[:, 2]
         N = len(mean)
         if N < 3:
             return 0.0
@@ -324,12 +326,12 @@ class THzData:
             Numpy random generator for reproducible noise. If None, uses
             np.random.default_rng().
         """
-        if self.data is None:
+        if self.data_current is None:
             return
 
-        time = self.data[:, 0]
-        mean = self.data[:, 1]
-        stderr = self.data[:, 2]
+        time = self.data_current[:, 0]
+        mean = self.data_current[:, 1]
+        stderr = self.data_current[:, 2]
 
         N = len(time)
         if N < 3 or length_factor <= 1:
@@ -383,20 +385,20 @@ class THzData:
 
         stderr_ext = np.concatenate([left_stderr, stderr, right_stderr])
 
-        self.data = np.column_stack((time_ext, mean_ext, stderr_ext))
+        self.data_current = np.column_stack((time_ext, mean_ext, stderr_ext))
 
 
     def plot_current(self, **kwargs) -> None:
         '''Plots the current averaged data with error bars as a shaded region.'''
         import matplotlib.pyplot as plt
 
-        if self.data is None:
+        if self.data_current is None:
             print("No averaged data to plot.")
             return
 
-        time = self.data[:, 0]
-        mean_amplitude = self.data[:, 1]
-        std_error = self.data[:, 2]
+        time = self.data_current[:, 0]
+        mean_amplitude = self.data_current[:, 1]
+        std_error = self.data_current[:, 2]
 
         if 'figure_obj' in kwargs:
             figure_obj = kwargs.get('figure_obj')
@@ -419,23 +421,23 @@ class THzData:
     
     @property
     def time(self) -> np.array:
-        '''Returns the time axis of the averaged data.'''
-        if self.data is not None:
-            return self.data[:, 0]
+        '''Returns the time axis of the working dataset in data_current.'''
+        if self.data_current is not None:
+            return self.data_current[:, 0]
         return None
     
     @property
     def y_mean(self) -> np.array:
-        '''Returns the mean amplitude of the averaged data.'''
-        if self.data is not None:
-            return self.data[:, 1]
+        '''Returns the mean amplitude of the working dataset in data_current.'''
+        if self.data_current is not None:
+            return self.data_current[:, 1]
         return None
     
     @property
     def y_err(self) -> np.array:
-        '''Returns the standard error of the averaged data.'''
-        if self.data is not None:
-            return self.data[:, 2]
+        '''Returns the standard error of the working dataset in data_current.'''
+        if self.data_current is not None:
+            return self.data_current[:, 2]
         return None
 
     def to_legacy_dataframe(self) -> pd.DataFrame:
@@ -447,12 +449,17 @@ class THzData:
         'Mean':        averaged signal
         'std error':   standard error across scans
         """
-        if self.data is None:
+        if self.data_current is None:
             raise ValueError("THzData.data is None; nothing to convert.")
 
         df = pd.DataFrame(
-            self.data,
+            self.data_current,
             columns=["Time (ps)", "Mean", "std error"],
         )
         return df
+    
+    def run_fft(self):
+        '''Runs the fft_err function on the current data and returns the spectrum as a numpy array.'''
+        from thz.data_processing.fft_processing import fft_err
+        return fft_err(self)
 
