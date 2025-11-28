@@ -38,8 +38,7 @@ if __name__ == "__main__":
     data_set.prepare_all_for_fft(length_factor=5, dc_points=10)
 
     # LEgacy marker
-    data_set.group_reference_sample()
-
+    data_set.group_files()
 
 
 

@@ -2,6 +2,7 @@ import os
 import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
+from thz.services.grouping import GroupingService
 
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
@@ -58,10 +59,6 @@ class DataSet:
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
-
-        self.reference_air = []
-        self.reference_files = []
-        self.sample_files = []
 
     def _generate_figure_object(self, key: str, **kwargs) -> FigureObject:
         """Get or create a FigureObject for a given key."""
@@ -148,58 +145,12 @@ class DataSet:
         '''Plots the signal-to-noise ratio across the time domain for the loaded THzData objects.'''
         pass
 
-    # def _calculate_sn():
-    #     #SNR (noise calculated between 4-10 THz for ZnTe)
 
-    #     for name, thz_data in self.data_dict.items():
-    #         df = thz_data.test
+    def group_files(self, **kwargs):
+        '''Groups files based on provided sample and reference keys.'''
+        file_list = [key for key in self.data_dict.keys()]
+        groups = GroupingService(file_list, **kwargs)
+        groups.simple_grouping_2()
 
-    #     pass
 
-    #     lo_threshold = 4
-    #     up_threshold = 10
-    #     nrange = ref.loc[ref['Frequency (THz)'].between(lo_threshold, up_threshold), 'Amplitude']
-    #     nfloor_ref = nrange.mean()
 
-    #     DR = np.max(ref['Amplitude'].values)/nfloor_ref
-
-    #     nrangew = refw.loc[refw['Frequency (THz)'].between(lo_threshold, up_threshold), 'Amplitude']
-    #     nfloor_refw = nrangew.mean()
-
-    #     DRw = np.max(refw['Amplitude'].values)/nfloor_refw
-
-    #     DRimpr = 10*np.log10(DRw/DR)
-
-    # def _find_unique_filenames(self):
-    #     '''Finds unique sample and reference filenames based on provided keys.'''
-    #     sample_files = []
-    #     reference_files = []
-
-    #     for filename in self.data_dict.keys():
-    #         if any(key in filename for key in self.sample_keys):
-    #             sample_files.append(filename)
-    #         if any(key in filename for key in self.reference_keys):
-    #             reference_files.append(filename)
-
-    #     return sample_files, reference_files
-
-    def group_reference_sample(self, sample_key=None, reference_key=None):
-        '''Assigns reference THzData objects based on filenames and sampel and reference keys.'''
-
-        # default to DataSet keys if none provided
-        if sample_key is None and self.sample_keys:
-            sample_key = self.sample_keys[0]
-        if reference_key is None and self.reference_keys:
-            reference_key = self.reference_keys[0]
-
-        for filename, thz_data in self.data_dict.items():
-            if reference_key and 'air' in filename.lower():
-                self.reference_air.append(filename)
-                continue
-            elif sample_key in filename:
-                self.sample_files.append(filename)
-            elif reference_key in filename:
-                self.reference_files.append(filename)
-            
-        print(f"Found Samples: {self.sample_files}\n Found References: {self.reference_files}\n Found Air References: {self.reference_air}")
-    
