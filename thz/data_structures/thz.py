@@ -95,6 +95,12 @@ class THzData:
         col_idx = self._column_map[key]
         self.data[:, col_idx] = value
 
+    # @property
+    # def reference_data(self):
+    #     '''Consults the grouping service to get the reference THzData object if available. Returns the THzData object or None.'''
+
+
+
     # df compatibility properties
     @property
     def columns(self):

@@ -149,8 +149,8 @@ class DataSet:
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
         file_list = [key for key in self.data_dict.keys()]
-        groups = GroupingService(file_list, **kwargs)
-        groups.simple_grouping_2()
+        self.grouper = GroupingService(file_list, **kwargs)
+        self.grouper.simple_grouping()
 
-
+    # def 
 

@@ -35,14 +35,17 @@ if __name__ == "__main__":
     # test.plot_current()
     # test._interpolate_time_axis(new_limits=(, 140))
     # data_set.interpolate_pulse_window()
+    data_set.group_files()
     data_set.prepare_all_for_fft(length_factor=5, dc_points=10)
 
     # LEgacy marker
-    data_set.group_files()
 
 
 
-    
+    for filename, thzdata in datadict.items():
+        if 'sample' in filename.lower():
+            test = data_set.grouper(filename)
+            breakpoint()
 
 
     data_set.plot_current()

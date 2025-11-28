@@ -29,12 +29,17 @@ class FilenameItem:
         self.data_type = None
         self.extra_details = None
 
-        self.__dict__.update(kwargs)
+        self.air_reference = None
+        self.substrate_reference = None
 
         self._parse_filename()
 
     def __repr__(self):
-        return f"Filename: {self.filename}\n -> type:{self.type}\n -> series:{self.series}\n -> temperature:{self.temperature}\n -> extra_details:{self.extra_details}"
+        # details = 
+        return f"Filename: {self.filename}\n -> type: {self.data_type}\n -> series:{self.series}\n -> temperature: {self.temperature}\n -> extra_details: {self.extra_details}\n -> air_reference: {self.air_reference}\n -> substrate_reference: {self.substrate_reference}\n"
+    
+    def __str__(self):
+        return self.filename
 
     def _parse_filename(self, delimiter: str = '_', grouping: list = ['type', 'series', 'temp'], **kwargs):
         '''Parses the filename into components based on provided delimiter and grouping order.'''
@@ -73,22 +78,35 @@ class GroupingService:
 
     def __init__(self, filelist, keywords=[''], delimiter='_', **kwargs):
         self.filelist = filelist
-        self.file_items = []
+        self.file_items = {}
         self.filename_groups = {}
         self.global_reference = {}
         self.keywords = keywords
         self.delimiter = delimiter
         self.__dict__.update(kwargs)
 
+    def __call__(self, filename, object_type=None):
+        file_obj = self.file_items.get(filename, None)
+        if file_obj is None:
+            print(f"Filename {filename} not found in file items.")
+            return None
+        
+        if object_type is None:
+            return file_obj
+        
+        if hasattr(file_obj, object_type):
+            return getattr(file_obj, object_type)
+
+        return
+
     def _build_fileitems(self, **kwargs):
         '''Builds FilenameItem objects for each filename in the filelist.'''
-        self.file_items = []
 
         for filename in self.filelist:
             item = FilenameItem(filename, **kwargs)
-            self.file_items.append(item)
+            self.file_items[filename] = item
 
-    def simple_grouping_2(self, delimiter='_', grouping=['type', 'series', 'temp']):
+    def simple_grouping(self, delimiter='_', grouping=['type', 'series', 'temp']):
         '''Groups data by slicing the filename. Expects filename to contain data outlined in grouping, and does not (yet) logically check those parameters.
         
         currently: grouping: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
@@ -97,7 +115,7 @@ class GroupingService:
         self.filename_groups = {}
         self._build_fileitems(delimiter=delimiter, grouping=grouping, merge_extra=True)
 
-        for item in self.file_items: #
+        for filename, item in self.file_items.items(): #
             if item.data_type == 'reference' and item.series == 'substrate': # special case for substrate reference
                 if 'substrate' not in self.global_reference:
                     self.global_reference['substrate'] = {item.temperature: item.filename}
@@ -122,9 +140,13 @@ class GroupingService:
                     if 'substrate' in self.global_reference and temp in self.global_reference['substrate']:
                         data['reference'] = self.global_reference['substrate'][temp]
 
-        print("Completed simple grouping of filenames:")
-        print(self.filename_groups)
-        print(self.global_reference)
+        print("Completed simple grouping of filenames.")
+        # print(self.filename_groups)
+        # print(self.global_reference)
+
+
+        self.integrity_check()
+        self._pair_references()
 
     def integrity_check(self):
         '''Performs an integrity check on the grouped filenames to ensure each group has the expected components required for analysis.'''
@@ -148,6 +170,20 @@ class GroupingService:
         else:
             print("Integrity check passed: All groups have required components.")
         
+    def _pair_references(self):
+        '''Works through filename_groups to pair reference to the sample file_items.'''
+        
+        for series, temps in self.filename_groups.items():
+            for temp, data in temps.items():
+                sample_file = data.get('sample', None)
+                reference_file = data.get('reference', None)
+
+                if sample_file is not None:
+                    sample_item = self.file_items[sample_file]
+                    # reference_item = self.file_items[reference_file]
+
+                    sample_item.substrate_reference = reference_file
+                    sample_item.air_reference = self.global_reference.get('air', None)
 
     def _separate_by_delimiters(self, delimiter=None):
         '''Separates a filename into components based on provided delimiters.'''
@@ -162,72 +198,5 @@ class GroupingService:
             components = [comp.strip() for comp in components if comp.strip()] # remove empty strings and whitespace
             return components
 
-    def simple_grouping(self, filename_grouping=None, substrate_key='substrate', ordering=None):
-        '''Groups filenames based on a provided grouping dictionary. Intended as a quick soltion for a single format.
-        
-        filename_grouping: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
-        '''
 
-        global_reference = {}
-
-        if not filename_grouping:
-            filename_grouping = ['type', 'series', 'temp']
-
-        if not ordering:
-            ordering = ['series', 'temp', 'type']
-
-        
-        series_index = filename_grouping.index('series')
-        type_index = filename_grouping.index('type')
-        temp_index = filename_grouping.index('temp')
-
-        for filename in self.filelist:
-            if 'reference' and 'air' in filename.lower(): # special case for air reference
-                global_reference['air'] = filename
-                continue
-            # Isolate components
-            details = '.'.join(filename.split('.')[:-1]) # Remove file extension
-
-            details = details.split(self.delimiter)
-            series = details[series_index]
-            ftype = details[type_index]
-            temp = details[temp_index].lower().strip(' k')
-
-            if ftype == 'reference' and series == 'substrate':
-                if 'substrate' not in global_reference:
-                    global_reference['substrate'] = {temp: filename}
-                else:
-                    global_reference['substrate'][temp] = filename
-                continue
-
-            if len(details) > len(filename_grouping): # append any remaining details back to series
-                extra = details[len(filename_grouping):]
-                print("Found additional details for {}. Appending remaining details to series".format(filename))
-                series = f"{series}_{self.delimiter.join(extra)}"
-
-            if series not in self.filename_groups:
-                self.filename_groups[series] = {}
-            if ftype not in self.filename_groups[series]:
-                self.filename_groups[series][temp] = {}
-            self.filename_groups[series][temp][ftype] = filename
-
-
-        # Attach global references
-        for series, temps in self.filename_groups.items():
-            for temp, data in temps.items():
-                if 'reference' not in data.keys():
-                    if 'substrate' in global_reference and temp in global_reference['substrate']:
-                        data['reference'] = global_reference['substrate'][temp]
-
-        print("Completed simple grouping of filenames:")
-        print(self.filename_groups)
-        print(global_reference)
-        breakpoint()  # For debugging purposes
-
-
-
-
-    def _identify_groups(self, filenames):
-        '''Identifies groups of filenames based on keywords and delimiters.'''
-        
         
