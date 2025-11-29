@@ -74,7 +74,9 @@ class FilenameItem:
 
 class GroupingService:
 
-    '''Creates a nested dictionary structure to group filenames based on provided delimiters and keywords.'''
+    '''Creates a nested dictionary structure to group filenames based on provided delimiters and keywords.
+    
+    Handles tracking of the current dataset through modifications to the _current_data_list attribute. DataSet can access and modify this attribute to control which files are being worked on.'''
 
     def __init__(self, keywords=[''], delimiter='_', **kwargs):
         self.filelist = kwargs.get('filelist', [])
@@ -84,6 +86,14 @@ class GroupingService:
         self.keywords = keywords
         self.delimiter = delimiter
         self.__dict__.update(kwargs)
+
+        self._current_data_list = []
+
+    def get_current_data_list(self):
+        return self._current_data_list
+    
+    def set_current_data_list(self, new_list):
+        self._current_data_list = new_list
 
     def __call__(self, filename, object_type=None):
         file_obj = self.file_items.get(filename, None)
@@ -105,6 +115,7 @@ class GroupingService:
         for filename in filelist:
             self.filelist.append(filename)
         
+        self._current_data_list = self.filelist # note this is a shallow copy, i.e. a reference to filelist, and will follow any changes made to it.
         self._build_fileitems()
 
     def _build_fileitems(self, **kwargs):

@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
+from collections.abc import Mapping
 
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
@@ -55,11 +56,56 @@ class DataSet:
 
     def __init__(self, file_dir: str, **kwargs) -> None:
         self.file_dir = file_dir
-        self.data_dict = {}
+        self._data_dict = {}
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
         self.grouping = GroupingService()
+
+    @property
+    def all_data(self) -> list:
+        """Returns dictionary of all objects in the dataset."""
+        return self._data_dict
+
+    @property
+    def data_dict(self) -> dict:
+        """
+        Returns a *view* over self._data_dict, restricted to the filenames
+        that the grouping service considers 'current'.
+        """
+        current_data_list = self.grouping.get_current_data_list()
+        current_data_dict = {key: self._data_dict[key] for key in current_data_list}
+
+        return current_data_dict
+
+    @data_dict.setter
+    def data_dict(self, new_data: Mapping[str, any]) -> None:
+        """
+        Ingest a new set of data items.
+
+        - Updates the master _data_dict with the supplied items.
+        - Updates the grouping's 'current' list to these keys.
+        """
+        if not isinstance(new_data, Mapping):
+            raise TypeError(
+                f"data_dict must be set with a mapping of filename -> data, "
+                f"got {type(new_data)!r}"
+            )
+
+        # 1. Update master store (merge or replace, depending on what you want)
+        # Option A: merge into existing master
+        for name, data in new_data.items():
+            self._data_dict[name] = data
+
+        # 2. Tell the grouping service which filenames are now 'current'
+        if hasattr(self.grouping, "set_current_data_list"):
+            self.grouping.set_current_data_list(list(new_data.keys()))
+        else:
+            raise AttributeError(
+                "Grouping object must implement 'set_current_data_list' "
+                "to support setting data_dict."
+            )
+
 
     def _generate_figure_object(self, key: str, **kwargs) -> FigureObject:
         """Get or create a FigureObject for a given key."""

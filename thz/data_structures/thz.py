@@ -11,7 +11,8 @@ import datetime
 import pandas as pd
 
 class BaseTHzData:
-    '''Base class for THz data structures. Holds one scan and metadata information.'''
+    '''Base class for THz data structures. Holds one scan and metadata information.
+    '''
     
     def __init__(self, data: np.array, headers: dict) -> None:
         self.raw_data = data  # Numpy array of [time, amplitude] pairs
@@ -55,6 +56,10 @@ class THzData:
     Contains multiple BaseTHzData objects for each scan, and methods for averaging and processing the data.
     
     Old dataframe compatibility: allows access via thzdata['Mean'], thzdata['Time (ps)'], etc.
+
+    Currently implements a storage-bomb strategy where each item holds the processed data, including time-trace, fourier transformed spectrum, and referenced data. 
+    Future versions will implement a more memory-efficient storage strategy with rewind features.
+
     '''
 
     # df compatibility mapping
