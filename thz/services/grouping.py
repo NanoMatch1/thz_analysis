@@ -131,7 +131,6 @@ class GroupingService:
         currently: grouping: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
         '''
 
-        self.filename_groups = {}
         self._build_fileitems(delimiter=delimiter, grouping=grouping, merge_extra=True)
 
         breakpoint()

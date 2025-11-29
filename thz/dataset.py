@@ -5,6 +5,33 @@ from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
 
+class DataService:
+    '''Custom dict-like object holds data and accesses it as needed. Holds master data dictionary and allows access to subsets via filename keys.'''
+    
+    def __init__(self):
+        self.data_dict = {}
+        self.grouping_service = GroupingService()
+
+    def __getitem__(self, filename):
+        return self.data_dict.get(filename, None)
+
+    def __setitem__(self, filename, obj):
+        self.data_dict[filename] = obj
+
+    def add_items(self, mapping):
+        self.data_dict.update(mapping)
+    
+    def add_item(self, filename, obj):
+        self.data_dict[filename] = obj
+    
+    def remove_item(self, filename):
+        if filename in self.data_dict:
+            del self.data_dict[filename]
+
+    def access_data(self, filenames: list):
+        return {key: self.data_dict[key] for key in filenames if key in self.data_dict}
+
+
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
 
@@ -77,6 +104,19 @@ class DataSet:
         current_data_dict = {key: self._data_dict[key] for key in current_data_list}
 
         return current_data_dict
+    
+    def add_item(self, filename, obj):
+        self._data_dict[filename] = obj
+
+    def remove_item(self, filename):
+        if filename in self._data_dict:
+            del self._data_dict[filename]
+
+    def add_items(self, mapping):
+        self._data_dict.update(mapping)
+
+    def set_current_files(self, filenames):
+        self.grouping.set_current_data_list(list(filenames))
 
     @data_dict.setter
     def data_dict(self, new_data: Mapping[str, any]) -> None:
@@ -136,6 +176,7 @@ class DataSet:
 
         filelist = [key for key in self.data_dict.keys()]
         self.grouping.update(filelist=filelist)
+        breakpoint()
 
         return self.data_dict
     
@@ -198,7 +239,7 @@ class DataSet:
 
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
-        file_list = [key for key in self.data_dict.keys()]
+        breakpoint()
         self.grouping.simple_grouping()
 
     def run_fft(self):
