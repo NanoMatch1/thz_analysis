@@ -76,8 +76,8 @@ class GroupingService:
 
     '''Creates a nested dictionary structure to group filenames based on provided delimiters and keywords.'''
 
-    def __init__(self, filelist, keywords=[''], delimiter='_', **kwargs):
-        self.filelist = filelist
+    def __init__(self, keywords=[''], delimiter='_', **kwargs):
+        self.filelist = kwargs.get('filelist', [])
         self.file_items = {}
         self.filename_groups = {}
         self.global_reference = {}
@@ -98,6 +98,14 @@ class GroupingService:
             return getattr(file_obj, object_type)
 
         return
+    
+    def update(self, filelist=[]):
+        '''Updates the grouping service with new filelist by appending to the old, and rebuilds file items.'''
+
+        for filename in filelist:
+            self.filelist.append(filename)
+        
+        self._build_fileitems()
 
     def _build_fileitems(self, **kwargs):
         '''Builds FilenameItem objects for each filename in the filelist.'''
@@ -114,6 +122,8 @@ class GroupingService:
 
         self.filename_groups = {}
         self._build_fileitems(delimiter=delimiter, grouping=grouping, merge_extra=True)
+
+        breakpoint()
 
         for filename, item in self.file_items.items(): #
             if item.data_type == 'reference' and item.series == 'substrate': # special case for substrate reference

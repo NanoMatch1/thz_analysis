@@ -59,6 +59,7 @@ class DataSet:
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
+        self.grouping = GroupingService()
 
     def _generate_figure_object(self, key: str, **kwargs) -> FigureObject:
         """Get or create a FigureObject for a given key."""
@@ -86,6 +87,9 @@ class DataSet:
             if filename.endswith('.acc'):
                 thz_data = self.load_data(filename)
                 self.data_dict[filename] = thz_data
+
+        filelist = [key for key in self.data_dict.keys()]
+        self.grouping.update(filelist=filelist)
 
         return self.data_dict
     
@@ -149,8 +153,7 @@ class DataSet:
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
         file_list = [key for key in self.data_dict.keys()]
-        self.grouper = GroupingService(file_list, **kwargs)
-        self.grouper.simple_grouping()
+        self.grouping.simple_grouping()
 
     def run_fft(self):
         '''Applies FFT with error propagation to all THzData objects in the dataset.'''
