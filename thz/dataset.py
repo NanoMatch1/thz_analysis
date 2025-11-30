@@ -34,6 +34,16 @@ class DataService:
     def keys(self):
         datadict = self.grouping.get_current_data_list()
         return datadict
+    
+    def values(self):
+        filelist = self.grouping.get_current_data_list()
+        data_dict = {key: self._data_dict[key] for key in filelist}
+        return data_dict.values()
+
+    def items(self):
+        filelist = self.grouping.get_current_data_list()
+        data_dict = {key: self._data_dict[key] for key in filelist}
+        return data_dict.items()
 
     def add_items(self, mapping):
         self._data_dict.update(mapping)
@@ -202,7 +212,6 @@ class DataSet:
 
         # self.grouping.update(filelist=filelist)
         self.data.update_filelist(filelist=filelist)
-        breakpoint()
 
         return self.data
     
@@ -265,8 +274,7 @@ class DataSet:
 
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
-        breakpoint()
-        self.grouping.simple_grouping()
+        self.data.grouping.simple_grouping()
 
     def run_fft(self):
         '''Applies FFT with error propagation to all THzData objects in the dataset.'''

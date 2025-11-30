@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
-    # datadict = data_set.data_dict
+    
     # test = data_set.grabone()
     # test.plot_current()
     # test.plot_current()

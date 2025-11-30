@@ -22,17 +22,18 @@ class TemperatureItem:
 
 class FilenameItem:
 
-    def __init__(self, filename: str, **kwargs):
+    def __init__(self, filename: str, keywords=['type', 'series', 'temp'],**kwargs):
         self.filename = filename
         self.temperature = None
         self.series = None
         self.data_type = None
         self.extra_details = None
+        self.keywords = keywords
 
         self.air_reference = None
         self.substrate_reference = None
 
-        # self._parse_filename()
+        self._parse_filename(keywords=self.keywords, **kwargs)
 
     def __repr__(self):
         # details = 
@@ -78,9 +79,10 @@ class GroupingService:
     
     Handles tracking of the current dataset through modifications to the _current_data_list attribute. DataSet can access and modify this attribute to control which files are being worked on.'''
 
-    def __init__(self, keywords=[''], delimiter='_', **kwargs):
+    def __init__(self, keywords=['type', 'series', 'temp'], delimiter='_', **kwargs):
         self.filelist = kwargs.get('filelist', [])
         self.file_items = {}
+        self.keywords = keywords
         self.filename_groups = {}
         self.global_reference = {}
         self.keywords = keywords
@@ -88,6 +90,9 @@ class GroupingService:
         self.__dict__.update(kwargs)
 
         self._current_data_list = []
+
+    def set_grouping_keywords(self, new_keywords):
+        self.keywords = new_keywords
 
     def get_current_data_list(self):
         return self._current_data_list
@@ -125,6 +130,15 @@ class GroupingService:
             item = FilenameItem(filename, **kwargs)
             self.file_items[filename] = item
 
+    def parse_filenames(self, keywords=None, **kwargs):
+        '''Parses all filenames in file_items using provided delimiters and grouping order.'''
+
+        if keywords is None:
+            keywords = self.keywords
+
+        for item in self.file_items.values():
+            item._parse_filename(grouping=keywords, **kwargs)
+
     def simple_grouping(self, delimiter='_', grouping=['type', 'series', 'temp']):
         '''Groups data by slicing the filename. Expects filename to contain data outlined in grouping, and does not (yet) logically check those parameters.
         
@@ -132,6 +146,8 @@ class GroupingService:
         '''
 
         self._build_fileitems(delimiter=delimiter, grouping=grouping, merge_extra=True)
+        self.parse_filenames()
+        
 
         breakpoint()
 
@@ -161,10 +177,6 @@ class GroupingService:
                         data['reference'] = self.global_reference['substrate'][temp]
 
         print("Completed simple grouping of filenames.")
-        # print(self.filename_groups)
-        # print(self.global_reference)
-
-
         self.integrity_check()
         self._pair_references()
 
