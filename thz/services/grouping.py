@@ -148,9 +148,6 @@ class GroupingService:
         self._build_fileitems(delimiter=delimiter, grouping=grouping, merge_extra=True)
         self.parse_filenames()
         
-
-        breakpoint()
-
         for filename, item in self.file_items.items(): #
             if item.data_type == 'reference' and item.series == 'substrate': # special case for substrate reference
                 if 'substrate' not in self.global_reference:

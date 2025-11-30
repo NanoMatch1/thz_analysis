@@ -1,37 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-FFT with error propagation and careful phase unwrap (after Jepsen 2019)
-Refactored to work with THzData.data (N x 3 numpy array).
+Created on Mon Jun 19 12:29:16 2023
 
-Assumes columns:
-  0: Time (ps)
-  1: Mean signal
-  2: Std error of signal
+FFT with error propagation and careful phase unwrap from Jepsen 
+https://doi.org/10.1007/s10762-019-00578-0
 
-Returns a pandas DataFrame with:
-  'Frequency (THz)', 'Amplitude', 'Δ(Amplitude)', 'Phase', 'Δ(Phase)'
+
+@author: Marco Ballabio
 """
 
 import numpy as np
 import pandas as pd
-from scipy.fft import rfft, rfftfreq   # rfft returns only positive frequencies
+from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
+from scipy.signal import welch  # Welch method for smoother PSD estimate
 from math import e
+from thz.data_processing.phase_interpolation import phaseex
+from thz.data_structures.decorators import array_to_dataframe_adapter
 
-
-def fft_err(thz_data): 
+@array_to_dataframe_adapter(arg_name="timedata", columns=["Time (ps)", "Mean", "std error"])
+def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py
 
     #take first column of dataframe as time , 2nd as average and 3rd as error
-    time = thz_data.time
-    y_mean = thz_data.y_mean
-    y_err =  thz_data.y_err
+    time = timedata.loc[:,'Time (ps)']
+    y_mean = timedata.loc[:,'Mean']
+    y_err =  timedata.loc[:,'std error']
+    
     
     #define freq axis
     freq = rfftfreq(len(time), time[1]-time[0])
+    
     #cancel offset, computed on first 10 points of time trace
     y_mean = y_mean-np.average(y_mean[0:10])
     
     #fourier transform and error / normalized by sqrt(N)
-
+    
+    """
+    #note: scipy cannot process pandas Series, you have to pass the values
+    """
+    
     ft_y_mean = rfft(y_mean.values, norm='ortho') 
     ft_y_err = rfft(y_err.values,  norm='ortho')
     
@@ -74,21 +80,38 @@ def fft_err(thz_data):
    
     return dff
 
+def transfer_function(ref,sam,offset):
+    
+    amplitude = sam['Amplitude']/ref['Amplitude']
+    # phase = sam['Phase']-ref['Phase']-offset
+    phase = phaseex(ref, sam)-offset
+    
+    #error propagation
+    err_amplitude = 1/(ref['Amplitude']**2)*(sam['Δ(Amplitude)']*ref['Amplitude']+ref['Δ(Amplitude)']*sam['Amplitude'])
+    err_phase = sam['Δ(Phase)']+ref['Δ(Phase)']
 
 
-def transfer_function(ref: pd.DataFrame, sam: pd.DataFrame, offset) -> pd.DataFrame:
-    amplitude = sam["Amplitude"] / ref["Amplitude"]
-    # phase = sam["Phase"] - ref["Phase"] - offset
-    phase = phaseex(ref, sam) - offset
+    T = pd.DataFrame(np.column_stack((ref['Frequency (THz)'], amplitude, err_amplitude, phase,
+                                        err_phase)))
+    T.columns = ['Frequency (THz)','Amplitude','Δ(Amplitude)','Phase',
+                   'Δ(Phase)']
+      
+    return T
 
-    err_amplitude = (
-        1.0 / (ref["Amplitude"] ** 2)
-        * (sam["Δ(Amplitude)"] * ref["Amplitude"] + ref["Δ(Amplitude)"] * sam["Amplitude"])
-    )
-    err_phase = sam["Δ(Phase)"] + ref["Δ(Phase)"]
+def transfer_functionOPTP(ref,sam,offset):
+    
+    amplitude = sam['Amplitude']/ref['Amplitude'] # ΔE/E
+    phase = sam['Phase']-ref['Phase']-offset
+    # phase = phaseex(ref, sam)-offset
+    
+    #error propagation
+    err_amplitude = 1/(ref['Amplitude']**2)*(sam['Δ(Amplitude)']*ref['Amplitude']+ref['Δ(Amplitude)']*sam['Amplitude'])
+    err_phase = sam['Δ(Phase)']+ref['Δ(Phase)']
 
-    T = pd.DataFrame(
-        np.column_stack((ref["Frequency (THz)"], amplitude, err_amplitude, phase, err_phase)),
-        columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"],
-    )
+
+    T = pd.DataFrame(np.column_stack((ref['Frequency (THz)'], amplitude, err_amplitude, phase,
+                                        err_phase)))
+    T.columns = ['Frequency (THz)','Amplitude','Δ(Amplitude)','Phase',
+                   'Δ(Phase)']
+      
     return T

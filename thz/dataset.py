@@ -279,6 +279,6 @@ class DataSet:
     def run_fft(self):
         '''Applies FFT with error propagation to all THzData objects in the dataset.'''
         for thz_data in self.data.values():
-            spectrum = thz_data.run_fft()
-            breakpoint()
+            thz_data.run_fft()
+        
 
