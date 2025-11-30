@@ -32,7 +32,7 @@ class FilenameItem:
         self.air_reference = None
         self.substrate_reference = None
 
-        self._parse_filename()
+        # self._parse_filename()
 
     def __repr__(self):
         # details = 

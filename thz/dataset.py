@@ -9,27 +9,50 @@ class DataService:
     '''Custom dict-like object holds data and accesses it as needed. Holds master data dictionary and allows access to subsets via filename keys.'''
     
     def __init__(self):
-        self.data_dict = {}
-        self.grouping_service = GroupingService()
+        self._data_dict = {}
+        self.all = self._data_dict # alias for convenience
+        self.grouping = GroupingService()
+
+    def __repr__(self):
+        return f"DataService with {len(self._data_dict)} items."
 
     def __getitem__(self, filename):
-        return self.data_dict.get(filename, None)
+        return self._data_dict.get(filename, None)
 
     def __setitem__(self, filename, obj):
-        self.data_dict[filename] = obj
+        self._data_dict[filename] = obj
+
+    def __iter__(self):
+        filelist = self.grouping_service.get_current_data_list()
+        data_dict = {key: self._data_dict[key] for key in filelist}
+        return iter(data_dict.values())
+    
+    def __len__(self):
+        datadict = self.grouping.get_current_data_list()
+        return len(datadict)
+    
+    def keys(self):
+        datadict = self.grouping.get_current_data_list()
+        return datadict
 
     def add_items(self, mapping):
-        self.data_dict.update(mapping)
+        self._data_dict.update(mapping)
     
     def add_item(self, filename, obj):
-        self.data_dict[filename] = obj
+        self._data_dict[filename] = obj
     
     def remove_item(self, filename):
-        if filename in self.data_dict:
-            del self.data_dict[filename]
+        if filename in self._data_dict:
+            del self._data_dict[filename]
+
+    def all_data(self):
+        return self._data_dict
 
     def access_data(self, filenames: list):
-        return {key: self.data_dict[key] for key in filenames if key in self.data_dict}
+        return {key: self._data_dict[key] for key in filenames if key in self._data_dict}
+    
+    def update_filelist(self, filelist):
+        self.grouping.update(filelist=filelist)
 
 
 class FigureObject:
@@ -83,16 +106,16 @@ class DataSet:
 
     def __init__(self, file_dir: str, **kwargs) -> None:
         self.file_dir = file_dir
-        self._data_dict = {}
+        self.data = DataService()
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
-        self.grouping = GroupingService()
+        # self.grouping = GroupingService()
 
     @property
     def all_data(self) -> list:
         """Returns dictionary of all objects in the dataset."""
-        return self._data_dict
+        return self.data.all_data()
 
     @property
     def data_dict(self) -> dict:
@@ -100,7 +123,7 @@ class DataSet:
         Returns a *view* over self._data_dict, restricted to the filenames
         that the grouping service considers 'current'.
         """
-        current_data_list = self.grouping.get_current_data_list()
+        current_data_list = self.data.grouping.get_current_data_list()
         current_data_dict = {key: self._data_dict[key] for key in current_data_list}
 
         return current_data_dict
@@ -169,21 +192,24 @@ class DataSet:
     def load_all_data(self) -> None:
         '''Loads all acc files in the specified directory into the data_dict attribute.'''
 
+        filelist = []
+
         for filename in os.listdir(self.file_dir):
             if filename.endswith('.acc'):
                 thz_data = self.load_data(filename)
-                self.data_dict[filename] = thz_data
+                self.data.add_item(filename, thz_data)
+                filelist.append(filename)
 
-        filelist = [key for key in self.data_dict.keys()]
-        self.grouping.update(filelist=filelist)
+        # self.grouping.update(filelist=filelist)
+        self.data.update_filelist(filelist=filelist)
         breakpoint()
 
-        return self.data_dict
+        return self.data
     
     def grabone(self) -> THzData:
         '''Returns one THzData object from the data_dict for quick access.'''
-        if self.data_dict:
-            first_data = next(iter(self.data_dict.values()))
+        if self.data:
+            first_data = next(iter(self.data.values()))
             return first_data
         else:
             print("Data dictionary is empty. Load data first.")
@@ -194,7 +220,7 @@ class DataSet:
         min_start = float('inf')
         max_end = float('-inf')
 
-        for thz_data in self.data_dict.values():
+        for thz_data in self.data.values():
             time = thz_data.data[:, 0]
             min_start = min(min_start, min(time))
             max_end = max(max_end, max(time))
@@ -206,7 +232,7 @@ class DataSet:
         # Determine the common time window
         min_start, max_end = self._find_common_time_window()
 
-        for thz_data in self.data_dict.values():
+        for thz_data in self.data.values():
             thz_data._interpolate_time_axis(new_limits=(min_start, max_end))
 
 
@@ -217,7 +243,7 @@ class DataSet:
         2) center main pulse
         3) pad time-domain trace
         """
-        for thz_data in self.data_dict.values():
+        for thz_data in self.data.values():
             thz_data.subtract_dc_offset(num_points=dc_points)
             thz_data.center_pulse_in_window()
             thz_data.pad_time_domain(length_factor=length_factor)
@@ -225,7 +251,7 @@ class DataSet:
 
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
-        for name, thz_data in self.data_dict.items():
+        for name, thz_data in self.data.items():
             figure_obj = self._generate_figure_object('main')
             thz_data.plot_current(figure_obj=figure_obj, **kwargs)
         
@@ -244,7 +270,7 @@ class DataSet:
 
     def run_fft(self):
         '''Applies FFT with error propagation to all THzData objects in the dataset.'''
-        for thz_data in self.data_dict.values():
+        for thz_data in self.data.values():
             spectrum = thz_data.run_fft()
             breakpoint()
 
