@@ -60,11 +60,11 @@ def array_to_dataframe_adapter(
 
                 # If the function returns a DataFrame, prefer that
                 if isinstance(result, pd.DataFrame):
-                    return result.to_numpy()
+                    return result.to_numpy(), result.columns.tolist()
 
-                # If it returns None and works in-place, use the mutated df
+                # If it returns None and works in-place, use the mutated df and headers
                 if result is None and isinstance(df_now, pd.DataFrame):
-                    return df_now.to_numpy()
+                    return df_now.to_numpy(), df_now.columns.tolist()
 
                 # Otherwise, just return whatever it returned
                 return result

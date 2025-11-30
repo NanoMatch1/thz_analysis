@@ -37,7 +37,8 @@ if __name__ == "__main__":
     # data_set.interpolate_pulse_window()
     data_set.group_files()
     data_set.prepare_all_for_fft(length_factor=5, dc_points=10)
-    data_set.run_fft()
+    data_set.fft_compare()
+    # sn = data_set.compare_snr()
 
     # LEgacy marker
 
@@ -46,9 +47,10 @@ if __name__ == "__main__":
     #     if 'sample' in filename.lower():
     #         test = data_set.grouper(filename)
     #         breakpoint()
-
-
+    # data = data_set.grabone()
+    # datadict = data_set.compute_all_constants(constants)
+    breakpoint()
     data_set.plot_current()
-    data_set.plot_sn()
-    print(datadict)
+    # data_set.plot_sn()
+    # print(datadict)
     breakpoint()  # For debugging purposes

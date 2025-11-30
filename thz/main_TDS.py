@@ -108,10 +108,14 @@ DRimpr = 10*np.log10(DRw/DR)
 tref = ref_t.iloc[np.argmax(abs(ref_t['Mean'])),0]
 tsam = sam_t.iloc[np.argmax(abs(sam_t['Mean'])),0]
 
+
+
 phiref = 2*np.pi*samw['Frequency (THz)']*(tref)
 phisam = 2*np.pi*samw['Frequency (THz)']*(tsam)
 
 phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
+
+breakpoint()
 phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
 
 phidifference = phi.phaseex(refw, samw)
@@ -160,19 +164,19 @@ imagc = 2*np.pi*refw['Frequency (THz)']*1e12*cs.epsilon_0*(eps_inf-nguess**2+kgu
 # %% sandwich
 # https://doi.org/10.1364/OE.510393 Novelli(2024)
 
-# nguess = 1+((phidifference-phioffset)*cs.c)/(2*np.pi*samw['Frequency (THz)']*1e12*thickness)
-# kguess = -cs.c/(2*np.pi*thickness*refw['Frequency (THz)']*1e12)*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(samw['Amplitude']/refw['Amplitude']))
+nguess = 1+((phidifference-phioffset)*cs.c)/(2*np.pi*samw['Frequency (THz)']*1e12*thickness)
+kguess = -cs.c/(2*np.pi*thickness*refw['Frequency (THz)']*1e12)*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(samw['Amplitude']/refw['Amplitude']))
 
-# #calculates complex permittivity
-# eps1 = nguess**2-kguess**2
-# eps2 = 2*nguess*kguess
+#calculates complex permittivity
+eps1 = nguess**2-kguess**2
+eps2 = 2*nguess*kguess
 
-# #loss tangent
-# losstg =eps2/eps1
+#loss tangent
+losstg =eps2/eps1
 
-# #calculates complex conductivity
-# realc = 4*np.pi*refw['Frequency (THz)']*1e12*cs.epsilon_0*nguess*kguess
-# imagc = 2*np.pi*refw['Frequency (THz)']*1e12*cs.epsilon_0*(eps_inf-nguess**2+kguess**2)
+#calculates complex conductivity
+realc = 4*np.pi*refw['Frequency (THz)']*1e12*cs.epsilon_0*nguess*kguess
+imagc = 2*np.pi*refw['Frequency (THz)']*1e12*cs.epsilon_0*(eps_inf-nguess**2+kguess**2)
 
 # %% Plots
 
@@ -241,8 +245,6 @@ plt.xlim(0,10)
 plt.figure(3)
 plt.plot(T['Frequency (THz)'],T['Phase'], label='transfer $\phi$' )
 plt.plot(refw['Frequency (THz)'],phidifference-phioffset, label='$\Delta \phi$',linestyle='dashed' )
-
-# plt.plot(refw['Frequency (THz)'],phidiff, label='$\omega (t_{sam}-t_{ref})$', linestyle='dotted')
 
 # plt.xlim(0.0,4)
 plt.ylim(-1,100)

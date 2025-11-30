@@ -80,6 +80,7 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
    
     return dff
 
+@array_to_dataframe_adapter(arg_name="ref", columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
 def transfer_function(ref,sam,offset):
     
     amplitude = sam['Amplitude']/ref['Amplitude']
@@ -115,3 +116,20 @@ def transfer_functionOPTP(ref,sam,offset):
                    'Δ(Phase)']
       
     return T
+
+def calculate_transfer_function(time_ref, sample_ref, ref, sam, offset=0, optp=False):
+  #time_ref and time_ref are time domain dataframes
+  # calculates initial phase offset
+  tref = time_ref.iloc[np.argmax(abs(time_ref['Mean'])),0]
+  tsam = time_ref.iloc[np.argmax(abs(time_ref['Mean'])),0]
+
+  phiref = 2*np.pi*samw['Frequency (THz)']*(tref)
+  phisam = 2*np.pi*samw['Frequency (THz)']*(tsam)
+
+  phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
+  phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
+
+  phidifference = phi.phaseex(refw, samw)
+
+  #transfer function
+  T = fft_err.transfer_function(refw, samw, phioffset)

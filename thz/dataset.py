@@ -31,6 +31,9 @@ class DataService:
         datadict = self.grouping.get_current_data_list()
         return len(datadict)
     
+    def get(self, filename):
+        return self._data_dict.get(filename, None)
+    
     def keys(self):
         datadict = self.grouping.get_current_data_list()
         return datadict
@@ -55,11 +58,16 @@ class DataService:
         if filename in self._data_dict:
             del self._data_dict[filename]
 
-    def all_data(self):
-        return self._data_dict
-
-    def access_data(self, filenames: list):
+    def get_data(self, filename):
+        '''Returns the THzData object for a specific filename.'''
+        return self._data_dict.get(filename, None)
+    
+    def get_data_dict(self, filenames: list):
+        '''Returns a dictionary of THzData objects for the specified filenames.'''
         return {key: self._data_dict[key] for key in filenames if key in self._data_dict}
+
+    def get_all_data(self):
+        return self._data_dict
     
     def update_filelist(self, filelist):
         self.grouping.update(filelist=filelist)
@@ -151,33 +159,33 @@ class DataSet:
     def set_current_files(self, filenames):
         self.grouping.set_current_data_list(list(filenames))
 
-    @data_dict.setter
-    def data_dict(self, new_data: Mapping[str, any]) -> None:
-        """
-        Ingest a new set of data items.
+    # @data_dict.setter
+    # def data_dict(self, new_data: Mapping[str, any]) -> None:
+    #     """
+    #     Ingest a new set of data items.
 
-        - Updates the master _data_dict with the supplied items.
-        - Updates the grouping's 'current' list to these keys.
-        """
-        if not isinstance(new_data, Mapping):
-            raise TypeError(
-                f"data_dict must be set with a mapping of filename -> data, "
-                f"got {type(new_data)!r}"
-            )
+    #     - Updates the master _data_dict with the supplied items.
+    #     - Updates the grouping's 'current' list to these keys.
+    #     """
+    #     if not isinstance(new_data, Mapping):
+    #         raise TypeError(
+    #             f"data_dict must be set with a mapping of filename -> data, "
+    #             f"got {type(new_data)!r}"
+    #         )
 
-        # 1. Update master store (merge or replace, depending on what you want)
-        # Option A: merge into existing master
-        for name, data in new_data.items():
-            self._data_dict[name] = data
+    #     # 1. Update master store (merge or replace, depending on what you want)
+    #     # Option A: merge into existing master
+    #     for name, data in new_data.items():
+    #         self._data_dict[name] = data
 
-        # 2. Tell the grouping service which filenames are now 'current'
-        if hasattr(self.grouping, "set_current_data_list"):
-            self.grouping.set_current_data_list(list(new_data.keys()))
-        else:
-            raise AttributeError(
-                "Grouping object must implement 'set_current_data_list' "
-                "to support setting data_dict."
-            )
+    #     # 2. Tell the grouping service which filenames are now 'current'
+    #     if hasattr(self.grouping, "set_current_data_list"):
+    #         self.grouping.set_current_data_list(list(new_data.keys()))
+    #     else:
+    #         raise AttributeError(
+    #             "Grouping object must implement 'set_current_data_list' "
+    #             "to support setting data_dict."
+    #         )
 
 
     def _generate_figure_object(self, key: str, **kwargs) -> FigureObject:
@@ -276,9 +284,76 @@ class DataSet:
         '''Groups files based on provided sample and reference keys.'''
         self.data.grouping.simple_grouping()
 
-    def run_fft(self):
+    def get_file_item(self, filename):
+        '''Access the grouping information for a specific filename.'''
+        return self.data.grouping(filename)
+    
+    def get_reference(self, filename, ref_type='substrate'):
+        '''Consults the grouping service for the reference associated with the filename.
+        ref_type returns either 'substrate' or 'air' reference.'''
+        reference_filename = self.data.grouping.get_reference_filename(filename, ref_type=ref_type)
+        if reference_filename is not None:
+            return self.data.get(reference_filename)
+        return None
+    
+    def fft_compare(self, low_threshold = 4, up_threshold = 10):
+        import thz.data_processing.phase_interpolation as phi
+        from thz.data_processing.fft_processing import transfer_function
+        import numpy as np
+        
         '''Applies FFT with error propagation to all THzData objects in the dataset.'''
         for thz_data in self.data.values():
-            thz_data.run_fft()
+            thz_data.fft_raw()
+            thz_data.fft_centerpad()
+
+        for filename, thz_data in self.data.items():
+            thz_reference = self.get_reference(filename, ref_type='substrate')
+            if thz_reference is None:
+                continue
+
+            ref_time = thz_reference.processing_dict['time_domain']
+            sample_time = thz_data.processing_dict['time_domain']
+            ref_centered = thz_reference.processing_dict['fft_centered_padded']
+            sample_centered = thz_data.processing_dict['fft_centered_padded']
+            # determine inital phase offset
+            t0_ref = ref_time[np.argmax(abs(ref_time[:,1]))][0] # time at max amplitude
+            t0_sam = sample_time[np.argmax(abs(sample_time[:,1]))][0] # time at max amplitude
+
+            # phiref 
+            phioffset = phi.phaseoffset_numpy(ref_centered, sample_centered)
+
+            phidifference = phi.phaseex(ref_centered, sample_centered)
+
+            transfer_func = transfer_function(ref_centered, sample_centered, phioffset)
+
+            
+            breakpoint()
+
+        
+
+
+    def compare_snr(self):
+        '''Compares the SNR between sample and reference datasets in the current grouping.'''
+        from thz.data_processing.snr import compute_snr
+
+        snr_results = {}
+
+        for filename, data in self.data.items():
+            group_info = self.data.grouping(filename)
+            if group_info.type == 'reference':
+                continue
+
+            data_type = group_info.data_type
+
+            if data_type == 'sample':
+                sample_data = data.freq_spectrum
+                reference_filename = self._find_reference_filename(filename, group_info)
+                if reference_filename and reference_filename in self.data:
+                    reference_data = self.data[reference_filename].freq_spectrum
+                    snr_improvement = compute_snr(reference_data, sample_data)
+                    snr_results[filename] = snr_improvement
+
+
+        return snr_results
         
 

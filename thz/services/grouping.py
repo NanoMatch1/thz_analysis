@@ -114,6 +114,31 @@ class GroupingService:
 
         return
     
+    def get_reference_filename(self, filename, ref_type='substrate'):
+        '''Finds the corresponding reference filename for a given sample filename based on grouping.'''
+        if ref_type not in ['substrate', 'air']:
+            raise ValueError("ref_type must be either 'substrate' or 'air'.")
+        
+        group_info = self(filename)
+        if group_info is None:
+            print(f"Grouping info not found for filename: {filename}")
+            return None
+
+        data_type = group_info.data_type
+
+        if data_type == 'reference':
+            return None  # No reference for a reference file
+        elif data_type == 'sample':
+            if ref_type == 'air':
+                reference_filename = group_info.air_reference
+            else:
+                reference_filename = group_info.substrate_reference
+            return reference_filename
+        else:
+            print(f"Unknown data type '{data_type}' for filename: {filename}")
+            return None
+
+    
     def update(self, filelist=[]):
         '''Updates the grouping service with new filelist by appending to the old, and rebuilds file items.'''
 

@@ -36,8 +36,6 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
     """
     #note: scipy cannot process pandas Series, you have to pass the values
     """
-
-    breakpoint()
     
     ft_y_mean = rfft(y_mean.values, norm='ortho') 
     ft_y_err = rfft(y_err.values,  norm='ortho')

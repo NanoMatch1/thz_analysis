@@ -11,12 +11,14 @@ https://doi.org/10.1007/s10762-019-00578-0
 import numpy as np
 from scipy.fft import rfftfreq
 from scipy.stats import linregress
+from thz.data_structures.decorators import array_to_dataframe_adapter
 
 #extrapolate phase difference to zero. (to avoid refractive index divergence)
 
 # TO DO: consider to extrapolate each dataset and not just the difference,
 # maybe helps when the two maxima are way different
 
+@array_to_dataframe_adapter(arg_name="ref", columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
 def phaseex(ref,sam):
     
     dff = sam['Phase']-ref['Phase']
@@ -36,13 +38,20 @@ def phaseex(ref,sam):
 
 
 #to account for different time windows starts (use padded data!)
-def phaseoffset(ref,sam):
+def phaseoffset_numpy(ref, sam):
+    '''Defines phase offset due to different time zero positions in two datasets. Uses numpy arrays as input.'''
+
+    breakpoint()
+
+    #TODO: slice data out of tuple
     
-    t0r = ref.iloc[0].at['Time (ps)']
-    t0s = sam.iloc[0].at['Time (ps)']
+    t0r = ref[0, 0]  # First time value of ref
+    t0s = sam[0, 0]  # First time value of sam
     
-    #define freq axis
-    freq = rfftfreq(len(ref['Time (ps)']), ref.iloc[1].at['Time (ps)']-ref.iloc[0].at['Time (ps)'])
+    # Define freq axis
+    dt = ref[1, 0] - ref[0, 0]  # Time step
+    n = len(ref[:, 0])  # Number of time points
+    freq = rfftfreq(n, dt)
     
     phioffset = 2*np.pi*freq*(t0s-t0r)
     

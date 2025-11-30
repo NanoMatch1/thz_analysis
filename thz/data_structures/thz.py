@@ -78,8 +78,12 @@ class THzData:
         self.number_of_scans = len(self.data_list)
         self.filename = kwargs.get('filename', 'unknown_file')
 
+        self.processing_dict = {} # Currently stores all data sets after each processing step. Heavy. To be refactored.
+        self._meta_data = {} # stores statistical data like noise estimates, phase offset, etc. to be recalled in future processing steps
+
         self._data = self._average_data()  # Averaged dataset
-        self._time_domain = self._data.copy() # preserve time domain data
+        self._data_headers = ["Time (ps)", "Mean", "std error"]
+        self.processing_dict['time_domain'] = self._data.copy() # preserve time domain data
 
 
     def __getitem__(self, key):
@@ -108,7 +112,10 @@ class THzData:
     #     '''Consults the grouping service to get the reference THzData object if available. Returns the THzData object or None.'''
 
 
-
+    @property
+    def data(self) -> np.array:
+        '''Returns the current working data array (time or frequency domain).'''
+        return self._data
     # df compatibility properties
     @property
     def columns(self):
@@ -393,6 +400,9 @@ class THzData:
 
         self._data = np.column_stack((time_ext, mean_ext, stderr_ext))
 
+        self.processing_dict['centered_padded'] = self._data.copy() # TODO: refactor storage strategy
+
+
 
     def plot_current(self, **kwargs) -> None:
         '''Plots the current averaged data with error bars as a shaded region.'''
@@ -464,12 +474,22 @@ class THzData:
         )
         return df
     
-    def run_fft(self):
+    def fft_raw(self):
         '''Runs the fft_err function on the current data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
-        self._time_domain = self._data.copy() # preserve time domain data
-        self.freq_spectrum = fft_err(self._data)
-        self._data = self.freq_spectrum # update current data to frequency domain
-        return self.freq_spectrum
+        raw_data = self.processing_dict.get('time_domain', None)
+        fft_result = (fft_err(self._data))
+        self.processing_dict['fft_raw'] = fft_result
+
+        return fft_result
+    
+    def fft_centerpad(self):
+        '''Runs the fft_err function on the current centered and padded data and returns the spectrum as a numpy array.'''
+        from thz.data_processing.fft_processing import fft_err
+        centered_padded_data = self.processing_dict.get('centered_padded', None)
+        fft_result = (fft_err(centered_padded_data))
+        self.processing_dict['fft_centered_padded'] = fft_result
+
+        return fft_result
         
 
