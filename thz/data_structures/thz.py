@@ -72,19 +72,19 @@ class THzData:
     def __init__(self, data: list, header: list, **kwargs) -> None:
         self.data_list = data  # list of BaseTHz objects for each scan
         self.raw_data = self._compile_data_array()  # np.array of compiled data from all scans
-        self.headers = header if not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
-        self.reference_data = None
+        self.headers = header if header is not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
         self.data_type = None  # 'sample' or 'reference'
-        self.number_of_scans = len(self.data_list)
         self.filename = kwargs.get('filename', 'unknown_file')
 
-        self.processing_dict = {} # Currently stores all data sets after each processing step. Heavy. To be refactored.
         self._meta_data = {} # stores statistical data like noise estimates, phase offset, etc. to be recalled in future processing steps
+        self.processing_dict = {}  # stores processed data at various steps for rewind capability and inspection
 
-        self._data = self._average_data()  # Averaged dataset
-        self._data_headers = ["Time (ps)", "Mean", "std error"]
-        self.processing_dict['time_domain'] = self._data.copy() # preserve time domain data
+        self._time_data = self._average_data()  # Averaged dataset
+        self._time_data_headers = ["Time (ps)", "Mean", "std error"]
+        self._freq_data = None
+        self._freq_data_headers = None
 
+        self._data = self._time_data  # Current working data (time or frequency domain)
 
     def __getitem__(self, key):
         """
@@ -127,12 +127,12 @@ class THzData:
         return key in self._column_map
 
     def __repr__(self):
-        return f"\nTHzData:{self.filename}\n   -> Scans: {self.number_of_scans}\n   -> Data type: {self.data_type}\n" 
+        return f"\nTHzData:{self.filename}\n   -> Scans: {len(self.data_list)}\n   -> Data type: {self.data_type}\n" 
     
     def _calculate_std_error(self) -> np.array:
         '''Calculates the standard error across all scans for each time point.'''
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
-        std_error = np.std(data_matrix, axis=0) / np.sqrt(self.number_of_scans)
+        std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
         return std_error
 
     def _compile_data_array(self) -> np.array:
@@ -161,10 +161,11 @@ class THzData:
          2: Standard error as third column.'''
 
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
-        std_error = np.std(data_matrix, axis=0) / np.sqrt(self.number_of_scans)
+        std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
         mean_data = np.mean(data_matrix, axis=0)
         time_axis = self.data_list[0].raw_data[:, 0]
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
+        self.processing_dict['time_domain'] = averaged_data.copy()
         return averaged_data
     
     def _interpolate_time_axis(self, new_limits: tuple) -> None:

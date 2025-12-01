@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
-from thz.data_structures.decorators import array_to_dataframe_adapter
+from thz.data_structures.decorators import with_dataframe
 
-@array_to_dataframe_adapter(arg_name="ref", columns=['Frequency (THz)','Amplitude','Δ(Amplitude)','Phase',
+@with_dataframe(arg_name="ref", columns=['Frequency (THz)','Amplitude','Δ(Amplitude)','Phase',
                    'Δ(Phase)'])
 def compute_snr(ref, refw):
     '''Computes the dynamic range improvement in dB between two reference datasets,

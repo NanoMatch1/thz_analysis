@@ -15,9 +15,9 @@ from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
 from scipy.signal import welch  # Welch method for smoother PSD estimate
 from math import e
 from thz.data_processing.phase_interpolation import phaseex
-from thz.data_structures.decorators import array_to_dataframe_adapter
+from thz.data_structures.decorators import with_dataframe
 
-@array_to_dataframe_adapter(arg_name="timedata", columns=["Time (ps)", "Mean", "std error"])
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py
 
     #take first column of dataframe as time , 2nd as average and 3rd as error
@@ -80,7 +80,7 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
    
     return dff
 
-@array_to_dataframe_adapter(arg_name="ref", columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
+@with_dataframe(columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
 def transfer_function(ref,sam,offset):
     
     amplitude = sam['Amplitude']/ref['Amplitude']

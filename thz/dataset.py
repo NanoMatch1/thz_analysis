@@ -300,7 +300,7 @@ class DataSet:
         import thz.data_processing.phase_interpolation as phi
         from thz.data_processing.fft_processing import transfer_function
         import numpy as np
-        
+
         '''Applies FFT with error propagation to all THzData objects in the dataset.'''
         for thz_data in self.data.values():
             thz_data.fft_raw()
@@ -319,12 +319,13 @@ class DataSet:
             t0_ref = ref_time[np.argmax(abs(ref_time[:,1]))][0] # time at max amplitude
             t0_sam = sample_time[np.argmax(abs(sample_time[:,1]))][0] # time at max amplitude
 
-            # phiref 
-            phioffset = phi.phaseoffset_numpy(ref_centered, sample_centered)
+            # phiref - send only time axis arrays
 
-            phidifference = phi.phaseex(ref_centered, sample_centered)
+            phioffset = phi.phaseoffset_numpy(ref_centered[0][:, 0], sample_centered[0][:, 0])
 
-            transfer_func = transfer_function(ref_centered, sample_centered, phioffset)
+            phidifference = phi.phaseex(ref_centered[0], sample_centered[0])
+
+            transfer_func = transfer_function(ref_centered[0], sample_centered[0], phioffset)
 
             
             breakpoint()
