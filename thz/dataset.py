@@ -321,6 +321,8 @@ class DataSet:
 
             # phiref - send only time axis arrays
 
+            breakpoint()
+
             phioffset = phi.phaseoffset_numpy(ref_centered[0][:, 0], sample_centered[0][:, 0])
 
             phidifference = phi.phaseex(ref_centered[0], sample_centered[0])

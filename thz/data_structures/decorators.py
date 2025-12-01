@@ -5,8 +5,9 @@ from typing import Iterable, Any
 import numpy as np
 import pandas as pd
 
+#TODO: Remove with_dataframes alltogether by constructing the dataframes before function call
 
-def with_dataframes(
+def with_dataframe(
     columns: Iterable[str] | None = None,
 ):
     """
@@ -24,6 +25,8 @@ def with_dataframes(
             bound = sig.bind_partial(*args, **kwargs)
             bound.apply_defaults()
 
+            was_array = []
+
             # Determine columns: decorator > function attribute
             cols = columns
             if cols is None:
@@ -31,7 +34,7 @@ def with_dataframes(
 
             # Check if input was array
             for arg_name, value in bound.arguments.items():
-                was_array = isinstance(value, np.ndarray)
+                was_array.append(isinstance(value, np.ndarray))
                 # If it was an array, convert to DataFrame
                 if was_array:
                     if cols is None:
@@ -46,6 +49,11 @@ def with_dataframes(
 
             # Call original function
             result = func(*bound.args, **bound.kwargs)
+            # If input was array, convert output back to array
+            if any(was_array):
+                if isinstance(result, pd.DataFrame):
+                    result = {'data': result.to_numpy(), 'headers': result.columns.tolist()}
+
             return result
 
         return wrapper
