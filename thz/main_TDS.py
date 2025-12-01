@@ -77,8 +77,14 @@ sam_t = di.dataimport(filepath,sample)
 # %% Analysis
 
 # moves the pulse to the center an pad 0 at the edges
+import matplotlib.pyplot as plt
+print("Filename:", reference    )
+plt.plot(ref_t['Time (ps)'],ref_t['Mean'], label='pre-pad ref')
 ref_centered = pad.centerpad(ref_t)
 sam_centered = pad.centerpad(sam_t)
+plt.plot(ref_centered['Time (ps)'],ref_centered['Mean'], label='post-pad ref')
+plt.legend()
+plt.show()
 
 #Fourier Transform
 

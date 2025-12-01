@@ -24,9 +24,7 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
     time = timedata.loc[:,'Time (ps)']
     y_mean = timedata.loc[:,'Mean']
     y_err =  timedata.loc[:,'std error']
-    
-    
-    #define freq axis
+
     freq = rfftfreq(len(time), time[1]-time[0])
     
     #cancel offset, computed on first 10 points of time trace
@@ -80,13 +78,39 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
    
     return dff
 
-@with_dataframe(columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
-def transfer_function(ref,sam,offset):
-    
-    amplitude = sam['Amplitude']/ref['Amplitude']
+def interpolate_data():
+    pass
+# @with_dataframe(columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
+def transfer_function(ref,sam,offset, headers=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"]):
+    import matplotlib.pyplot as plt
+    # TODO: There's an issue with the not having the same resolution. THis needs to be fixed in the fourier transform (probably comes from mismatched time axes)
+    # for now, we interpolate to the maximum resolution
+
+    # if len(ref[:, 0]) < len(sam[:, 0]):
+    #   resolution = len(sam[:, 0])
+    #   initial_axis = ref[:, 0]
+    #   new_freq_axis = np.linspace(initial_axis[0], initial_axis[-1], resolution)
+    #   new_1 =  np.interp(new_freq_axis, initial_axis, ref[:, 1])
+    #   new_2 =  np.interp(new_freq_axis, initial_axis, ref[:, 2])
+    #   new_3 =  np.interp(new_freq_axis, initial_axis, ref[:, 3])
+    #   new_4 =  np.interp(new_freq_axis, initial_axis, ref[:, 4])
+    #   ref = np.column_stack((new_freq_axis, new_1, new_2, new_3, new_4))
+
+    # elif len(sam[:, 0]) < len(ref[:, 0]):
+    #   resolution = len(ref[:, 0])
+    #   initial_axis = sam[:, 0]
+    #   new_freq_axis = np.linspace(initial_axis[0], initial_axis[-1], resolution)
+    #   new_1 =  np.interp(new_freq_axis, initial_axis, sam[:, 1])
+    #   new_2 =  np.interp(new_freq_axis, initial_axis, sam[:, 2])
+    #   new_3 =  np.interp(new_freq_axis, initial_axis, sam[:, 3])
+    #   new_4 =  np.interp(new_freq_axis, initial_axis, sam[:, 4])
+    #   sam = np.column_stack((new_freq_axis, new_1, new_2, new_3, new_4))
+
+    amplitude = sam[:, 1]/ref[:, 1]
     # phase = sam['Phase']-ref['Phase']-offset
-    phase = phaseex(ref, sam)-offset
-    
+    # Currently goes through conversion to dataframe in order to use phaseex
+    phase = phaseex(pd.DataFrame(ref, columns=headers), pd.DataFrame(sam, columns=headers))-offset
+    breakpoint()
     #error propagation
     err_amplitude = 1/(ref['Amplitude']**2)*(sam['Δ(Amplitude)']*ref['Amplitude']+ref['Δ(Amplitude)']*sam['Amplitude'])
     err_phase = sam['Δ(Phase)']+ref['Δ(Phase)']

@@ -6,17 +6,15 @@ import numpy as np
 import pandas as pd
 
 #TODO: Remove with_dataframes alltogether by constructing the dataframes before function call
-
 def with_dataframe(
     columns: Iterable[str] | None = None,
-):
+    ):
     """
     Decorator to adapt a legacy function that expects a pandas.DataFrame
     so it can also accept a numpy.ndarray.
 
     - If the input arguments are numpy arrays, they are converted to DataFrames
       with the given `columns` (or those stored on the function).
-
     """
     def decorator(func):
         @functools.wraps(func)
@@ -25,38 +23,41 @@ def with_dataframe(
             bound = sig.bind_partial(*args, **kwargs)
             bound.apply_defaults()
 
-            was_array = []
+            # track which args were arrays (by name)
+            was_array: dict[str, bool] = {}
 
             # Determine columns: decorator > function attribute
             cols = columns
             if cols is None:
                 cols = getattr(func, "_expected_columns", None)
+            if cols is None:
+                raise ValueError(
+                    f"No column labels provided for {func.__name__}. "
+                    f"Pass 'columns=...' to the decorator or set "
+                    f"func._expected_columns = [...]"
+                )
 
-            # Check if input was array
             for arg_name, value in bound.arguments.items():
-                was_array.append(isinstance(value, np.ndarray))
-                # If it was an array, convert to DataFrame
-                if was_array:
-                    if cols is None:
-                        raise ValueError(
-                            f"No column labels provided for {func.__name__}. "
-                            f"Pass 'columns=...' to the decorator or set "
-                            f"func._expected_columns = [...]"
-                        )
+                is_arr = isinstance(value, np.ndarray)
+                was_array[arg_name] = is_arr
+
+                # Only convert *this* argument if it is an ndarray
+                if is_arr:
                     df = pd.DataFrame(value, columns=list(cols))
-                    # Replace argument with DataFrame
                     bound.arguments[arg_name] = df
 
             # Call original function
             result = func(*bound.args, **bound.kwargs)
-            # If input was array, convert output back to array
-            if any(was_array):
-                if isinstance(result, pd.DataFrame):
-                    result = {'data': result.to_numpy(), 'headers': result.columns.tolist()}
+
+            # If any input was an array and output is a DataFrame, convert back
+            if any(was_array.values()) and isinstance(result, pd.DataFrame):
+                result = {
+                    'data': result.to_numpy(),
+                    'headers': result.columns.tolist()
+                }
 
             return result
 
         return wrapper
 
     return decorator
-

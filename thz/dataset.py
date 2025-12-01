@@ -1,9 +1,11 @@
 import os
+import numpy as np
 import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
+
 
 class DataService:
     '''Custom dict-like object holds data and accesses it as needed. Holds master data dictionary and allows access to subsets via filename keys.'''
@@ -252,19 +254,60 @@ class DataSet:
         for thz_data in self.data.values():
             thz_data._interpolate_time_axis(new_limits=(min_start, max_end))
 
+    def _find_maximum_time_extent(self):
+        '''Finds the maximum time extent across all THzData objects.'''
+        max_extent = 0
 
-    def prepare_all_for_fft(self, length_factor: int = 5, dc_points: int = 10) -> None:
-        """
-        Run standard preprocessing on all loaded THzData objects:
-        1) subtract DC offset
-        2) center main pulse
-        3) pad time-domain trace
-        """
         for thz_data in self.data.values():
-            thz_data.subtract_dc_offset(num_points=dc_points)
-            thz_data.center_pulse_in_window()
-            thz_data.pad_time_domain(length_factor=length_factor)
+            time = thz_data.data[:, 0]
+            extent = max(time) - min(time)
+            max_extent = max(max_extent, extent)
 
+        return max_extent
+    
+    def _find_minimum_time_step(self):
+        '''Finds the minimum time step across all THzData objects.'''
+
+        min_dt = float('inf')
+
+        for thz_data in self.data.values():
+            time = thz_data.data[:, 0]
+            dt = np.min(np.diff(time))
+            breakpoint()
+            min_dt = min(min_dt, dt)
+
+        return min_dt
+
+    # def prepare_all_for_fft(self, length_factor: int = 5, dc_points: int = 10) -> None:
+    #     """
+    #     Run standard preprocessing on all loaded THzData objects:
+    #     1) subtract DC offset
+    #     2) center main pulse
+    #     3) pad time-domain trace
+    #     """
+
+    #     #TODO: FUndamentally broken DO NOT USE
+    #     max_time = self._find_maximum_time_extent()
+    #     min_dt = self._find_minimum_time_step()
+
+    #     for thz_data in self.data.values():
+    #         # breakpoint()
+    #         # print(thz_data.data[:, 0])
+    #         thz_data.subtract_dc_offset(num_points=dc_points)
+    #         thz_data.center_pulse_in_window()
+    #         thz_data.pad_time_domain(length_factor=length_factor, max_time=max_time)
+    #         time_length = thz_data.data[-1, 0] - thz_data.data[0, 0]
+    #         print(f'Time length after padding: {time_length} ps')
+
+    #     # self.interpolate_pulse_window()
+
+    def center_pad_window_all(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
+        for thz_data in self.data.values():
+            plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='pre-process')
+            thz_data.centerpad_window(length_factor=length_factor, baseline_points=baseline_points, window_alpha=window_alpha)
+            plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='post-process')
+            plt.legend()
+            plt.show()
 
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
@@ -316,18 +359,34 @@ class DataSet:
             ref_centered = thz_reference.processing_dict['fft_centered_padded']
             sample_centered = thz_data.processing_dict['fft_centered_padded']
             # determine inital phase offset
-            t0_ref = ref_time[np.argmax(abs(ref_time[:,1]))][0] # time at max amplitude
-            t0_sam = sample_time[np.argmax(abs(sample_time[:,1]))][0] # time at max amplitude
 
-            # phiref - send only time axis arrays
+            print('Ref_time length:')
+            print(len(ref_time['data'][:,0]))
+            print(ref_time['data'][-1, 0] - ref_time['data'][0,0])
 
+            print('Sample_time length:')
+            print(len(sample_time['data'][:,0]))
+            print(sample_time['data'][-1, 0] - sample_time['data'][0,0])
+            print('Ref_centered length:')
+            print(len(ref_centered['data'][:,0]))
+            print(ref_centered['data'][-1,1] - ref_centered['data'][0,0])
+
+            print('Sample_centered length:')
+            print(len(sample_centered['data'][:,0]))
+            print(sample_centered['data'][-1,1] - sample_centered['data'][0,0])
             breakpoint()
 
-            phioffset = phi.phaseoffset_numpy(ref_centered[0][:, 0], sample_centered[0][:, 0])
+            ref_data = ref_time['data']
+            sample_data = sample_time['data']
+            t0_ref = ref_data[np.argmax(abs(ref_data[:,1]))][0] # time at max amplitude
+            t0_sam = sample_data[np.argmax(abs(sample_data[:,1]))][0] # time at max amplitude
 
-            phidifference = phi.phaseex(ref_centered[0], sample_centered[0])
+            # phiref - send only time axis arrays
+            phioffset = phi.phaseoffset_numpy(ref_centered['data'][:, 0], sample_centered['data'][:, 0])
 
-            transfer_func = transfer_function(ref_centered[0], sample_centered[0], phioffset)
+
+            phidifference = phi.phaseex(ref_centered['data'], sample_centered['data'])
+            transfer_func = transfer_function(ref_centered['data'], sample_centered['data'], phioffset)
 
             
             breakpoint()

@@ -9,6 +9,8 @@ Future improvements:
 import numpy as np
 import datetime
 import pandas as pd
+# from thz.data_processing.padding import centerpad
+from thz.data_processing.preprocessing import centerpad_window
 
 class BaseTHzData:
     '''Base class for THz data structures. Holds one scan and metadata information.
@@ -165,8 +167,26 @@ class THzData:
         mean_data = np.mean(data_matrix, axis=0)
         time_axis = self.data_list[0].raw_data[:, 0]
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
-        self.processing_dict['time_domain'] = averaged_data.copy()
+        self.processing_dict['time_domain'] = {'data': averaged_data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']}
         return averaged_data
+    
+    def centerpad_window(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
+        
+        result = centerpad_window(self._data, length_factor=length_factor, baseline_points=baseline_points, window_alpha=window_alpha)
+        self._data = result['data']
+    
+    # def center_pad_window(self, length_factor: int = 10) -> None:
+    #     import matplotlib.pyplot as plt
+    #     # breakpoint()
+    #     print('Filename:', self.filename)
+    #     plt.plot(self._data[:,0], self._data[:,1], label='pre-pad')
+    #     result = centerpad(self._data, length_factor=length_factor)
+    #     self._data = result['data']
+    #     breakpoint()
+    #     plt.plot(self._data[:,0], self._data[:,1], label='post-pad')
+    #     plt.legend()
+    #     plt.show()
+    #     return self._data
     
     def _interpolate_time_axis(self, new_limits: tuple) -> None:
         '''Interpolates the averaged data to a new common time axis defined by new_limits (min, max).'''
@@ -306,39 +326,57 @@ class THzData:
             # Final fallback: use std of mean in baseline region
             sigma = float(np.std(mean[:end_idx], ddof=1))
         return sigma if np.isfinite(sigma) else 0.0
-    
+
+    def interpolate_dt(self, target_dt: float) -> None:
+        """
+        Interpolates the current averaged trace to a uniform time step of
+        `target_dt`. Modifies self._data in-place.
+        """
+        if self._data is None:
+            return
+
+        time = self._data[:, 0]
+        mean = self._data[:, 1]
+        stderr = self._data[:, 2]
+
+        min_time = time[0]
+        max_time = time[-1]
+        new_time = np.arange(min_time, max_time, target_dt)
+
+        new_mean = np.interp(new_time, time, mean)
+        new_stderr = np.interp(new_time, time, stderr)
+
+        self._data = np.column_stack((new_time, new_mean, new_stderr))
+
+
     def pad_time_domain(
         self,
-        length_factor: int = 5,
-        use_noise: bool = False,
-        noise_threshold: float = 0.05,
-        baseline_fraction: float = 0.3,
-        rng: np.random.Generator | None = None,
+        length_factor: float = 2.0,
+        max_time: float | None = None,
         ) -> None:
         """
-        Extend the time-domain trace by padding at both ends to improve
-        frequency resolution. Keeps the same time step.
+        Extend the time-domain trace by padding at both ends so that the
+        *total time window* reaches a target span. Keeps the same time step.
 
-        If use_noise is True, padding is filled with Gaussian noise drawn
-        from N(0, noise_sigma^2), where noise_sigma is estimated from the
-        baseline region of the trace. Otherwise, padding is zero.
+        The target numeric time window is:
+            target_window = length_factor * max_time
+
+        where `max_time` should normally be chosen as the largest time span
+        across the dataset (max(t_max - t_min) over all traces) to ensure that
+        all padded traces share the same FFT frequency axis.
 
         Parameters
         ----------
-        length_factor : int
-            Final length will be approximately length_factor * original_length.
-            If <= 1, no padding is applied.
-        use_noise : bool
-            If True, pad with synthetic noise; if False, pad with zeros.
-        noise_threshold : float
-            Fraction of the peak amplitude used to define baseline region:
-            |mean| < noise_threshold * max|mean|.
-        baseline_fraction : float
-            Fraction of the trace (from the start) used as a fallback baseline
-            if peak-based selection yields too few points.
-        rng : np.random.Generator, optional
-            Numpy random generator for reproducible noise. If None, uses
-            np.random.default_rng().
+        length_factor : float
+            Scale factor applied to `max_time`. For example:
+            - 1.0 → pad all traces to the common dataset max window.
+            - 2.0 → pad all traces to twice that common window.
+            If <= 1 and max_time is None, no padding is applied.
+        max_time : float, optional
+            Target base time window (in the same units as the time axis),
+            typically the largest (t_max - t_min) across the dataset.
+            If None, falls back to the current trace span and behaves like
+            the old length_factor * N-based padding (but in time units).
         """
         if self._data is None:
             return
@@ -348,17 +386,29 @@ class THzData:
         stderr = self._data[:, 2]
 
         N = len(time)
-        if N < 3 or length_factor <= 1:
+        if N < 3:
             return
 
-        if rng is None:
-            rng = np.random.default_rng()
-
+        # Time step (assumed uniform)
         dt = time[1] - time[0]
-        desired_length = int(length_factor * N)
+        current_span = time[-1] - time[0]  # numeric window of current trace
 
-        extra_total = max(desired_length - N, 0)
-        if extra_total == 0:
+        # Use the dataset-wide max_time as the base span
+        base_span = max_time
+
+        if length_factor <= 1.0:
+            target_span = base_span
+        else:
+            target_span = length_factor * base_span
+
+        # Compute target length in samples.
+        # We want a span >= target_span, so we round up.
+        # Span ≈ (N_new - 1)*dt, so:
+        #   N_new ≈ target_span/dt + 1
+        target_length = int(np.ceil(target_span / abs(dt))) + 1
+
+        extra_total = max(target_length - N, 0)
+        if extra_total <= 0:
             return
 
         left_extra = extra_total // 2
@@ -369,39 +419,120 @@ class THzData:
         right_times = time[-1] + dt * np.arange(1, right_extra + 1)
         time_ext = np.concatenate([left_times, time, right_times])
 
-        # Estimate baseline noise sigma if needed
-        if use_noise:
-            noise_sigma = self._estimate_noise_sigma(
-                threshold=noise_threshold,
-                baseline_fraction=baseline_fraction,
-            )
-        else:
-            noise_sigma = 0.0
 
-        # Mean padding: noise or zeros
-        if use_noise and noise_sigma > 0.0:
-            left_pad = rng.normal(loc=0.0, scale=noise_sigma, size=left_extra)
-            right_pad = rng.normal(loc=0.0, scale=noise_sigma, size=right_extra)
-        else:
-            left_pad = np.zeros(left_extra, dtype=float)
-            right_pad = np.zeros(right_extra, dtype=float)
+        left_pad = np.zeros(left_extra, dtype=float)
+        right_pad = np.zeros(right_extra, dtype=float)
 
         mean_ext = np.concatenate([left_pad, mean, right_pad])
-
-        # Std error in padding: set to baseline noise sigma (or edge value)
-        if use_noise and noise_sigma > 0.0:
-            left_stderr = np.full(left_extra, noise_sigma, dtype=float)
-            right_stderr = np.full(right_extra, noise_sigma, dtype=float)
-        else:
-            # fall back to edge stderr if no noise
-            left_stderr = np.full(left_extra, stderr[0], dtype=float)
-            right_stderr = np.full(right_extra, stderr[-1], dtype=float)
+        left_stderr = np.full(left_extra, stderr[0], dtype=float)
+        right_stderr = np.full(right_extra, stderr[-1], dtype=float)
 
         stderr_ext = np.concatenate([left_stderr, stderr, right_stderr])
 
         self._data = np.column_stack((time_ext, mean_ext, stderr_ext))
 
-        self.processing_dict['centered_padded'] = self._data.copy() # TODO: refactor storage strategy
+        self.processing_dict['centered_padded'] = {
+            'data': self._data.copy(),
+            'headers': ['Time (ps)', 'Mean', 'std error'],
+        }  # TODO: refactor storage strategy
+
+    
+    # def pad_time_domain(
+    #     self,
+    #     length_factor: int = 5,
+    #     max_time: float = 50.0,
+    #     use_noise: bool = False,
+    #     noise_threshold: float = 0.05,
+    #     baseline_fraction: float = 0.3,
+    #     rng: np.random.Generator | None = None,
+    #     ) -> None:
+    #     """
+    #     Extend the time-domain trace by padding at both ends to improve
+    #     frequency resolution. Keeps the same time step.
+
+    #     If use_noise is True, padding is filled with Gaussian noise drawn
+    #     from N(0, noise_sigma^2), where noise_sigma is estimated from the
+    #     baseline region of the trace. Otherwise, padding is zero.
+
+    #     Parameters
+    #     ----------
+    #     length_factor : int
+    #         Final length will be approximately length_factor * original_length.
+    #         If <= 1, no padding is applied.
+    #     use_noise : bool
+    #         If True, pad with synthetic noise; if False, pad with zeros.
+    #     noise_threshold : float
+    #         Fraction of the peak amplitude used to define baseline region:
+    #         |mean| < noise_threshold * max|mean|.
+    #     baseline_fraction : float
+    #         Fraction of the trace (from the start) used as a fallback baseline
+    #         if peak-based selection yields too few points.
+    #     rng : np.random.Generator, optional
+    #         Numpy random generator for reproducible noise. If None, uses
+    #         np.random.default_rng().
+    #     """
+    #     if self._data is None:
+    #         return
+
+    #     time = self._data[:, 0]
+    #     mean = self._data[:, 1]
+    #     stderr = self._data[:, 2]
+
+    #     N = len(time)
+    #     if N < 3 or length_factor <= 1:
+    #         return
+
+    #     if rng is None:
+    #         rng = np.random.default_rng()
+
+    #     dt = time[1] - time[0]
+    #     desired_length = int(length_factor * N)
+
+    #     extra_total = max(desired_length - N, 0)
+    #     if extra_total == 0:
+    #         return
+
+    #     left_extra = extra_total // 2
+    #     right_extra = extra_total - left_extra
+
+    #     # Build new time axis by extending with constant dt
+    #     left_times = time[0] - dt * np.arange(left_extra, 0, -1)
+    #     right_times = time[-1] + dt * np.arange(1, right_extra + 1)
+    #     time_ext = np.concatenate([left_times, time, right_times])
+
+    #     # Estimate baseline noise sigma if needed
+    #     if use_noise:
+    #         noise_sigma = self._estimate_noise_sigma(
+    #             threshold=noise_threshold,
+    #             baseline_fraction=baseline_fraction,
+    #         )
+    #     else:
+    #         noise_sigma = 0.0
+
+    #     # Mean padding: noise or zeros
+    #     if use_noise and noise_sigma > 0.0:
+    #         left_pad = rng.normal(loc=0.0, scale=noise_sigma, size=left_extra)
+    #         right_pad = rng.normal(loc=0.0, scale=noise_sigma, size=right_extra)
+    #     else:
+    #         left_pad = np.zeros(left_extra, dtype=float)
+    #         right_pad = np.zeros(right_extra, dtype=float)
+
+    #     mean_ext = np.concatenate([left_pad, mean, right_pad])
+
+    #     # Std error in padding: set to baseline noise sigma (or edge value)
+    #     if use_noise and noise_sigma > 0.0:
+    #         left_stderr = np.full(left_extra, noise_sigma, dtype=float)
+    #         right_stderr = np.full(right_extra, noise_sigma, dtype=float)
+    #     else:
+    #         # fall back to edge stderr if no noise
+    #         left_stderr = np.full(left_extra, stderr[0], dtype=float)
+    #         right_stderr = np.full(right_extra, stderr[-1], dtype=float)
+
+    #     stderr_ext = np.concatenate([left_stderr, stderr, right_stderr])
+
+    #     self._data = np.column_stack((time_ext, mean_ext, stderr_ext))
+
+    #     self.processing_dict['centered_padded'] = {'data': self._data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']} # TODO: refactor storage strategy
 
 
 
@@ -479,8 +610,8 @@ class THzData:
         '''Runs the fft_err function on the current data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
         raw_data = self.processing_dict.get('time_domain', None)
-        fft_result = (fft_err(self._data))
-        self.processing_dict['fft_raw'] = fft_result
+        fft_result = (fft_err(raw_data['data']))
+        self.processing_dict['fft_raw'] = {'data': fft_result, 'headers': ['Frequency', 'Amplitude', 'Phase']}
 
         return fft_result
     
@@ -488,9 +619,8 @@ class THzData:
         '''Runs the fft_err function on the current centered and padded data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
         centered_padded_data = self.processing_dict.get('centered_padded', None)
-        fft_result = (fft_err(centered_padded_data))
+        fft_result = (fft_err(centered_padded_data['data'])) # returns dictionary
         self.processing_dict['fft_centered_padded'] = fft_result
-
         return fft_result
         
 

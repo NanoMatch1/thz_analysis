@@ -21,8 +21,7 @@ from thz.data_structures.decorators import with_dataframe
 @with_dataframe(columns=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"])
 def phaseex(ref,sam):
     
-    # dff = sam['Phase']-ref['Phase']
-    breakpoint()
+    dff = sam['Phase']-ref['Phase']
     
     #defines range of interest
     low = 0.3

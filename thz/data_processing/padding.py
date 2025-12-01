@@ -12,9 +12,10 @@ Refactored by: ChatGPT/Samuel Brooke 11/24/25
 
 import pandas as pd
 import numpy as np
-import windowing as w
+import thz.data_processing.windowing as w
+from thz.data_structures.decorators import with_dataframe
 
-
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def centerpad(df: pd.DataFrame, length_factor: int = 10) -> pd.DataFrame:
     """
     Center the main THz peak in time by padding with zeros and
@@ -36,6 +37,8 @@ def centerpad(df: pd.DataFrame, length_factor: int = 10) -> pd.DataFrame:
     """
     # Work on a copy so we don't modify the original
     df = df.copy()
+
+    breakpoint()
 
     # 1. Remove DC offset from first 10 points
     df['Mean'] = df['Mean'] - df['Mean'].iloc[:10].mean()
@@ -75,14 +78,9 @@ def centerpad(df: pd.DataFrame, length_factor: int = 10) -> pd.DataFrame:
         'std error': err
     })
 
-    from matplotlib import pyplot as plt
-    plt.plot(df_centered['Time (ps)'], df_centered['Mean'], label='centered trace')
-
     # Assuming w.window operates in-place on df_centered
     w.window(df_centered)
-    plt.plot(df_centered['Time (ps)'], df_centered['Mean'], label='windowed trace')
-    plt.legend()
-    plt.show()
+
     # 6. Extend length by padding zeros on both sides
     current_len = len(df_centered)
     desired_length = length_factor * current_len
