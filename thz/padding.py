@@ -7,105 +7,246 @@ to a longer total duration.
 Calls a windowing function on the centered trace.
 
 @author: Marco Ballabio
-Refactored by: ChatGPT/Samuel Brooke 11/24/25
 """
 
 import pandas as pd
 import numpy as np
-import windowing as w
+import thz.windowing as w
+from thz.data_structures.decorators import with_dataframe
+import matplotlib.pyplot as plt
 
 
-def centerpad(df: pd.DataFrame, length_factor: int = 10) -> pd.DataFrame:
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+def centerpad(df):
+    #remove offset from Mean column
+    df['Mean'] = df['Mean']-np.average(df['Mean'].values[0:10])    
+
+    plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
+    
+    # Find the index of the peak in the amplitude column (using absolute values)
+    peak_index = np.argmax(np.abs(df['Mean']))
+    
+    # Calculate the number of zeros to add on either side
+    num_zeros_to_add = (len(df) // 2 - peak_index)
+    
+    # if num_zeros_to_add == 0:
+    #     return df
+    
+   # time_step = df['Time (ps)'].iloc[1] - df['Time (ps)'].iloc[0]
+    if num_zeros_to_add < 0:
+        num_zeros_to_add = abs(num_zeros_to_add)
+        # Add zeros at the end of both columns while removing the first values
+        # time flows forwards
+        padded_mean = np.pad(df['Mean'].values, (0, num_zeros_to_add), mode='constant')
+        padded_error = np.pad(df['std error'].values, (0, num_zeros_to_add), mode='constant')
+        padded_time = np.pad(df['Time (ps)'].values, (0, num_zeros_to_add), mode='reflect',reflect_type='odd')
+        padded_mean = padded_mean[num_zeros_to_add:]
+        padded_error = padded_error[num_zeros_to_add:]
+        padded_time = padded_time[num_zeros_to_add:]
+    elif num_zeros_to_add > 0:
+        # Add zeros at the beginning of both columns while removing the last values
+        # time flows backwards
+        num_zeros_to_add = abs(num_zeros_to_add)
+        padded_mean = np.pad(df['Mean'].values, (num_zeros_to_add, 0), mode='constant')
+        padded_error = np.pad(df['std error'].values, (num_zeros_to_add, 0), mode='constant')
+        padded_time = np.pad(df['Time (ps)'].values, (num_zeros_to_add, 0), mode='reflect',reflect_type='odd')
+        # padded_time = np.pad(df['Time (ps)'].values, (num_zeros_to_add, 0), mode='reflect',reflect_type='odd')
+        breakpoint()
+        padded_mean = padded_mean[:-num_zeros_to_add]
+        padded_time = padded_time[:-num_zeros_to_add]
+        padded_error = padded_error[:-num_zeros_to_add]
+        
+    else:
+        padded_mean = df['Mean'].values
+        padded_error = df['std error'].values
+        padded_time =df['Time (ps)'].values
+            
+    # Create a new DataFrame with the zero-padded amplitude
+    df_padded = pd.DataFrame({'Time (ps)' : padded_time,
+                            'Mean' : padded_mean,
+                            'std error': padded_error})
+    
+    w.window(df_padded)
+    
+    #increase size by padding zeroes, it helps when pulses arrival time difference is large (thick samples)
+    desired_length = 10 * len(df)
+
+    # Calculate the number of zeros to add on each side
+    zeros_to_add = (desired_length - len(df)) // 2
+
+    # Pad the array with zeros at both sides
+    padded0_mean = np.pad(df_padded['Mean'], (zeros_to_add, zeros_to_add), mode='constant')
+    padded0_error = np.pad(df_padded['std error'], (zeros_to_add, zeros_to_add), mode='constant')
+    padded0_time = np.pad(padded_time, (zeros_to_add, zeros_to_add), mode='reflect',reflect_type='odd')
+
+        
+    # Create a new DataFrame with the zero-padded amplitude
+    df_padded = pd.DataFrame({'Time (ps)' : padded0_time,
+                            'Mean' : padded0_mean,
+                            'std error': padded0_error})
+    # w.window(df_padded)
+
+    plt.plot(df_padded['Time (ps)'], df_padded['Mean'], label='centered & padded trace')
+    plt.legend()
+    plt.show()
+    return df_padded
+
+def test_centerpad(time, y_mean):
+    N_array = len(time)
+    test_1 = y_mean.copy()
+    test_2 = np.roll(y_mean, N_array//3)
+
+    plt.plot(time, test_1, label='original trace'
+             )
+    plt.plot(time, test_2, label='rolled trace')
+    plt.legend()
+    plt.show()
+
+
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+def centerpad_refactor(df: pd.DataFrame, length_factor: int = 5) -> pd.DataFrame:
     """
-    Center the main THz peak in time by padding with zeros and
-    extend the trace length by a given multiplicative factor.
+    Center the main THz pulse in the time window, apply windowing,
+    and extend the trace by zero-padding.
+
+    Differences from older versions:
+    - Does NOT crop data when centering: it preserves the full original trace.
+    - Time axis is extended linearly using dt, no reflect tricks.
 
     Parameters
     ----------
-    df : pd.DataFrame
-        Must contain columns: 'Time (ps)', 'Mean', 'std error'
-    length_factor : int, optional
-        Final length will be approximately `length_factor * N`,
-        where N is the original number of points. Default is 10.
+    df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+    length_factor : int
+        Final length will be approximately length_factor * original length.
 
     Returns
     -------
-    df_padded : pd.DataFrame
-        DataFrame with zero-padded 'Mean' and 'std error', and
-        time padded by odd reflection.
+    df_out : DataFrame
     """
-    # Work on a copy so we don't modify the original
+
     df = df.copy()
 
-    # 1. Remove DC offset from first 10 points
-    df['Mean'] = df['Mean'] - df['Mean'].iloc[:10].mean()
+    
+    # 1) Remove DC offset from first 10 points
+    if len(df) >= 10:
+        df["Mean"] = df["Mean"] - df["Mean"].iloc[:10].mean()
 
-    # 2. Extract arrays
-    mean = df['Mean'].to_numpy()
-    err = df['std error'].to_numpy()
-    time = df['Time (ps)'].to_numpy()
+    time = df["Time (ps)"].to_numpy()
+    y_mean = df["Mean"].to_numpy()
+    std_err = df["std error"].to_numpy()
+    N_array = len(time)
 
-    # 3. Find peak index and how much we need to shift it to center
-    peak_index = np.argmax(np.abs(mean))
-    center_index = len(mean) // 2
-    shift = center_index - peak_index  # +ve => pad on the left, -ve => pad on the right
+    if N_array < 3:
+        return df
 
-    if shift > 0:
-        # Need to pad at the start (left)
-        pad_width = (shift, 0)
-        slice_obj = slice(0, len(mean))  # keep first N entries after padding
-    elif shift < 0:
-        # Need to pad at the end (right)
-        pad_width = (0, -shift)
-        slice_obj = slice(-shift, None)  # drop first |shift| entries
-    else:
-        # Already centered
-        pad_width = (0, 0)
-        slice_obj = slice(None)
+    dt = time[1] - time[0]
 
-    # 4. Apply padding and slicing consistently
-    mean = np.pad(mean, pad_width, mode='constant')[slice_obj]
-    err = np.pad(err, pad_width, mode='constant')[slice_obj]
-    time = np.pad(time, pad_width, mode='reflect', reflect_type='odd')[slice_obj]
+    
 
-    # 5. Build centered DataFrame and apply window
-    df_centered = pd.DataFrame({
-        'Time (ps)': time,
-        'Mean': mean,
-        'std error': err
-    })
+    # 2) Find peak and desired center (original center index)
+    peak_idx = int(np.argmax(np.abs(y_mean)))
+    center_idx = N_array // 2
+    difference = center_idx - peak_idx  # positive => pulse should move right, negative => left
 
-    from matplotlib import pyplot as plt
-    plt.plot(df_centered['Time (ps)'], df_centered['Mean'], label='centered trace')
+    new_center = center_idx - difference
+    new_length = new_center * 2
 
-    # Assuming w.window operates in-place on df_centered
-    w.window(df_centered)
-    plt.plot(df_centered['Time (ps)'], df_centered['Mean'], label='windowed trace')
+    # test_centerpad(time, y_mean)
+
+    new_y_mean = np.roll(y_mean, shift*3)
+    plt.plot(time, new_y_mean, label='rolled trace'
+             )
+    plt.show()
+
+    # 3) Determine extra padding needed. Note the sign of the shift variable preserves direction, meaning we don't need an if/else here
+    left_extra = max(shift, 0)
+    right_extra = max(-shift, 0)
+
+    end_value_left = time[0]-(left_extra * dt)
+    end_value_right = time[-1]+(right_extra * dt)
+
+    new_time = np.pad(time, (left_extra, right_extra), mode='linear_ramp', end_values=(end_value_left, end_value_right))
+    new_y_mean = np.pad(y_mean, (left_extra, right_extra), mode='constant', constant_values=(0,0))
+    new_std_err = np.pad(std_err, (left_extra, right_extra), mode='constant', constant_values=(0,0))
+
+    plt.plot(time, y_mean, label="original trace", marker='o')
+    plt.plot(new_time, new_y_mean, label='centered trace', marker='x')
+
     plt.legend()
     plt.show()
-    # 6. Extend length by padding zeros on both sides
-    current_len = len(df_centered)
-    desired_length = length_factor * current_len
-    extra_total = max(desired_length - current_len, 0)
 
-    left_extra = extra_total // 2
-    right_extra = extra_total - left_extra  # handle odd differences
+    breakpoint()
 
-    mean_ext = np.pad(df_centered['Mean'].to_numpy(),
-                      (left_extra, right_extra),
-                      mode='constant')
-    err_ext = np.pad(df_centered['std error'].to_numpy(),
-                     (left_extra, right_extra),
-                     mode='constant')
-    time_ext = np.pad(df_centered['Time (ps)'].to_numpy(),
-                      (left_extra, right_extra),
-                      mode='reflect',
-                      reflect_type='odd')
+    # # New length after centering
+    # N_centered = N_array + left_extra + right_extra
 
-    df_padded = pd.DataFrame({
-        'Time (ps)': time_ext,
-        'Mean': mean_ext,
-        'std error': err_ext
+    # # 4) Build centered arrays
+    # y_c = np.zeros(N_centered, dtype=float)
+    # e_c = np.zeros(N_centered, dtype=float)
+
+    # # new_y_mean = np.insert(y_mean, 0, np.zeros(left_extra))
+    # # new_y_mean = np.append(new_y_mean, np.zeros(right_extra))
+
+    # # breakpoint()
+
+    # # put original data into the new array at the correct offset
+    # start = left_extra
+    # stop = left_extra + N_array
+    # y_c[start:stop] = y_mean
+    # e_c[start:stop] = std_err
+
+    # # extend time linearly
+    # t_left = t_c[0] - dt * np.arange(left_big, 0, -1)
+    # t_right = t_c[-1] + dt * np.arange(1, right_big + 1)
+    # t_final = np.concatenate([t_left, t_c, t_right])
+
+    # plt.plot(time, y_mean, label='original trace', marker='o')
+    # plt.plot(t_c, y_c, label='centered trace', marker='x')
+
+    # # 5) Build new time axis linearly
+    # # Put peak at the new center index
+    # new_center_idx = N_centered // 2
+    # t0_peak = time[peak_idx]
+    # t_c = (np.arange(N_centered) - new_center_idx) * dt + t0_peak
+
+    df_centered = pd.DataFrame({
+        "Time (ps)": new_time,
+        "Mean": new_y_mean,
+        "std error": new_std_err,
     })
 
-    return df_padded
+    # 6) Apply window on the centered trace
+    # w.window(df_centered)
+
+    # 7) Big symmetric zero-padding (length_factor)
+    current_len = len(df_centered)
+    target_len = int(current_len * length_factor)
+    extra = max(target_len - current_len, 0)
+    left_big = extra // 2
+    right_big = extra - left_big
+
+    # extend time linearly
+    t_left = t_c[0] - dt * np.arange(left_big, 0, -1)
+    t_right = t_c[-1] + dt * np.arange(1, right_big + 1)
+    t_final = np.concatenate([t_left, t_c, t_right])
+
+    # pad mean with zeros and stderr with edge values
+    y_final = np.pad(df_centered["Mean"].to_numpy(),
+                     (left_big, right_big),
+                     mode="constant")
+
+    e_final = np.pad(df_centered["std error"].to_numpy(),
+                     (left_big, right_big),
+                     mode="edge")
+    
+    plt.plot(t_final, y_final, label="centered & padded trace")
+    plt.legend()
+    plt.show()
+
+    df_out = pd.DataFrame({
+        "Time (ps)": t_final,
+        "Mean": y_final,
+        "std error": e_final,
+    })
+
+    return df_out

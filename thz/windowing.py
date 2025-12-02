@@ -17,9 +17,22 @@ Created on Fri Jun  2 12:11:46 2023
 @author: Marco Ballabio
 """
 
-from scipy.signal.windows import  hann,hamming,flattop,boxcar,kaiser
+from scipy.signal.windows import  hann,hamming,flattop,boxcar,kaiser, tukey
 #from scipy.signal import filtfilt
+from thz.data_structures.decorators import with_dataframe
+# from data_structures.decorators import with_dataframe
 
+from scipy.signal.windows import tukey
+
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+def edge_window(df, alpha=0.05):
+    data_y = df['Mean'].values
+    N = len(data_y)
+    w = tukey(N, alpha)  # 5% edge taper
+    return data_y * w
+
+
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def window(df):
 
     #create window function
@@ -33,4 +46,31 @@ def window(df):
     df['Mean'] = df['Mean']*w
     df['std error'] = df['std error']*w
 
-    return df
+    return
+
+
+if __name__ == "__main__":
+    '''Test windowning functions'''
+    import matplotlib.pyplot as plt
+    w_hann = hann(100)
+    w_boxcar = boxcar(100)
+    w_hamming = hamming(100)
+    w_flattop = flattop(100)
+    w_kaiser = kaiser(100,14)
+    w_tukey = tukey(100,0.2)
+
+    plt.plot(w_hann, label='Hann')
+    plt.plot(w_boxcar, label='Boxcar')
+    plt.plot(w_hamming, label='Hamming')
+    plt.plot(w_flattop, label='Flat-top')
+    plt.plot(w_kaiser, label='Kaiser')
+    plt.legend()
+    plt.title('Window functions comparison')
+    plt.show()
+
+    for x in range(1,20):
+        w_tukey = tukey(100, x/20)
+        plt.plot(w_tukey, label=f'Tukey alpha={x/10}')
+    plt.legend()
+    plt.title('Tukey window functions comparison')
+    plt.show()

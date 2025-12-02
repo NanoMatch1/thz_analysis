@@ -36,7 +36,8 @@ if __name__ == "__main__":
     # test._interpolate_time_axis(new_limits=(, 140))
     # data_set.interpolate_pulse_window()
     data_set.group_files()
-    data_set.center_pad_window_all(length_factor=5, window_alpha=0.2)
+    # data_set.center_pad_window_all(length_factor=5, window_alpha=0.2)
+    data_set.centerpad_legacy()
     data_set.fft_compare()
     # sn = data_set.compare_snr()
 

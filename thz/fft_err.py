@@ -17,6 +17,7 @@ from math import e
 from phase_interpolation import phaseex
 
 
+
 def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py
 
     #take first column of dataframe as time , 2nd as average and 3rd as error

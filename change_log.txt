@@ -1,0 +1,8 @@
+1. added decorator to convert between numpy arrays and dataframes
+2. Removed df as a return object in windowing.py. df gets modified in place at the object level, so doesn't need a return from the function, but the return may cause confusion later if not expexted
+
+
+
+Issues:
+1. Current padding code truncates the leading or trailing edge of the data
+2. padding the time axis was done incorrectly, but accidentally resulted in the correct outcome. Patched to use a linear ramp.

@@ -230,13 +230,13 @@ def centerpad_window(
     """
     df0 = baseline_subtract(df, n_points=baseline_points)
     df1 = center_pulse(df0)
-    df2 = apply_window(df1, alpha=window_alpha)
-    df3 = pad_zeros(df2, length_factor=length_factor)
+    # df2 = apply_window(df1, alpha=window_alpha)
+    # df3 = pad_zeros(df1, length_factor=length_factor)
 
     import matplotlib.pyplot as plt
 
     plt.plot(df['Time (ps)'], df['Mean'], label='original')
-    plt.plot(df3['Time (ps)'], df3['Mean'], label='processed')
+    plt.plot(df1['Time (ps)'], df1['Mean'], label='processed')
     plt.legend()
     plt.show()
-    return df3
+    return df1

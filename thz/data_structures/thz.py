@@ -9,7 +9,7 @@ Future improvements:
 import numpy as np
 import datetime
 import pandas as pd
-# from thz.data_processing.padding import centerpad
+from thz.padding import centerpad, centerpad_refactor
 from thz.data_processing.preprocessing import centerpad_window
 
 class BaseTHzData:
@@ -623,4 +623,16 @@ class THzData:
         self.processing_dict['fft_centered_padded'] = fft_result
         return fft_result
         
+
+    def centerpad(self):
+        '''Applies centerpad to the current data and updates the data in place.'''
+        result = centerpad(self._data)
+        breakpoint()
+        self._data = result['data']
+
+    def centerpad_refactor(self):
+        '''Applies centerpad_refactor to the current data and updates the data in place.'''
+        from thz.padding import centerpad_refactor
+        result = centerpad_refactor(self._data)
+        self._data = result['data']
 

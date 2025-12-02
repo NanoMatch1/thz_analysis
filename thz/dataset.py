@@ -309,6 +309,19 @@ class DataSet:
             plt.legend()
             plt.show()
 
+    def centerpad_legacy(self, show_graph=False) -> None:
+        for thz_data in self.data.values():
+            if show_graph:
+                plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='pre-process')
+
+            # thz_data.centerpad()
+            thz_data.centerpad_refactor()
+
+            if show_graph:
+                plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='post-process')
+                plt.legend()
+                plt.show()
+
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
         for name, thz_data in self.data.items():
