@@ -9,8 +9,8 @@ Future improvements:
 import numpy as np
 import datetime
 import pandas as pd
-from thz.padding import centerpad, centerpad_refactor
-from thz.data_processing.preprocessing import centerpad_window
+# from thz.padding import centerpad, centerpad_refactor
+from thz.data_processing.preprocessing import preprocess_trace
 
 class BaseTHzData:
     '''Base class for THz data structures. Holds one scan and metadata information.
@@ -170,10 +170,10 @@ class THzData:
         self.processing_dict['time_domain'] = {'data': averaged_data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']}
         return averaged_data
     
-    def centerpad_window(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
+    # def centerpad_window(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
         
-        result = centerpad_window(self._data, length_factor=length_factor, baseline_points=baseline_points, window_alpha=window_alpha)
-        self._data = result['data']
+    #     result = centerpad_window(self._data, length_factor=length_factor, baseline_points=baseline_points, window_alpha=window_alpha)
+    #     self._data = result['data']
     
     # def center_pad_window(self, length_factor: int = 10) -> None:
     #     import matplotlib.pyplot as plt
@@ -622,17 +622,29 @@ class THzData:
         fft_result = (fft_err(centered_padded_data['data'])) # returns dictionary
         self.processing_dict['fft_centered_padded'] = fft_result
         return fft_result
-        
+    
+    
+    def fft_edge_windowed(self):
+        '''Runs the fft_err function on the current edge-windowed data and returns the spectrum as a numpy array.'''
+        from thz.data_processing.fft_processing import fft_err
+        edge_windowed_data = self.processing_dict.get('edge_windowed', None)
+        fft_result = (fft_err(edge_windowed_data['data'])) # returns dictionary
+        self.processing_dict['fft_edge_windowed'] = fft_result
+        return fft_result
+    
+    def prepare_for_fft(self, 
+                        baseline_points=10, 
+                        pad_length_factor=5.0, 
+                        window_alpha=0.2,
+                        show_graph=True
+                        ):
+        '''Preprocesses the current time-domain data for FFT by subtracting DC offset, centering pulse, and padding.'''
+        data_out = preprocess_trace(self._data, baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
 
-    def centerpad(self):
-        '''Applies centerpad to the current data and updates the data in place.'''
-        result = centerpad(self._data)
-        breakpoint()
-        self._data = result['data']
+        self._data = data_out['data']
+        self._time_data_headers = data_out['headers']
+        self.processing_dict['edge_windowed'] = data_out
 
-    def centerpad_refactor(self):
-        '''Applies centerpad_refactor to the current data and updates the data in place.'''
-        from thz.padding import centerpad_refactor
-        result = centerpad_refactor(self._data)
-        self._data = result['data']
+
+
 

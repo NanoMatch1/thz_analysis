@@ -37,7 +37,10 @@ if __name__ == "__main__":
     # data_set.interpolate_pulse_window()
     data_set.group_files()
     # data_set.center_pad_window_all(length_factor=5, window_alpha=0.2)
+    # data_set.centerpad_legacy()
+    # data_set.edge_window_pad()
     data_set.centerpad_legacy()
+    data_set.prepare_for_fft_all(pad_length_factor=5, baseline_points=10, show_graph=False)
     data_set.fft_compare()
     # sn = data_set.compare_snr()
 

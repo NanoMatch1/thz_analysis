@@ -25,11 +25,8 @@ from thz.data_structures.decorators import with_dataframe
 from scipy.signal.windows import tukey
 
 @with_dataframe(columns=["Time (ps)", "Mean", "std error"])
-def edge_window(df, alpha=0.05):
-    data_y = df['Mean'].values
-    N = len(data_y)
-    w = tukey(N, alpha)  # 5% edge taper
-    return data_y * w
+def tukey_window(df, alpha=0.05):
+    '''Apply a Tukey window with edge tapering to the THz time-domain data. Modifies the DataFrame in place.'''
 
 
 @with_dataframe(columns=["Time (ps)", "Mean", "std error"])

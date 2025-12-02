@@ -15,6 +15,17 @@ import thz.windowing as w
 from thz.data_structures.decorators import with_dataframe
 import matplotlib.pyplot as plt
 
+@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+def edge_window_pad(df, alpha=0.2):
+    '''Uses edge-tapered windowing and no centering to create the windowed trace. Padding is done after windowing.'''
+    plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
+    w.edge_window(df, alpha=alpha)
+
+    plt.plot(df['Time (ps)'], df['Mean'], label='windowed trace')
+    plt.legend()
+    plt.show()
+
+
 
 @with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def centerpad(df):
@@ -51,7 +62,7 @@ def centerpad(df):
         padded_error = np.pad(df['std error'].values, (num_zeros_to_add, 0), mode='constant')
         padded_time = np.pad(df['Time (ps)'].values, (num_zeros_to_add, 0), mode='reflect',reflect_type='odd')
         # padded_time = np.pad(df['Time (ps)'].values, (num_zeros_to_add, 0), mode='reflect',reflect_type='odd')
-        breakpoint()
+
         padded_mean = padded_mean[:-num_zeros_to_add]
         padded_time = padded_time[:-num_zeros_to_add]
         padded_error = padded_error[:-num_zeros_to_add]
@@ -69,7 +80,7 @@ def centerpad(df):
     w.window(df_padded)
     
     #increase size by padding zeroes, it helps when pulses arrival time difference is large (thick samples)
-    desired_length = 10 * len(df)
+    desired_length = 5 * len(df)
 
     # Calculate the number of zeros to add on each side
     zeros_to_add = (desired_length - len(df)) // 2
@@ -86,9 +97,9 @@ def centerpad(df):
                             'std error': padded0_error})
     # w.window(df_padded)
 
-    plt.plot(df_padded['Time (ps)'], df_padded['Mean'], label='centered & padded trace')
-    plt.legend()
-    plt.show()
+    # plt.plot(df_padded['Time (ps)'], df_padded['Mean'], label='centered & padded trace')
+    # plt.legend()
+    # plt.show()
     return df_padded
 
 def test_centerpad(time, y_mean):

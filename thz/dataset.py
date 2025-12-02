@@ -309,18 +309,9 @@ class DataSet:
             plt.legend()
             plt.show()
 
-    def centerpad_legacy(self, show_graph=False) -> None:
-        for thz_data in self.data.values():
-            if show_graph:
-                plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='pre-process')
 
-            # thz_data.centerpad()
-            thz_data.centerpad_refactor()
 
-            if show_graph:
-                plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='post-process')
-                plt.legend()
-                plt.show()
+
 
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
@@ -352,15 +343,29 @@ class DataSet:
             return self.data.get(reference_filename)
         return None
     
+    def centerpad_legacy(self, show_graph=False) -> None:
+        '''For legacy testing, does not overwrite data, just stores centered and padded version in processing_dict.'''
+        from thz.padding import centerpad
+        for thz_data in self.data.values():
+            thz_data.subtract_dc_offset(num_points=10)
+
+            result = centerpad(thz_data._data)
+            # thz_data._data = result['data']
+            thz_data.processing_dict['centered_padded'] = result
+
+    def fft_set(self):
+        '''Runs FFT across different preprocessing methods for all THzData objects in the dataset.'''
+        for thz_data in self.data.values():
+            thz_data.fft_raw()
+            thz_data.fft_centerpad()
+            thz_data.fft_edge_windowed()
+
     def fft_compare(self, low_threshold = 4, up_threshold = 10):
         import thz.data_processing.phase_interpolation as phi
         from thz.data_processing.fft_processing import transfer_function
         import numpy as np
 
-        '''Applies FFT with error propagation to all THzData objects in the dataset.'''
-        for thz_data in self.data.values():
-            thz_data.fft_raw()
-            thz_data.fft_centerpad()
+        '''applies analysis to compare FFT results between sample and reference datasets in the current grouping.'''
 
         for filename, thz_data in self.data.items():
             thz_reference = self.get_reference(filename, ref_type='substrate')
@@ -388,6 +393,8 @@ class DataSet:
             print(len(sample_centered['data'][:,0]))
             print(sample_centered['data'][-1,1] - sample_centered['data'][0,0])
             breakpoint()
+
+            
 
             ref_data = ref_time['data']
             sample_data = sample_time['data']
@@ -432,3 +439,7 @@ class DataSet:
         return snr_results
         
 
+    def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, show_graph=False) -> None:
+        '''Prepares all THzData objects for FFT by subtracting DC offset, centering pulse, and padding time-domain data.'''
+        for thz_data in self.data.values():
+            thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
