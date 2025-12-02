@@ -322,6 +322,14 @@ class DataSet:
         
         plt.show()
 
+    def plot_fft_current(self, key: str = None, **kwargs) -> None:
+        '''Plots the current FFT data for all THzData objects in the dataset.'''
+        for name, thz_data in self.data.items():
+            figure_obj = self._generate_figure_object('main')
+            thz_data.plot_fft_current(figure_obj=figure_obj, **kwargs)
+        
+        plt.show()
+
 
     def plot_sn(self):
         '''Plots the signal-to-noise ratio across the time domain for the loaded THzData objects.'''
@@ -361,6 +369,7 @@ class DataSet:
             thz_data.fft_raw()
             thz_data.fft_centerpad()
             thz_data.fft_edge_windowed()
+
 
     def fft_compare(self, low_threshold = 4, up_threshold = 10):
         # import thz.data_processing.phase_interpolation as phi

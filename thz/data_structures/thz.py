@@ -11,6 +11,7 @@ import datetime
 import pandas as pd
 # from thz.padding import centerpad, centerpad_refactor
 from thz.data_processing.preprocessing import preprocess_trace
+from thz.data_structures.helpers import df_to_dict, dict_to_df
 
 class BaseTHzData:
     '''Base class for THz data structures. Holds one scan and metadata information.
@@ -566,6 +567,40 @@ class THzData:
 
         if show_plot:
             plt.show()
+
+    def plot_fft_current(self, **kwargs) -> None:
+        '''Plots the current FFT data with error bars as a shaded region.'''
+        import matplotlib.pyplot as plt
+
+        series = kwargs.get('series', 'fft_raw')
+
+        if self.processing_dict.get(series, None) is None:
+            print("No FFT data to plot for {}.".format(series))
+            return
+        fft_data = self.processing_dict[series]
+
+        fft_data = df_to_dict(fft_data)
+        data = fft_data['data']
+        frequency = data[:, 0]
+        amplitude = data[:, 1]
+        # phase = fft_data[:, 2]
+
+        if 'figure_obj' in kwargs:
+            figure_obj = kwargs.get('figure_obj')
+            ax = figure_obj.ax
+            show_plot = False
+        else:
+            fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+            show_plot = True
+        ax.plot(frequency, amplitude, '-', label=self.filename)
+        ax.set_title(kwargs.get('title', f'FFT:{series}'))
+        ax.set_xlabel(kwargs.get('xlabel', 'Frequency (THz)'))
+        ax.set_ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
+        ax.legend()
+        ax.grid(kwargs.get('show_grid', True))
+
+        if show_plot:
+            plt.show()
     
     @property
     def time(self) -> np.array:
@@ -610,8 +645,9 @@ class THzData:
         '''Runs the fft_err function on the current data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
         raw_data = self.processing_dict.get('time_domain', None)
-        fft_result = (fft_err(raw_data['data']))
-        self.processing_dict['fft_raw'] = {'data': fft_result, 'headers': ['Frequency', 'Amplitude', 'Phase']}
+        raw_data = dict_to_df(raw_data)
+        fft_result = fft_err(raw_data)
+        self.processing_dict['fft_raw'] = fft_result
 
         return fft_result
     
@@ -619,7 +655,8 @@ class THzData:
         '''Runs the fft_err function on the current centered and padded data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
         centered_padded_data = self.processing_dict.get('centered_padded', None)
-        fft_result = (fft_err(centered_padded_data['data'])) # returns dictionary
+        # centered_padded_data = dict_to_df(centered_padded_data)
+        fft_result = fft_err(centered_padded_data) # returns dictionary
         self.processing_dict['fft_centered_padded'] = fft_result
         return fft_result
     
@@ -628,7 +665,8 @@ class THzData:
         '''Runs the fft_err function on the current edge-windowed data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
         edge_windowed_data = self.processing_dict.get('edge_windowed', None)
-        fft_result = (fft_err(edge_windowed_data['data'])) # returns dictionary
+        edge_windowed_data = dict_to_df(edge_windowed_data)
+        fft_result = (fft_err(edge_windowed_data)) # returns dictionary
         self.processing_dict['fft_edge_windowed'] = fft_result
         return fft_result
     

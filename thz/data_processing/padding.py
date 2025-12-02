@@ -16,7 +16,7 @@ import thz.data_processing.preprocessing as w
 from thz.data_structures.decorators import with_dataframe
 
 
-def centerpad(df):
+def centerpad(df, length_factor=10):
     #remove offset from Mean column
     df['Mean'] = df['Mean']-np.average(df['Mean'].values[0:10])    
     
@@ -65,7 +65,7 @@ def centerpad(df):
     w.window(df_padded)
     
     #increase size by padding zeroes, it helps when pulses arrival time difference is large (thick samples)
-    desired_length = 10 * len(df)
+    desired_length = length_factor * len(df_padded)
 
     # Calculate the number of zeros to add on each side
     zeros_to_add = (desired_length - len(df)) // 2

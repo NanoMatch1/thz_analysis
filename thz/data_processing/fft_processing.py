@@ -17,7 +17,7 @@ from math import e
 from thz.data_processing.phase_interpolation import phaseex
 from thz.data_structures.decorators import with_dataframe
 
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+# @with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py
 
     #take first column of dataframe as time , 2nd as average and 3rd as error
