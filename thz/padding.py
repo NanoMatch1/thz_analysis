@@ -11,11 +11,10 @@ Calls a windowing function on the centered trace.
 
 import pandas as pd
 import numpy as np
-import thz.windowing as w
-from thz.data_structures.decorators import with_dataframe
+import windowing as w
 import matplotlib.pyplot as plt
 
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+
 def edge_window_pad(df, alpha=0.2):
     '''Uses edge-tapered windowing and no centering to create the windowed trace. Padding is done after windowing.'''
     plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
@@ -27,12 +26,10 @@ def edge_window_pad(df, alpha=0.2):
 
 
 
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
-def centerpad(df):
+
+def centerpad(df, length_factor=5):
     #remove offset from Mean column
     df['Mean'] = df['Mean']-np.average(df['Mean'].values[0:10])    
-
-    plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
     
     # Find the index of the peak in the amplitude column (using absolute values)
     peak_index = np.argmax(np.abs(df['Mean']))
@@ -80,7 +77,8 @@ def centerpad(df):
     w.window(df_padded)
     
     #increase size by padding zeroes, it helps when pulses arrival time difference is large (thick samples)
-    desired_length = 5 * len(df)
+    # desired_length = 5 * len(df)
+    desired_length = length_factor * len(df)
 
     # Calculate the number of zeros to add on each side
     zeros_to_add = (desired_length - len(df)) // 2
@@ -114,7 +112,6 @@ def test_centerpad(time, y_mean):
     plt.show()
 
 
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def centerpad_refactor(df: pd.DataFrame, length_factor: int = 5) -> pd.DataFrame:
     """
     Center the main THz pulse in the time window, apply windowing,

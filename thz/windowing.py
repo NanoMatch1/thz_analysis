@@ -19,17 +19,16 @@ Created on Fri Jun  2 12:11:46 2023
 
 from scipy.signal.windows import  hann,hamming,flattop,boxcar,kaiser, tukey
 #from scipy.signal import filtfilt
-from thz.data_structures.decorators import with_dataframe
+from data_structures.decorators import with_dataframe
 # from data_structures.decorators import with_dataframe
 
 from scipy.signal.windows import tukey
 
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+
 def tukey_window(df, alpha=0.05):
     '''Apply a Tukey window with edge tapering to the THz time-domain data. Modifies the DataFrame in place.'''
 
 
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
 def window(df):
 
     #create window function

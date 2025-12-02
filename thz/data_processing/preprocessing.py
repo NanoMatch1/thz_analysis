@@ -2,10 +2,26 @@
 
 import numpy as np
 import pandas as pd
-from scipy.signal.windows import tukey   # change to hann if you prefer
+from scipy.signal.windows import tukey, hann   # change to hann if you prefer
 
 from thz.data_structures.decorators import with_dataframe
 
+def window(df):
+
+    '''Legacy windowing function - kept for reference'''
+
+    #create window function
+    # w = boxcar(len(df['Time (ps)'])) # no window
+    # w = hamming(len(df['Time (ps)']))
+    # w = flattop(len(df['Time (ps)']))
+    w = hann(len(df['Time (ps)']))
+    # w = kaiser(len(df['Time (ps)']),14)
+    
+    #windowing
+    df['Mean'] = df['Mean']*w
+    df['std error'] = df['std error']*w
+
+    return
 
 
 # ---------- 1. Baseline subtraction ----------

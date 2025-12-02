@@ -41,7 +41,27 @@ if __name__ == "__main__":
     # data_set.edge_window_pad()
     data_set.centerpad_legacy()
     data_set.prepare_for_fft_all(pad_length_factor=5, baseline_points=10, show_graph=False)
-    data_set.fft_compare()
+    data_set.fft_set()
+    transfer = data_set.fft_compare()
+
+    # TODO List:
+    # - decide on best centering/padding method and remove others
+    # - clean data type handling in dataset (DataFrame vs numpy array vs dict)
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1,len(transfer), figsize=(12,8))
+    # plt.show()
+
+    for idx, (series, data_dict) in enumerate(transfer.items()):
+        for filename, data in data_dict.items():
+            print(f"Series: {series}, File: {filename}")
+            # print(data)
+            ax[idx].plot(data['Frequency (THz)'], data['Phase'], label=filename)
+
+        ax[idx].legend()
+        ax[idx].set_title(f'Transfer Function: {series}')
+
+    plt.show()
+            # plt.plot(data['Frequency (THz)'], data['Amplitude'], label='Amplitude', label='{}:{}')
     # sn = data_set.compare_snr()
 
     # LEgacy marker

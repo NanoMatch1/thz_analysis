@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
@@ -345,11 +346,12 @@ class DataSet:
     
     def centerpad_legacy(self, show_graph=False) -> None:
         '''For legacy testing, does not overwrite data, just stores centered and padded version in processing_dict.'''
-        from thz.padding import centerpad
+        from thz.data_processing.padding import centerpad
         for thz_data in self.data.values():
             thz_data.subtract_dc_offset(num_points=10)
-
-            result = centerpad(thz_data._data)
+            # legacy function uses DataFrame input/output   
+            data = pd.DataFrame(thz_data._data, columns=['Time (ps)', 'Mean', 'std error'])
+            result = centerpad(data, length_factor=5)
             # thz_data._data = result['data']
             thz_data.processing_dict['centered_padded'] = result
 
@@ -361,55 +363,48 @@ class DataSet:
             thz_data.fft_edge_windowed()
 
     def fft_compare(self, low_threshold = 4, up_threshold = 10):
-        import thz.data_processing.phase_interpolation as phi
-        from thz.data_processing.fft_processing import transfer_function
+        # import thz.data_processing.phase_interpolation as phi
+        # from thz.data_processing.fft_processing import transfer_function
+        from thz.phase_interpolation import phaseoffset, phaseex
+        from thz.fft_err import transfer_function
+
         import numpy as np
+        import pandas as pd
 
         '''applies analysis to compare FFT results between sample and reference datasets in the current grouping.'''
 
-        for filename, thz_data in self.data.items():
-            thz_reference = self.get_reference(filename, ref_type='substrate')
-            if thz_reference is None:
-                continue
+        series_list = ['fft_centered_padded', 'fft_edge_windowed', 'fft_raw']
+        transfer_functions = {key: {} for key in series_list}
 
-            ref_time = thz_reference.processing_dict['time_domain']
-            sample_time = thz_data.processing_dict['time_domain']
-            ref_centered = thz_reference.processing_dict['fft_centered_padded']
-            sample_centered = thz_data.processing_dict['fft_centered_padded']
-            # determine inital phase offset
+        for key in series_list:
+            for filename, thz_data in self.data.items():
+                thz_reference = self.get_reference(filename, ref_type='substrate')
+                if thz_reference is None:
+                    continue
 
-            print('Ref_time length:')
-            print(len(ref_time['data'][:,0]))
-            print(ref_time['data'][-1, 0] - ref_time['data'][0,0])
+                ref_time = thz_reference.processing_dict['time_domain']
+                sample_time = thz_data.processing_dict['time_domain']
+                # breakpoint()
+                ref_centered = thz_reference.processing_dict['fft_centered_padded']
+                sample_centered = thz_data.processing_dict['fft_centered_padded']
+                # determine inital phase offset
+                ref_data = ref_time['data']
+                sample_data = sample_time['data']
+                t0_ref = ref_data[np.argmax(abs(ref_data[:,1]))][0] # time at max amplitude
+                t0_sam = sample_data[np.argmax(abs(sample_data[:,1]))][0] # time at max amplitude
 
-            print('Sample_time length:')
-            print(len(sample_time['data'][:,0]))
-            print(sample_time['data'][-1, 0] - sample_time['data'][0,0])
-            print('Ref_centered length:')
-            print(len(ref_centered['data'][:,0]))
-            print(ref_centered['data'][-1,1] - ref_centered['data'][0,0])
-
-            print('Sample_centered length:')
-            print(len(sample_centered['data'][:,0]))
-            print(sample_centered['data'][-1,1] - sample_centered['data'][0,0])
-            breakpoint()
-
-            
-
-            ref_data = ref_time['data']
-            sample_data = sample_time['data']
-            t0_ref = ref_data[np.argmax(abs(ref_data[:,1]))][0] # time at max amplitude
-            t0_sam = sample_data[np.argmax(abs(sample_data[:,1]))][0] # time at max amplitude
-
-            # phiref - send only time axis arrays
-            phioffset = phi.phaseoffset_numpy(ref_centered['data'][:, 0], sample_centered['data'][:, 0])
+                # phiref - send only time axis arrays
+                phioffset = phaseoffset(ref_centered['data'][:, 0], sample_centered['data'][:, 0])
 
 
-            phidifference = phi.phaseex(ref_centered['data'], sample_centered['data'])
-            transfer_func = transfer_function(ref_centered['data'], sample_centered['data'], phioffset)
+                phidifference = phaseex(ref_centered, sample_centered)
+                ref_centered_df = pd.DataFrame(ref_centered['data'], columns=['Frequency (THz)', 'Amplitude', 'Δ(Amplitude)', 'Phase', 'Δ(Phase)'])
+                sample_centered_df = pd.DataFrame(sample_centered['data'], columns=['Frequency (THz)', 'Amplitude', 'Δ(Amplitude)', 'Phase', 'Δ(Phase)'])
+                transfer_func = transfer_function(ref_centered_df, sample_centered_df, phioffset)
 
-            
-            breakpoint()
+                transfer_functions[key][filename] = transfer_func
+
+        return transfer_functions
 
         
 
