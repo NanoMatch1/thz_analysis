@@ -374,8 +374,8 @@ class DataSet:
     def fft_compare(self, low_threshold = 4, up_threshold = 10):
         # import thz.data_processing.phase_interpolation as phi
         # from thz.data_processing.fft_processing import transfer_function
-        from thz.phase_interpolation import phaseoffset, phaseex
-        from thz.fft_err import transfer_function
+        from thz.data_processing.phase_interpolation import phaseoffset, phaseex
+        from thz.data_processing.fft_processing import transfer_function
 
         import numpy as np
         import pandas as pd
@@ -394,22 +394,19 @@ class DataSet:
                 ref_time = thz_reference.processing_dict['time_domain']
                 sample_time = thz_data.processing_dict['time_domain']
                 # breakpoint()
-                ref_centered = thz_reference.processing_dict['fft_centered_padded']
-                sample_centered = thz_data.processing_dict['fft_centered_padded']
+                ref_freq = thz_reference.processing_dict[key]
+                sample_freq = thz_data.processing_dict[key]
                 # determine inital phase offset
-                ref_data = ref_time['data']
-                sample_data = sample_time['data']
-                t0_ref = ref_data[np.argmax(abs(ref_data[:,1]))][0] # time at max amplitude
-                t0_sam = sample_data[np.argmax(abs(sample_data[:,1]))][0] # time at max amplitude
-
+                
+                t0_ref = ref_freq['Frequency (THz)'][np.argmax(abs(ref_freq['Amplitude']))] # time at max amplitude
+                t0_sam = sample_freq['Frequency (THz)'][np.argmax(abs(sample_freq['Amplitude']))] # time at max amplitude
+                breakpoint()
                 # phiref - send only time axis arrays
-                phioffset = phaseoffset(ref_centered['data'][:, 0], sample_centered['data'][:, 0])
+                phioffset = phaseoffset(ref_freq, sample_freq)
 
+                phidifference = phaseex(ref_freq, sample_freq)
 
-                phidifference = phaseex(ref_centered, sample_centered)
-                ref_centered_df = pd.DataFrame(ref_centered['data'], columns=['Frequency (THz)', 'Amplitude', 'Δ(Amplitude)', 'Phase', 'Δ(Phase)'])
-                sample_centered_df = pd.DataFrame(sample_centered['data'], columns=['Frequency (THz)', 'Amplitude', 'Δ(Amplitude)', 'Phase', 'Δ(Phase)'])
-                transfer_func = transfer_function(ref_centered_df, sample_centered_df, phioffset)
+                transfer_func = transfer_function(ref_freq, sample_freq, phioffset)
 
                 transfer_functions[key][filename] = transfer_func
 

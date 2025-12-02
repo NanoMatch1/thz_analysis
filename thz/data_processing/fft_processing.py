@@ -15,16 +15,18 @@ from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
 from scipy.signal import welch  # Welch method for smoother PSD estimate
 from math import e
 from thz.data_processing.phase_interpolation import phaseex
-from thz.data_structures.decorators import with_dataframe
 
-# @with_dataframe(columns=["Time (ps)", "Mean", "std error"])
+
+
 def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py
 
     #take first column of dataframe as time , 2nd as average and 3rd as error
     time = timedata.loc[:,'Time (ps)']
     y_mean = timedata.loc[:,'Mean']
     y_err =  timedata.loc[:,'std error']
-
+    
+    
+    #define freq axis
     freq = rfftfreq(len(time), time[1]-time[0])
     
     #cancel offset, computed on first 10 points of time trace
@@ -78,29 +80,12 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
    
     return dff
 
-def interpolate_data():
-    pass
-# @with_dataframe()
-def transfer_function(ref,sam,offset, headers=["Frequency (THz)", "Amplitude", "Δ(Amplitude)", "Phase", "Δ(Phase)"]):
-    import matplotlib.pyplot as plt
-    # TODO: There's an issue with the not having the same resolution. Currently interpolate to the max resolution per item.
-
-    if len(ref['Frequency (THz)']) != len(sam['Frequency (THz)']):
-        from thz.data_processing.postprocessing import interpolate_to_max_resolution
-        ref, sam, offset = interpolate_to_max_resolution(ref, sam, offset)
-
-
+def transfer_function(ref,sam,offset):
+    
     amplitude = sam['Amplitude']/ref['Amplitude']
     # phase = sam['Phase']-ref['Phase']-offset
-    # Currently goes through conversion to dataframe in order to use phaseex
-    # breakpoint()
-    phase = phaseex(pd.DataFrame(ref, columns=headers), pd.DataFrame(sam, columns=headers))
+    phase = phaseex(ref, sam)-offset
     
-    phase = phase.to_numpy()
-    offset = np.reshape(offset, len(offset)) # transform the shape to be compatible
-    
-    phase = phase - offset
-
     #error propagation
     err_amplitude = 1/(ref['Amplitude']**2)*(sam['Δ(Amplitude)']*ref['Amplitude']+ref['Δ(Amplitude)']*sam['Amplitude'])
     err_phase = sam['Δ(Phase)']+ref['Δ(Phase)']
@@ -130,20 +115,3 @@ def transfer_functionOPTP(ref,sam,offset):
                    'Δ(Phase)']
       
     return T
-
-def calculate_transfer_function(time_ref, sample_ref, ref, sam, offset=0, optp=False):
-  #time_ref and time_ref are time domain dataframes
-  # calculates initial phase offset
-  tref = time_ref.iloc[np.argmax(abs(time_ref['Mean'])),0]
-  tsam = time_ref.iloc[np.argmax(abs(time_ref['Mean'])),0]
-
-  phiref = 2*np.pi*samw['Frequency (THz)']*(tref)
-  phisam = 2*np.pi*samw['Frequency (THz)']*(tsam)
-
-  phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
-  phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
-
-  phidifference = phi.phaseex(refw, samw)
-
-  #transfer function
-  T = fft_err.transfer_function(refw, samw, phioffset)
