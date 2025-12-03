@@ -77,14 +77,17 @@ sam_t = di.dataimport(filepath,sample)
 # %% Analysis
 
 # moves the pulse to the center an pad 0 at the edges
-import matplotlib.pyplot as plt
-print("Filename:", reference    )
+# import matplotlib.pyplot as plt
+# print("Filename:", reference    )
 plt.plot(ref_t['Time (ps)'],ref_t['Mean'], label='pre-pad ref')
-ref_centered = pad.centerpad(ref_t)
-sam_centered = pad.centerpad(sam_t)
-plt.plot(ref_centered['Time (ps)'],ref_centered['Mean'], label='post-pad ref')
+plt.plot(sam_t['Time (ps)'],sam_t['Mean'], label='pre-pad sam')
 plt.legend()
 plt.show()
+ref_centered = pad.centerpad(ref_t)
+sam_centered = pad.centerpad(sam_t)
+# plt.plot(ref_centered['Time (ps)'],ref_centered['Mean'], label='post-pad ref')
+# plt.legend()
+# plt.show()
 
 #Fourier Transform
 
@@ -114,6 +117,10 @@ DRimpr = 10*np.log10(DRw/DR)
 tref = ref_t.iloc[np.argmax(abs(ref_t['Mean'])),0]
 tsam = sam_t.iloc[np.argmax(abs(sam_t['Mean'])),0]
 
+delta_t_time_ps = tsam - tref
+print("Time-domain delay:", delta_t_time_ps, "ps")
+
+breakpoint()
 
 
 phiref = 2*np.pi*samw['Frequency (THz)']*(tref)
@@ -123,11 +130,18 @@ phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
 
 phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
 
-phidifference = phi.phaseex(refw, samw)
+phidifference, delta_t_phase_ps = phi.phaseex_v2(refw, samw, show_graph=True)
+
+print("Phase-domain delay:", delta_t_phase_ps, "ps")
+print("Phase offset difference (time - phase):", delta_t_time_ps - delta_t_phase_ps, "ps")
+
+if abs(abs(delta_t_phase_ps) - abs(delta_t_time_ps)) > 1:
+    raise ValueError("Significant discrepancy between time-domain and phase-domain delays.")
+
 
 #transfer function
-T = fft_err.transfer_function(refw, samw, phioffset)
 breakpoint()
+T = fft_err.transfer_function(refw, samw, phioffset)
 # %% self standing film approximation
 
 #guesses refractive index with thin, self standing film approximation

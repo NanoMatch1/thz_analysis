@@ -16,6 +16,7 @@ I see two solutions:
 Bugs:
 1. Phase calculations and transfer functions are wrong. The code uses the pandas dataframes to do the division math, which quietly passes an incorrect division if array lengths are unqueal. This is the case when the reference and data time domains or time steps are different, so almost always...
 1. a. Solution: interpolate each FFT before computing phase or transfer functions.
+2. Phaseex fits the wrapped phase, which results in a physically incorrect computation of phase. Code modified to unwrap the phase.
 
 
 # Recommendations

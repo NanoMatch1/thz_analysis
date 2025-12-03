@@ -4,6 +4,56 @@ from typing import Iterable, Any
 
 import numpy as np
 import pandas as pd
+from data_structures.helpers import interpolate_to_max_resolution, _extract_data_and_headers
+
+def align_to_max_resolution(
+    axis_col_name: str,
+    clip_to_overlap: bool = True,
+    phase_col_names: tuple[str, ...] = ('Phase', 'Δ(Phase)', 'delta Phase'),
+    wrap_phase_output: bool = True,
+):
+    """
+    Decorator that aligns multiple data-like arguments before passing them
+    to the wrapped function.
+
+    Only accepts:
+      - pandas.DataFrame
+      - dict{'data': ndarray, 'headers': list}
+
+    Rejects bare ndarrays to avoid silent column misalignment.
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            args = list(args)
+
+            # Which args need alignment?
+            idx_data = []
+            data_objs = []
+            for i, arg in enumerate(args):
+                if isinstance(arg, pd.DataFrame) or (
+                    isinstance(arg, dict) and "data" in arg and "headers" in arg
+                ):
+                    idx_data.append(i)
+                    data_objs.append(arg)
+
+            # Only align if more than one dataset is present
+            if len(data_objs) >= 2:
+                aligned = interpolate_to_max_resolution(
+                    *data_objs,
+                    axis_col_name=axis_col_name,
+                    clip_to_overlap=clip_to_overlap,
+                    phase_col_names=phase_col_names,
+                    wrap_phase_output=wrap_phase_output,
+                )
+                for i, new_obj in zip(idx_data, aligned):
+                    args[i] = new_obj
+
+            return func(*args, **kwargs)
+
+        return wrapper
+    return decorator
+
 
 #TODO: Remove with_dataframes alltogether by constructing the dataframes before function call
 def with_dataframe(

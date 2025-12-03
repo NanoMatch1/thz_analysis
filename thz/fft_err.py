@@ -15,6 +15,7 @@ from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
 from scipy.signal import welch  # Welch method for smoother PSD estimate
 from math import e
 from phase_interpolation import phaseex
+from data_structures.decorators import align_to_max_resolution
 
 
 
@@ -78,18 +79,20 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
     dff.columns = ['Frequency (THz)','Amplitude','Δ(Amplitude)','Phase',
                    'Δ(Phase)']
     
-    import matplotlib.pyplot as plt
-    plt.plot(dff['Frequency (THz)'], dff['Δ(Phase)']
-             )
-    plt.show()
    
     return dff
 
+@align_to_max_resolution(
+    axis_col_name="Frequency (THz)",
+    phase_col_names=('Phase', 'Δ(Phase)')
+)
 def transfer_function(ref,sam,offset):
     
     amplitude = sam['Amplitude']/ref['Amplitude']
     # phase = sam['Phase']-ref['Phase']-offset
     phase = phaseex(ref, sam)-offset
+
+    breakpoint()
     
     #error propagation
     err_amplitude = 1/(ref['Amplitude']**2)*(sam['Δ(Amplitude)']*ref['Amplitude']+ref['Δ(Amplitude)']*sam['Amplitude'])
