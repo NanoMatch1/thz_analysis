@@ -1,71 +1,154 @@
 import numpy as np
 import pandas as pd
-
-def interpolate_to_max_resolution(*args, **kwargs):
-    '''Interpolate multiple datasets to the maximum resolution among them. Compatible with DataFrames, ndarrays, and dicts of 'data' and 'headers'.'''    
-    object_list = [arg for arg in args]
-    format_list = []
-    new_data_list = []
+import functools
 
 
-    for i, obj in enumerate(object_list):
-        if isinstance(obj, pd.DataFrame):
-            data = obj.to_numpy()
-            headers = obj.columns.tolist()
-            format_list.append('dataframe')
-        elif isinstance(obj, np.ndarray):
-            data = obj
-            headers = None
-            format_list.append('ndarray')
-        elif isinstance(obj, dict) and 'data' in obj and 'headers' in obj:
-            data = obj['data']
-            headers = obj['headers']
-            format_list.append('dict')
+def _extract_data_and_headers(obj):
+    """
+    Normalize input to (data, headers, fmt).
+
+    fmt is one of: 'dataframe', 'ndarray', 'dict'.
+    Data is always returned as a 2D ndarray.
+    """
+    if isinstance(obj, pd.DataFrame):
+        data = obj.to_numpy()
+        headers = obj.columns.tolist()
+        fmt = "dataframe"
+    elif isinstance(obj, np.ndarray):
+        data = obj
+        headers = None
+        fmt = "ndarray"
+    elif isinstance(obj, dict) and "data" in obj and "headers" in obj:
+        data = obj["data"]
+        headers = obj["headers"]
+        fmt = "dict"
+    else:
+        raise TypeError(f"Unsupported data type: {type(obj)}")
+
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+
+    return data, headers, fmt
+
+
+def interpolate_to_max_resolution(
+    *args,
+    axis_col: int = 0,
+    clip_to_overlap: bool = True,
+    phase_col_names: tuple[str, ...] = ("Phase",),   # phase columns by name
+    phase_col_indices: tuple[int, ...] = (),         # phase columns by index (for ndarrays)
+    wrap_phase_output: bool = True,
+):
+    """
+    Interpolate multiple datasets onto the axis of the dataset with the
+    finest resolution (smallest mean spacing in axis_col).
+
+    Supports:
+      - pandas.DataFrame
+      - numpy.ndarray
+      - dict {'data': ndarray, 'headers': list}
+
+    Phase columns:
+      - For DataFrames/dicts: specify by name via `phase_col_names`.
+      - For ndarrays (no headers): specify by index via `phase_col_indices`.
+
+    Phase columns are:
+      - unwrapped with np.unwrap,
+      - interpolated on the continuous phase,
+      - optionally re-wrapped to [-π, π] if wrap_phase_output=True.
+    """
+    objs = list(args)
+    normalized = []
+    axes = []
+    spacings = []
+
+    # Normalize inputs
+    for obj in objs:
+        data, headers, fmt = _extract_data_and_headers(obj)
+
+        x = data[:, axis_col]
+        # Ensure axis is increasing
+        if len(x) > 1 and x[1] < x[0]:
+            x = x[::-1]
+            data = data[::-1, :]
+
+        normalized.append((data, headers, fmt))
+        axes.append(x)
+
+        if len(x) > 1:
+            dx = np.diff(x)
+            spacings.append(np.mean(np.abs(dx)))
         else:
-            raise TypeError(f"Unsupported data type: {type(obj)}")
-        
-        new_data_list.append((data, headers))
-    
-    # Determine the maximum resolution based on the first column (assumed to be the x-axis)
-    resolutions = []
-    for data, headers in new_data_list:
-        if len(data.shape) < 2:
-            resolution = len(data)
-        elif data.shape[1] < 2:
-            resolution = len(data)
-        else:
-            resolution = len(data[:, 0])
+            spacings.append(np.inf)
 
-        resolutions.append(resolution)
+    # Choose target axis = axis of dataset with smallest spacing
+    idx_best = int(np.argmin(spacings))
+    x_target_full = axes[idx_best]
 
-    # breakpoint()
-    max_resolution = max(resolutions)
-    new_data_list_resampled = []
+    # Overlap region
+    if clip_to_overlap:
+        start = max(ax[0] for ax in axes)
+        stop = min(ax[-1] for ax in axes)
+        mask = (x_target_full >= start) & (x_target_full <= stop)
+        x_target = x_target_full[mask]
+    else:
+        x_target = x_target_full
 
-    for data, headers in new_data_list:
-        data.shape
-        if len(data.shape) == 1:
-            data = np.reshape(data, (len(data), 1)) # make it 2D for consistency    
-        initial_axis = data[:, 0]
-        new_freq_axis = np.linspace(initial_axis[0], initial_axis[-1], max_resolution)
-        new_data = [new_freq_axis]
+    resampled = []
 
-        for col in range(1, data.shape[1]):
-            new_col = np.interp(new_freq_axis, initial_axis, data[:, col])
-            new_data.append(new_col)
+    for (data, headers, fmt), x in zip(normalized, axes):
+        cols = []
 
-        resampled_data = np.column_stack(new_data)
-        new_data_list_resampled.append((resampled_data, headers))
+        # Build a mapping from header name to index (if headers exist)
+        name_to_idx = {}
+        if headers is not None:
+            name_to_idx = {name: idx for idx, name in enumerate(headers)}
 
-    # Convert back to original format
+        for j in range(data.shape[1]):
+            if j == axis_col:
+                # axis column → target axis
+                cols.append(x_target)
+                continue
+
+            # Determine if this column is a phase column
+            is_phase = False
+            if headers is not None:
+                col_name = headers[j]
+                if col_name in phase_col_names:
+                    is_phase = True
+            else:
+                # ndarray with no headers: use indices
+                if j in phase_col_indices:
+                    is_phase = True
+
+            y = data[:, j]
+
+            if is_phase:
+                # unwrap → interp → rewrap (optional)
+                y_unwrapped = np.unwrap(y)
+                y_interp_unwrapped = np.interp(x_target, x, y_unwrapped)
+                if wrap_phase_output:
+                    y_interp = np.angle(np.exp(1j * y_interp_unwrapped))
+                else:
+                    y_interp = y_interp_unwrapped
+            else:
+                # normal scalar interpolation
+                y_interp = np.interp(x_target, x, y)
+
+            cols.append(y_interp)
+
+        new_data = np.column_stack(cols)
+        resampled.append((new_data, headers, fmt))
+
+    # Convert back to original formats
     final_results = []
-    for i, (data, headers) in enumerate(new_data_list_resampled):
-        if format_list[i] == 'dataframe':
+    for (data, headers, fmt), orig_obj in zip(resampled, objs):
+        if fmt == "dataframe":
             df = pd.DataFrame(data, columns=headers)
             final_results.append(df)
-        elif format_list[i] == 'ndarray':
+        elif fmt == "ndarray":
             final_results.append(data)
-        elif format_list[i] == 'dict':
-            final_results.append({'data': data, 'headers': headers})
+        elif fmt == "dict":
+            final_results.append({"data": data, "headers": headers})
 
     return final_results
