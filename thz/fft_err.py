@@ -77,6 +77,11 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
                                         err_phase)))
     dff.columns = ['Frequency (THz)','Amplitude','Δ(Amplitude)','Phase',
                    'Δ(Phase)']
+    
+    import matplotlib.pyplot as plt
+    plt.plot(dff['Frequency (THz)'], dff['Δ(Phase)']
+             )
+    plt.show()
    
     return dff
 

@@ -646,7 +646,6 @@ class THzData:
         '''Runs the fft_err function on the current data and returns the spectrum as a numpy array.'''
         from thz.data_processing.fft_processing import fft_err
         raw_data = self.processing_dict.get('time_domain', None)
-        raw_data = dict_to_df(raw_data)
         fft_result = fft_err(raw_data)
         self.processing_dict['fft_raw'] = fft_result
 

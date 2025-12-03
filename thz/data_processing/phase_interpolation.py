@@ -19,7 +19,6 @@ from scipy.stats import linregress
 
 def phaseex(ref,sam):
     
-    breakpoint()
     dff = sam['Phase']-ref['Phase']
     
     #defines range of interest
@@ -38,11 +37,10 @@ def phaseex(ref,sam):
 
 #to account for different time windows starts (use padded data!)
 def phaseoffset(ref,sam):
-    breakpoint()
+
     t0r = ref.iloc[0].at['Time (ps)']
     t0s = sam.iloc[0].at['Time (ps)']
     
-    breakpoint()
     #define freq axis
     freq = rfftfreq(len(ref['Time (ps)']), ref.iloc[1].at['Time (ps)']-ref.iloc[0].at['Time (ps)'])
     

@@ -47,3 +47,4 @@ def phaseoffset(ref,sam):
     phioffset = 2*np.pi*freq*(t0s-t0r)
     
     return phioffset
+

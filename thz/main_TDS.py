@@ -127,7 +127,7 @@ phidifference = phi.phaseex(refw, samw)
 
 #transfer function
 T = fft_err.transfer_function(refw, samw, phioffset)
-
+breakpoint()
 # %% self standing film approximation
 
 #guesses refractive index with thin, self standing film approximation

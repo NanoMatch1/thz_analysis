@@ -370,12 +370,17 @@ class DataSet:
             thz_data.fft_centerpad()
             thz_data.fft_edge_windowed()
 
+    # def interpolate_dataset(self, series_key=None):
+    #     '''Interpolates all datasets in the processing_dict to a common spacing. Important'''
+
+
 
     def fft_compare(self, low_threshold = 4, up_threshold = 10):
         # import thz.data_processing.phase_interpolation as phi
         # from thz.data_processing.fft_processing import transfer_function
         from thz.data_processing.phase_interpolation import phaseoffset, phaseex
         from thz.data_processing.fft_processing import transfer_function
+        from thz.data_processing.postprocessing import interpolate_to_max_resolution
 
         import numpy as np
         import pandas as pd
@@ -402,6 +407,7 @@ class DataSet:
                 t0_sam = sample_freq['Frequency (THz)'][np.argmax(abs(sample_freq['Amplitude']))] # time at max amplitude
                 
                 # phiref - send time data
+                breakpoint()
                 phioffset = phaseoffset(ref_time, sample_time)
 
                 phidifference = phaseex(ref_freq, sample_freq)
