@@ -25,6 +25,25 @@ import windowing as w
 import padding as pad
 import phase_interpolation as phi
 
+def compare_windowing(comparison_dict, show_ref=False):
+    '''Compares different windowing/padding methods by plotting the time and frequency domain traces.'''
+
+    raw_data = comparison_dict.pop('raw', {})
+
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    for index, (method, datasets) in enumerate(comparison_dict.items()):
+        for label, data in datasets.items():
+            if show_ref is False and label.lower() == 'reference':
+                continue
+            ax[index].plot(data['Time (ps)'], data['Mean'], label=f'{label}')
+            ax[index].plot(raw_data[label]['Time (ps)'], raw_data[label]['Mean'], linestyle='--', alpha=0.5, label=f'{label} (raw)')
+        ax[index].set_title(f'Time Domain - {method}')
+        ax[index].set_xlabel('Time (ps)')
+        ax[index].set_ylabel('Amplitude (V)')
+        ax[index].legend()
+    
+    plt.show()
+
 # %% Initialization
 
 # filepath = r'C:\Users\Usuario\Desktop\Spintronics\28Nov2024'
@@ -78,16 +97,20 @@ sam_t = di.dataimport(filepath,sample)
 
 # moves the pulse to the center an pad 0 at the edges
 # import matplotlib.pyplot as plt
-# print("Filename:", reference    )
-plt.plot(ref_t['Time (ps)'],ref_t['Mean'], label='pre-pad ref')
-plt.plot(sam_t['Time (ps)'],sam_t['Mean'], label='pre-pad sam')
-plt.legend()
-plt.show()
-ref_centered = pad.centerpad(ref_t)
-sam_centered = pad.centerpad(sam_t)
-# plt.plot(ref_centered['Time (ps)'],ref_centered['Mean'], label='post-pad ref')
-# plt.legend()
-# plt.show()
+# print("Filename:", reference    )ref_centered = centered_results['Reference']
+ref_centered = pad.centerpad(ref_t, length_factor=5)
+sam_centered = pad.centerpad(sam_t, length_factor=5)
+
+ref_edge_windowed = pad.edge_window_pad(ref_t, alpha=0.4)
+sam_edge_windowed = pad.edge_window_pad(sam_t, alpha=0.4)
+
+comparison = {'centerpadded': 
+              {'reference': ref_centered, 'sample': sam_centered}, 
+              'edge_windowed': 
+              {'reference': ref_edge_windowed, 'sample': sam_edge_windowed},
+              'raw': {'reference': ref_t, 'sample': sam_t}}
+
+compare_windowing(comparison)
 
 #Fourier Transform
 
@@ -96,6 +119,9 @@ sam = fft_err.fft_err(sam_t)
 
 refw = fft_err.fft_err(ref_centered)
 samw = fft_err.fft_err(sam_centered)
+ref_edge_fft = fft_err.fft_err(ref_edge_windowed)
+sam_edge_fft = fft_err.fft_err(sam_edge_windowed)
+
 
 #SNR (noise calculated between 4-10 THz for ZnTe)
 
@@ -120,8 +146,6 @@ tsam = sam_t.iloc[np.argmax(abs(sam_t['Mean'])),0]
 delta_t_time_ps = tsam - tref
 print("Time-domain delay:", delta_t_time_ps, "ps")
 
-breakpoint()
-
 
 phiref = 2*np.pi*samw['Frequency (THz)']*(tref)
 phisam = 2*np.pi*samw['Frequency (THz)']*(tsam)
@@ -131,6 +155,13 @@ phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
 phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
 
 phidifference, delta_t_phase_ps = phi.phaseex_v2(refw, samw, show_graph=True)
+
+phidifference_edge, delta_t_phase_ps_edge = phi.phaseex_v2(ref_edge_fft, sam_edge_fft, show_graph=True)
+
+print("Phase difference delay (windowed):", delta_t_phase_ps, "ps")
+print("Phase difference delay (edge windowed):", delta_t_phase_ps_edge, "ps")
+
+breakpoint()
 
 print("Phase-domain delay:", delta_t_phase_ps, "ps")
 print("Phase offset difference (time - phase):", delta_t_time_ps - delta_t_phase_ps, "ps")

@@ -17,12 +17,13 @@ import matplotlib.pyplot as plt
 
 def edge_window_pad(df, alpha=0.2):
     '''Uses edge-tapered windowing and no centering to create the windowed trace. Padding is done after windowing.'''
-    plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
-    w.edge_window(df, alpha=alpha)
+    # plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
+    df_windowed = w.edge_window(df, alpha=alpha)
+    return df_windowed
 
-    plt.plot(df['Time (ps)'], df['Mean'], label='windowed trace')
-    plt.legend()
-    plt.show()
+    # plt.plot(df['Time (ps)'], df['Mean'], label='windowed trace')
+    # plt.legend()
+    # plt.show()
 
 
 

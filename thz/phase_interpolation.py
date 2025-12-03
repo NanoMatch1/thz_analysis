@@ -83,7 +83,7 @@ def phaseex_v2(
     sam: pd.DataFrame,
     freq_col: str = "Frequency (THz)",
     phase_col: str = "Phase",
-    fit_range: tuple[float, float] = (0.3, 2.0),
+    fit_range: tuple[float, float] = (0.5, 1.8),
     remove_slope: bool = False,
     wrap_output: bool = False,
     **kwargs

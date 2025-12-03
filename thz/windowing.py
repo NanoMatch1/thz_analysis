@@ -24,9 +24,33 @@ from data_structures.decorators import with_dataframe
 
 from scipy.signal.windows import tukey
 
+def edge_window(df, alpha=0.2):
+    """
+    Apply a Tukey window with edge tapering to the THz time-domain data.
 
-def tukey_window(df, alpha=0.05):
-    '''Apply a Tukey window with edge tapering to the THz time-domain data. Modifies the DataFrame in place.'''
+    Parameters
+    ----------
+    df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+    alpha : float
+        Shape parameter of the Tukey window (0 < alpha < 1).
+
+    Returns
+    -------
+    df_windowed : DataFrame
+        Copy of df with windowed 'Mean' and 'std error'.
+    """
+    df_windowed = df.copy()
+    y_mean = df_windowed['Mean'].values
+    std_err = df_windowed['std error'].values
+    N = len(y_mean)
+    w = tukey(N, alpha)  # 5% edge taper
+    windowed_data = y_mean * w
+    windowed_error = std_err * w
+
+    df_windowed['Mean'] = windowed_data
+    df_windowed['std error'] = windowed_error
+    return df_windowed
+
 
 
 def window(df):

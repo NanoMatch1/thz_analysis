@@ -25,6 +25,10 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
     time = timedata.loc[:,'Time (ps)']
     y_mean = timedata.loc[:,'Mean']
     y_err =  timedata.loc[:,'std error']
+
+    t0 = time.iloc[np.argmax(np.abs(y_mean))]
+    print("fft_err: t0 (this trace) =", t0, "ps")
+
     
     
     #define freq axis
