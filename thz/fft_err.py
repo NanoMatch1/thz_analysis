@@ -17,6 +17,35 @@ from math import e
 from phase_interpolation import phaseex
 from data_structures.decorators import align_to_max_resolution
 
+from numpy.fft import rfft, rfftfreq
+
+def fft_err_simple(timedata):
+    time = timedata['Time (ps)'].to_numpy()
+    y_mean = timedata['Mean'].to_numpy()
+    y_err  = timedata['std error'].to_numpy()
+
+    dt = time[1] - time[0]
+    freq = rfftfreq(len(time), dt)   # still in 1/ps ~ THz numerically
+
+    # remove DC offset
+    if len(y_mean) >= 10:
+        y_mean = y_mean - y_mean[:10].mean()
+
+    ft_y_mean = rfft(y_mean, norm='ortho')
+
+    amplitude = np.abs(ft_y_mean)
+    phase = np.unwrap(np.angle(ft_y_mean))   # or with a leading minus sign if you want
+
+    # ... handle error propagation as needed ...
+
+    dff = pd.DataFrame({
+        'Frequency (THz)': freq,
+        'Amplitude': amplitude,
+        'Phase': phase,
+        # 'Δ(Amplitude)': ...,
+        # 'Δ(Phase)': ...,
+    })
+    return dff
 
 
 def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py

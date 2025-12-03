@@ -44,6 +44,60 @@ def compare_windowing(comparison_dict, show_ref=False):
     
     plt.show()
 
+def synth_thz_pulse(t, t0=0, width=0.5, f0=1.0):
+    envelope = np.exp(-((t - t0)/width)**2)
+    carrier   = np.cos(2*np.pi*f0*(t - t0))
+    return envelope * carrier
+
+def complex_synthetic_pulse():
+    '''Generates a synthetic THz pulse in the frequency domain and transforms it to the time domain.'''
+    
+
+    # ------------- frequency domain specification -------------
+    f_max = 5.0          # THz
+    N = 512             # must be power of 2 for best IFFT
+    df = f_max / N
+    freq = np.linspace(0, f_max, N)
+
+    # amplitude spectrum (broadband)
+    A = np.exp(-(freq - 1.0)**2 / (1.0**2))  # ~1 THz center, bandwidth ~2 THz
+
+    # smooth random phase (to mimic real optics)
+    rng = np.random.default_rng(42)
+    phi = np.cumsum(rng.normal(scale=0.01, size=N))   # low jitter random walk
+    phi -= phi[0]
+
+    # complex frequency spectrum
+    E_f = A * np.exp(1j * phi)
+
+    # ------------- time domain -------------
+    # IFFT
+    E_t = np.fft.irfft(E_f, n=N*2)
+
+    # time axis (ps)
+    dt = 1 / (2 * f_max)        # THz → ps: dt = 1/(2*f_max)
+    t = np.arange(len(E_t)) * dt
+
+    # create delayed sample
+    delay_ps = 2.5
+    delay_pts = int(delay_ps / dt)
+    # E_t_delayed = np.roll(E_t, delay_pts)
+
+    # ------------- Package into DataFrames -------------
+    ref_df = pd.DataFrame({'Time (ps)': t, 'Mean': E_t, 'std error': 0.01})
+    # sam_df = pd.DataFrame({'Time (ps)': t, 'Mean': E_t_delayed, 'std error': 0.01})
+
+    plt.plot(ref_df['Time (ps)'], ref_df['Mean'], label='Reference')
+    # plt.plot(sam_df['Time (ps)'], sam_df['Mean'], label='Sample')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Amplitude (V)')
+    plt.title('Synthetic Signals from Frequency Domain')
+    plt.legend()
+    plt.show()
+
+
+# 2) Build a sample trace delayed by 2.5 ps
+
 # %% Initialization
 
 # filepath = r'C:\Users\Usuario\Desktop\Spintronics\28Nov2024'
@@ -54,7 +108,9 @@ def compare_windowing(comparison_dict, show_ref=False):
 # reference = 'TDS_day3_sandwich_ref.acc'
 # sample = 'TDS_NiHITP_day3.acc'
 
-filepath = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
+filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+# filepath = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
 reference = ['reference', '300K']
 sample = ['sample', '300K']
 
@@ -62,22 +118,6 @@ sample = ['sample', '300K']
 samples = [file for file in os.listdir(filepath) if file.endswith('.acc') and all(item in file for item in sample)]
 references = [file for file in os.listdir(filepath) if file.endswith('.acc') and all(item in file for item in reference)]
 
-
-# filepath = r'Z:\Users\Marco\04jul2025'
-# reference = '1mm_mask_ref.acc'
-# sample = 'Coronado_Mof_1mmmask_270deg.acc'
-
-# filepath = r'C:\Users\Usuario\Desktop\MOF\SCosta\16nov2023'
-# reference = 'ref_rt_vacuum.acc'
-# sample = 'FeMOF_hex_350_2.acc'
-
-# filepath = r'C:\Users\Usuario\Desktop\Chris\Silicon cryo\marzo24'
-# reference = 'N2_ref.acc'
-# sample = 'Si_293K.acc'
-
-# filepath = r'C:\Users\Usuario\Desktop\MOF\Coronado\Me-THT\22apr2024\30apr'
-# reference = 'air_ref.acc'
-# sample = 'sio2_ref.acc'
 
 sample = samples[0]
 reference = references[0]
@@ -87,9 +127,53 @@ eps_inf = 1 # glass 3.42, Si 11.6
 ns = 1.9 #substate n
 Z0 = cs.physical_constants['characteristic impedance of vacuum'][0]
 
+
+def simulate_test():
+    t = np.linspace(-5, 20, 5012)
+    ref_synth = synth_thz_pulse(t, t0=2, width=0.5, f0=1.0)
+    sam_synth = synth_thz_pulse(t, t0=4.5, width=0.5, f0=1.0)
+
+    ref_synth_df = pd.DataFrame({'Time (ps)': t, 'Mean': ref_synth, 'std error': 0.01})
+    sam_synth_df = pd.DataFrame({'Time (ps)': t, 'Mean': sam_synth, 'std error': 0.01})
+
+    plt.plot(ref_synth_df['Time (ps)'], ref_synth_df['Mean'], label='Reference')
+    plt.plot(sam_synth_df['Time (ps)'], sam_synth_df['Mean'], label='Sample')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Amplitude (V)')
+    plt.title('Synthetic Reference Signal')
+    plt.show()
+
+    #Fourier Transform
+    # ref_fft = fft_err.fft_err(ref_synth_df)
+    # sam_fft = fft_err.fft_err(sam_synth_df)
+    ref_fft = fft_err.fft_err_simple(ref_synth_df)
+    sam_fft = fft_err.fft_err_simple(sam_synth_df)
+
+    # calculates initial phase offset
+    tref = ref_synth_df.iloc[np.argmax(abs(ref_synth_df['Mean'])),0]
+    tsam = sam_synth_df.iloc[np.argmax(abs(sam_synth_df['Mean'])),0]
+
+    min_time = min(t)
+    max_time = max(t)
+    print(f"Time window: {min_time} ps to {max_time} ps"
+        )
+    delta_t_time_ps = tsam - tref
+    print("Time-domain delay:", delta_t_time_ps, "ps")
+
+    phioffset = phi.phaseoffset(ref_synth_df, sam_synth_df) #to account for different time windows starts
+
+    phidifference, delta_t_phase_synth = phi.phaseex_v2(ref_fft, sam_fft, show_graph=True)
+
+    # phidifference_edge, delta_t_phase_ps_edge = phi.phaseex_v2(ref_edge_fft, sam_edge_fft, show_graph=True)
+
+    print("Phase difference delay synthetic, no window:", delta_t_phase_synth, "ps")
+
+    breakpoint()
+
+# simulate_test()
+
 ref_t = di.dataimport(filepath,reference)
 sam_t = di.dataimport(filepath,sample)
-
 # --> Plug in from new dataimport module
 
 # breakpoint()
@@ -98,11 +182,18 @@ sam_t = di.dataimport(filepath,sample)
 # moves the pulse to the center an pad 0 at the edges
 # import matplotlib.pyplot as plt
 # print("Filename:", reference    )ref_centered = centered_results['Reference']
-ref_centered = pad.centerpad(ref_t, length_factor=5)
-sam_centered = pad.centerpad(sam_t, length_factor=5)
+ref_centered = pad.centerpad(ref_t, length_factor=3)
+sam_centered = pad.centerpad(sam_t, length_factor=3)
 
-ref_edge_windowed = pad.edge_window_pad(ref_t, alpha=0.4)
-sam_edge_windowed = pad.edge_window_pad(sam_t, alpha=0.4)
+ref_edge_windowed = pad.edge_window_pad(ref_t, alpha=0.4, padding=True, padding_factor=1)
+sam_edge_windowed = pad.edge_window_pad(sam_t, alpha=0.4, padding=True, padding_factor=1)
+
+# TODO: Multiple queries.
+# 1. Why does linearly increasing the padding factor seem to linearly increase the phase difference in when using the simple FFT method?
+# 2. I can see a dispersive shape to the phase when using the informed phase unwrapping for the sample. it looks real, is this the effective refractive inedex of the sample?
+# 3. Even when the informed phase unwrapping is used and the dispersive shape is there and seems real, I still dont get the correct phase delay in ps when comparing to the time domain delay. Why?
+# 4. I only get the shape when I have no padding or very little padding. Why?
+
 
 comparison = {'centerpadded': 
               {'reference': ref_centered, 'sample': sam_centered}, 
@@ -121,6 +212,8 @@ refw = fft_err.fft_err(ref_centered)
 samw = fft_err.fft_err(sam_centered)
 ref_edge_fft = fft_err.fft_err(ref_edge_windowed)
 sam_edge_fft = fft_err.fft_err(sam_edge_windowed)
+# ref_edge_fft = fft_err.fft_err_simple(ref_edge_windowed)
+# sam_edge_fft = fft_err.fft_err_simple(sam_edge_windowed)
 
 
 #SNR (noise calculated between 4-10 THz for ZnTe)
@@ -152,7 +245,8 @@ phisam = 2*np.pi*samw['Frequency (THz)']*(tsam)
 
 phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
 
-phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
+# phioffset = phi.phaseoffset(ref_centered, sam_centered) #to account for different time windows starts
+# phioffset_edge = phi.phaseoffset(ref_edge_windowed, sam_edge_windowed) #to account for different time windows starts
 
 phidifference, delta_t_phase_ps = phi.phaseex_v2(refw, samw, show_graph=True)
 

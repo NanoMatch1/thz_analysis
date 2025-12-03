@@ -14,11 +14,50 @@ import numpy as np
 import windowing as w
 import matplotlib.pyplot as plt
 
+def pad_zeros(df: pd.DataFrame, length_factor: int = 5) -> pd.DataFrame:
+    """
+    Symmetrically pads the dataset with zeros to extend its length by a specified factor. Perform after windowing.
 
-def edge_window_pad(df, alpha=0.2):
+    Parameters
+    ----------
+    df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+    length_factor : int
+        Final length will be length_factor * original length.
+    """
+
+    time = df["Time (ps)"].to_numpy()
+    y_mean = df["Mean"].to_numpy()
+    std_err = df["std error"].to_numpy()
+    N_array = len(time)
+
+    if N_array < 3:
+        return df
+
+    dt = time[1] - time[0]
+
+    pad_width = ((length_factor * N_array) - N_array) // 2
+    end_value_left = time[0] - (pad_width * dt)
+    end_value_right = time[-1] + (pad_width * dt)
+
+    new_time = np.pad(time, (pad_width, pad_width), mode='linear_ramp', end_values=(end_value_left, end_value_right))
+    new_y_mean =  np.pad(y_mean, (pad_width, pad_width), mode='constant', constant_values=(0,0))
+    new_std_err = np.pad(std_err, (pad_width, pad_width), mode='constant', constant_values=(0,0))
+
+    df_padded = pd.DataFrame({
+        "Time (ps)": new_time,
+        "Mean": new_y_mean,
+        "std error": new_std_err,
+    })
+
+    return df_padded
+
+def edge_window_pad(df, alpha=0.2, padding_factor=5, padding=True):
     '''Uses edge-tapered windowing and no centering to create the windowed trace. Padding is done after windowing.'''
     # plt.plot(df['Time (ps)'], df['Mean'], label='original trace')
     df_windowed = w.edge_window(df, alpha=alpha)
+    # padding with zeros
+    if padding:
+        df_windowed = pad_zeros(df_windowed, length_factor=padding_factor)
     return df_windowed
 
     # plt.plot(df['Time (ps)'], df['Mean'], label='windowed trace')
