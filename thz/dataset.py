@@ -400,9 +400,9 @@ class DataSet:
                 
                 t0_ref = ref_freq['Frequency (THz)'][np.argmax(abs(ref_freq['Amplitude']))] # time at max amplitude
                 t0_sam = sample_freq['Frequency (THz)'][np.argmax(abs(sample_freq['Amplitude']))] # time at max amplitude
-                breakpoint()
-                # phiref - send only time axis arrays
-                phioffset = phaseoffset(ref_freq, sample_freq)
+                
+                # phiref - send time data
+                phioffset = phaseoffset(ref_time, sample_time)
 
                 phidifference = phaseex(ref_freq, sample_freq)
 

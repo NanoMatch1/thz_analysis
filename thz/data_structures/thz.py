@@ -168,7 +168,8 @@ class THzData:
         mean_data = np.mean(data_matrix, axis=0)
         time_axis = self.data_list[0].raw_data[:, 0]
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
-        self.processing_dict['time_domain'] = {'data': averaged_data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']}
+        self.processing_dict['time_domain'] = pd.DataFrame(averaged_data, columns=['Time (ps)', 'Mean', 'std error'])
+        # self.processing_dict['time_domain'] = {'data': averaged_data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']}
         return averaged_data
     
     # def centerpad_window(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
