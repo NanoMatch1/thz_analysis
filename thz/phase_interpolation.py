@@ -11,7 +11,7 @@ https://doi.org/10.1007/s10762-019-00578-0
 import numpy as np
 from scipy.fft import rfftfreq
 from scipy.stats import linregress
-from data_structures.decorators import align_to_max_resolution
+from thz.data_structures.decorators import align_to_max_resolution
 
 #extrapolate phase difference to zero. (to avoid refractive index divergence)
 
@@ -21,26 +21,31 @@ from data_structures.decorators import align_to_max_resolution
     axis_col_name="Frequency (THz)",
     phase_col_names=('Phase', 'Δ(Phase)')
 )
-def phaseex(ref,sam):
+def phaseex(ref,sam,show_graph=False):
 
-    
+    breakpoint()
     dff = sam['Phase']-ref['Phase']
     
 
     #defines range of interest
-    low = 0.3
-    up = 2
+    low = 0.5
+    up = 1.8
     x = ref['Frequency (THz)'].loc[ref['Frequency (THz)'].between(low,up)]
     y = dff.loc[ref['Frequency (THz)'].between(low,up)]
     #least squares linear regression of the phase in the range of interest
+    breakpoint()
     lsq = linregress(x,y)
     ycross = lsq.intercept
     # extrapolates the phase from max amplitude to 0 THz using the gradient
+    # breakpoint()
+    delta_t_ps = -lsq.slope / (2 * np.pi)
+    print(f"Delay from phase (phaseex): {delta_t_ps:.3f} ps")
 
     import matplotlib.pyplot as plt
     plt.plot(sam['Frequency (THz)'], sam['Phase'], label='sample phase')
     plt.plot(ref['Frequency (THz)'], ref['Phase'], label='ref phase')
     plt.legend()
+    plt.title('Phaseex data')
     plt.show()
     plt.plot(x, y, 'o', label='data')
     plt.plot(x, lsq.intercept + lsq.slope*x, 'r', label='fit')
@@ -48,7 +53,7 @@ def phaseex(ref,sam):
     plt.show()
     dff -= ycross
 
-    return dff
+    return dff, delta_t_ps
 
 
 #to account for different time windows starts (use padded data!)
@@ -86,6 +91,7 @@ def phaseex_v2(
     fit_range: tuple[float, float] = (0.5, 1.8),
     remove_slope: bool = False,
     wrap_output: bool = False,
+    correction_factor: float = 3.0,
     **kwargs
 ) -> pd.Series:
     """
@@ -121,6 +127,8 @@ def phaseex_v2(
     wrap_output : bool, default False
         If True, wrap the corrected phase difference back into [-π, π].
         If False, keep it unwrapped/continuous.
+    correction_factor : float, default 3.0
+        Informed phase unwrapping inflates the phase difference by a factor of 3, so this factor can be used to correct the computed delay. Made a kwarg for flexibility and testing.
 
     Returns
     -------
@@ -130,11 +138,14 @@ def phaseex_v2(
     """
     show_graph = kwargs.get("show_graph", False)
     # Extract frequency axis
+    breakpoint()
     freq = ref[freq_col].to_numpy()
 
-    # Extract and unwrap phases for ref & sam
-    phi_ref = np.unwrap(ref[phase_col].to_numpy())
-    phi_sam = np.unwrap(sam[phase_col].to_numpy())
+    # Extract phase (already unwrapped) from ref & sam
+    # phi_ref = np.unwrap(ref[phase_col].to_numpy())
+    # phi_sam = np.unwrap(sam[phase_col].to_numpy())
+    phi_ref = ref[phase_col].to_numpy()
+    phi_sam = sam[phase_col].to_numpy()
 
     # Raw phase difference (continuous)
     dphi = phi_sam - phi_ref
@@ -149,6 +160,7 @@ def phaseex_v2(
         plt.xlabel('Frequency (THz)')
         plt.ylabel('Phase difference (rad)')
         plt.legend()
+        plt.title('Phaseex_v2 data')
         plt.show()
 
     # Select fit range
@@ -194,4 +206,4 @@ def phaseex_v2(
     # Return as a Series aligned with ref's index
     dphi_series = pd.Series(dphi_corr, index=ref.index, name="Phase difference")
 
-    return dphi_series, delta_t_ps
+    return dphi_series, delta_t_ps/correction_factor

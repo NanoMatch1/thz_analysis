@@ -4,7 +4,7 @@ from typing import Iterable, Any
 
 import numpy as np
 import pandas as pd
-from data_structures.helpers import interpolate_to_max_resolution, _extract_data_and_headers
+from thz.data_structures.helpers import interpolate_to_max_resolution, _extract_data_and_headers
 
 def align_to_max_resolution(
     axis_col_name: str,

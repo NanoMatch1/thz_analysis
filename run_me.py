@@ -1,6 +1,7 @@
+import os
 from thz.dataset import DataSet, Constants
 
-file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
+file_dir = os.path.join(os.path.dirname(__file__), 'thz', 'data')
 
 def convert_to_pandas(thzdata):
     import pandas as pd
@@ -41,6 +42,7 @@ if __name__ == "__main__":
     # data_set.edge_window_pad()
     data_set.centerpad_legacy()
     data_set.prepare_for_fft_all(pad_length_factor=5, baseline_points=10, show_graph=False)
+    # data_set.plot_current()
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
     # data_set.plot_fft_current(series='fft_edge_windowed')

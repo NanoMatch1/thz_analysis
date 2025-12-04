@@ -51,6 +51,44 @@ def pad_zeros(df: pd.DataFrame, length_factor: int = 5) -> pd.DataFrame:
 
     return df_padded
 
+def pad_to_window_range(df: pd.DataFrame, t_min: float, t_max: float) -> pd.DataFrame:
+    """
+    Pads the dataset with zeros to ensure the time axis spans from t_min to t_max.
+
+    Parameters
+    ----------
+    df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+    t_min : float
+        Desired minimum time value (ps).
+    t_max : float
+        Desired maximum time value (ps).
+    """
+
+    time = df["Time (ps)"].to_numpy()
+    y_mean = df["Mean"].to_numpy()
+    std_err = df["std error"].to_numpy()
+
+    dt = time[1] - time[0]
+
+    # Calculate required padding on each side
+    pad_left = int(np.ceil((time[0] - t_min) / dt))
+    pad_right = int(np.ceil((t_max - time[-1]) / dt))
+
+    end_value_left = time[0] - (pad_left * dt)
+    end_value_right = time[-1] + (pad_right * dt)
+
+    new_time = np.pad(time, (pad_left, pad_right), mode='linear_ramp', end_values=(end_value_left, end_value_right))
+    new_y_mean =  np.pad(y_mean, (pad_left, pad_right), mode='constant', constant_values=(0,0))
+    new_std_err = np.pad(std_err, (pad_left, pad_right), mode='constant', constant_values=(0,0))
+
+    df_padded = pd.DataFrame({
+        "Time (ps)": new_time,
+        "Mean": new_y_mean,
+        "std error": new_std_err,
+    })
+
+    return df_padded
+
 def edge_window_pad(df, alpha=0.2, padding_factor=5, padding=True):
     '''Uses edge-tapered windowing and no centering to create the windowed trace. Padding is done after windowing.'''
     # plt.plot(df['Time (ps)'], df['Mean'], label='original trace')

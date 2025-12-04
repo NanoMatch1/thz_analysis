@@ -378,9 +378,8 @@ class DataSet:
     def fft_compare(self, low_threshold = 4, up_threshold = 10):
         # import thz.data_processing.phase_interpolation as phi
         # from thz.data_processing.fft_processing import transfer_function
-        from thz.data_processing.phase_interpolation import phaseoffset, phaseex
-        from thz.data_processing.fft_processing import transfer_function
-        from thz.data_processing.postprocessing import interpolate_to_max_resolution
+        from thz.phase_interpolation import phaseoffset, phaseex, phaseex_v2
+        from thz.fft_err import transfer_function
 
         import numpy as np
         import pandas as pd
@@ -389,6 +388,7 @@ class DataSet:
 
         series_list = ['fft_centered_padded', 'fft_edge_windowed', 'fft_raw']
         transfer_functions = {key: {} for key in series_list}
+        phase_dict = {key: {} for key in series_list}
 
         for key in series_list:
             for filename, thz_data in self.data.items():
@@ -396,21 +396,26 @@ class DataSet:
                 if thz_reference is None:
                     continue
 
+
                 ref_time = thz_reference.processing_dict['time_domain']
                 sample_time = thz_data.processing_dict['time_domain']
+                # # determine time delay in time domain
+                t_ref = ref_time['Time (ps)'][np.argmax(abs(ref_time['Mean']))] # time at max amplitude
+                t_sam = sample_time['Time (ps)'][np.argmax(abs(sample_time['Mean']))] # time at max amplitude
+                delta_t_time_ps = t_sam - t_ref
+                print("Time-domain delay:", delta_t_time_ps, "ps")
                 # breakpoint()
                 ref_freq = thz_reference.processing_dict[key]
                 sample_freq = thz_data.processing_dict[key]
                 # determine inital phase offset
                 
-                t0_ref = ref_freq['Frequency (THz)'][np.argmax(abs(ref_freq['Amplitude']))] # time at max amplitude
-                t0_sam = sample_freq['Frequency (THz)'][np.argmax(abs(sample_freq['Amplitude']))] # time at max amplitude
-                
                 # phiref - send time data
-                breakpoint()
                 phioffset = phaseoffset(ref_time, sample_time)
 
-                phidifference = phaseex(ref_freq, sample_freq)
+                breakpoint()
+
+                phidifference, delta_t_ps = phaseex_v2(ref_freq, sample_freq, show_graph=True)
+                phidifference2, delta_t_ps2 = phaseex(ref_freq, sample_freq, show_graph=True)
 
                 transfer_func = transfer_function(ref_freq, sample_freq, phioffset)
 
@@ -444,9 +449,30 @@ class DataSet:
 
 
         return snr_results
-        
+    
+    def _find_series_time_range(self):
+        '''Finds the overall time range across all THzData objects after centering.'''
+        min_time = float('inf')
+        max_time = float('-inf')
+
+        for thz_data in self.data.values():
+            if isinstance(thz_data._data, pd.DataFrame):
+                time = thz_data._data['Time (ps)'].values
+            else:
+                time = thz_data.data[:, 0]
+            min_time = min(min_time, min(time))
+            max_time = max(max_time, max(time))
+
+        print('Identified time window for all data:', (min_time, max_time))
+
+        return (min_time, max_time)
+    
 
     def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, show_graph=False) -> None:
         '''Prepares all THzData objects for FFT by subtracting DC offset, centering pulse, and padding time-domain data.'''
+
+        time_window = self._find_series_time_range()
+
         for thz_data in self.data.values():
-            thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
+            # thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
+            thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph, time_window=time_window)

@@ -14,8 +14,8 @@ import pandas as pd
 from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
 from scipy.signal import welch  # Welch method for smoother PSD estimate
 from math import e
-from phase_interpolation import phaseex
-from data_structures.decorators import align_to_max_resolution
+from thz.phase_interpolation import phaseex
+from thz.data_structures.decorators import align_to_max_resolution
 
 from numpy.fft import rfft, rfftfreq
 
@@ -94,8 +94,21 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
     phase0 = 2*np.pi*t0*freq                #phase of the maximum
     ft_y_mean = ft_y_mean*e**(-1j*phase0)   #reduced phase
     phase = np.angle(ft_y_mean)
+
+    # import matplotlib.pyplot as plt
+    # plt.plot(freq, phase, label='wrapped phase before unwrapping')
+    # plt.xlabel('Frequency (THz)')
+    # plt.ylabel('Phase (rad)')
+    # plt.legend()
+    # plt.show()
     
     phase = -np.unwrap(phase) #either this minus sign or complex conjugated fft (sign convention)
+    # plt.plot(freq, phase, label='unwrapped phase before correction')
+    # plt.xlabel('Frequency (THz)')
+    # plt.ylabel('Phase (rad)')
+    # plt.legend()
+    # plt.show()
+
     phase = phase+phase0
     
     
@@ -123,9 +136,11 @@ def transfer_function(ref,sam,offset):
     
     amplitude = sam['Amplitude']/ref['Amplitude']
     # phase = sam['Phase']-ref['Phase']-offset
-    phase = phaseex(ref, sam)-offset
-
+    calc_phase = phaseex(ref, sam)
+    phase = calc_phase - offset
     breakpoint()
+
+
     
     #error propagation
     err_amplitude = 1/(ref['Amplitude']**2)*(sam['Δ(Amplitude)']*ref['Amplitude']+ref['Δ(Amplitude)']*sam['Amplitude'])

@@ -185,8 +185,10 @@ sam_t = di.dataimport(filepath,sample)
 ref_centered = pad.centerpad(ref_t, length_factor=3)
 sam_centered = pad.centerpad(sam_t, length_factor=3)
 
-ref_edge_windowed = pad.edge_window_pad(ref_t, alpha=0.4, padding=True, padding_factor=1)
-sam_edge_windowed = pad.edge_window_pad(sam_t, alpha=0.4, padding=True, padding_factor=1)
+ref_edge_windowed = pad.edge_window_pad(ref_t, alpha=0.4, padding=False, padding_factor=1)
+sam_edge_windowed = pad.edge_window_pad(sam_t, alpha=0.4, padding=False, padding_factor=1)
+
+
 
 # TODO: Multiple queries.
 # 1. Why does linearly increasing the padding factor seem to linearly increase the phase difference in when using the simple FFT method?
@@ -201,7 +203,19 @@ comparison = {'centerpadded':
               {'reference': ref_edge_windowed, 'sample': sam_edge_windowed},
               'raw': {'reference': ref_t, 'sample': sam_t}}
 
-compare_windowing(comparison)
+# compare_windowing(comparison)
+tmin = 115
+tmax = 150
+ref_edge_windowed = pad.pad_to_window_range(ref_edge_windowed, tmin, tmax)
+sam_edge_windowed = pad.pad_to_window_range(sam_edge_windowed, tmin, tmax)
+
+# plt.plot(ref_edge_windowed['Time (ps)'], ref_edge_windowed['Mean'], label='Reference edge windowed')
+# plt.plot(sam_edge_windowed['Time (ps)'], sam_edge_windowed['Mean'], label='Sample edge windowed')
+# plt.xlabel('Time (ps)')
+# plt.ylabel('Amplitude (V)')
+# plt.title('Edge Windowed Signals')
+# plt.legend()
+# plt.show()
 
 #Fourier Transform
 
@@ -251,6 +265,8 @@ phidiff = 2*np.pi*samw['Frequency (THz)']*(tsam-tref)
 phidifference, delta_t_phase_ps = phi.phaseex_v2(refw, samw, show_graph=True)
 
 phidifference_edge, delta_t_phase_ps_edge = phi.phaseex_v2(ref_edge_fft, sam_edge_fft, show_graph=True)
+
+
 
 print("Phase difference delay (windowed):", delta_t_phase_ps, "ps")
 print("Phase difference delay (edge windowed):", delta_t_phase_ps_edge, "ps")

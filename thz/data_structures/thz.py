@@ -10,8 +10,10 @@ import numpy as np
 import datetime
 import pandas as pd
 # from thz.padding import centerpad, centerpad_refactor
-from thz.data_processing.preprocessing import preprocess_trace
+from thz.data_processing.preprocessing import preprocess_trace, edge_window, baseline_subtract, pad_to_window_range
 from thz.data_structures.helpers import df_to_dict, dict_to_df
+from thz.fft_err import fft_err #TODO: resolve circular imports later
+
 
 class BaseTHzData:
     '''Base class for THz data structures. Holds one scan and metadata information.
@@ -545,6 +547,10 @@ class THzData:
         if self._data is None:
             print("No averaged data to plot.")
             return
+        
+        if isinstance(self._data, pd.DataFrame):
+            self._headers = self._data.columns.tolist()
+            self._data = self._data.to_numpy()
 
         time = self._data[:, 0]
         mean_amplitude = self._data[:, 1]
@@ -644,7 +650,6 @@ class THzData:
     
     def fft_raw(self):
         '''Runs the fft_err function on the current data and returns the spectrum as a numpy array.'''
-        from thz.data_processing.fft_processing import fft_err
         raw_data = self.processing_dict.get('time_domain', None)
         fft_result = fft_err(raw_data)
         self.processing_dict['fft_raw'] = fft_result
@@ -653,7 +658,7 @@ class THzData:
     
     def fft_centerpad(self):
         '''Runs the fft_err function on the current centered and padded data and returns the spectrum as a numpy array.'''
-        from thz.data_processing.fft_processing import fft_err
+        # from thz.data_processing.fft_processing import fft_err
         centered_padded_data = self.processing_dict.get('centered_padded', None)
         # centered_padded_data = dict_to_df(centered_padded_data)
         fft_result = fft_err(centered_padded_data) # returns dictionary
@@ -663,10 +668,11 @@ class THzData:
     
     def fft_edge_windowed(self):
         '''Runs the fft_err function on the current edge-windowed data and returns the spectrum as a numpy array.'''
-        from thz.data_processing.fft_processing import fft_err
+        # from thz.data_processing.fft_processing import fft_err
+
         edge_windowed_data = self.processing_dict.get('edge_windowed', None)
-        edge_windowed_data = dict_to_df(edge_windowed_data)
-        fft_result = (fft_err(edge_windowed_data)) # returns dictionary
+        # edge_windowed_data = dict_to_df(edge_windowed_data)
+        fft_result = fft_err(edge_windowed_data) # returns dictionary
         self.processing_dict['fft_edge_windowed'] = fft_result
         return fft_result
     
@@ -674,13 +680,27 @@ class THzData:
                         baseline_points=10, 
                         pad_length_factor=5.0, 
                         window_alpha=0.2,
-                        show_graph=True
+                        show_graph=True,
+                        pad_range=None,
+                        **kwargs
                         ):
-        '''Preprocesses the current time-domain data for FFT by subtracting DC offset, centering pulse, and padding.'''
-        data_out = preprocess_trace(self._data, baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
+        '''Preprocesses the current time-domain data for FFT by subtracting DC offset, centering pulse, and padding.
+        Currently:
+        1. Baseline subtraction using initial baseline_points.
+        2. Window with tukey edge-based profile (window_alpha)
+        3. Padding to full time-domain range of dataset to cheat the phase offset (WIP).'''
 
-        self._data = data_out['data']
-        self._time_data_headers = data_out['headers']
+        # data_out = preprocess_trace(self._data, baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
+
+        if isinstance(self._data, np.ndarray):
+            self._data = pd.DataFrame(self._data, columns=self._time_data_headers)
+        df_baselined = baseline_subtract(self._data, n_points=baseline_points, show_graph=show_graph, **kwargs)
+        df_windowed = edge_window(df_baselined, alpha=window_alpha, show_graph=show_graph, **kwargs)
+        data_out = pad_to_window_range(df_windowed, length_factor=pad_length_factor, show_graph=show_graph, **kwargs)
+        # breakpoint()
+
+        self._data = data_out
+        # self._time_data_headers = data_out['headers']
         self.processing_dict['edge_windowed'] = data_out
 
 

@@ -5,12 +5,15 @@
 
 Issues:
 1. Current padding code truncates the leading or trailing edge of the data
-2. padding the time axis was done incorrectly, but accidentally resulted in the correct outcome. Patched to use a linear ramp.
+
 
 1.a. Centering in the current code truncates the data. This means we're throwing away spectral resolution in the fourier transform.
 I see two solutions:
 1. Use centering, but collect a symmetric time interval about t_0
 2. Use Tukey windowing algorithm, which works from the edges in. No centering.
+
+2. padding the time axis was done incorrectly, but accidentally resulted in the correct outcome. Patched to use a linear ramp.
+
 
 
 Bugs:

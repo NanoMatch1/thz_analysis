@@ -13,6 +13,11 @@ def df_to_dict(df: pd.DataFrame) -> dict:
         'headers': df.columns.tolist()
     }
 
+def is_monotonic(x):
+    d = np.diff(x)
+    return np.all(d >= 0) or np.all(d <= 0)
+
+
 def dict_to_df(data_dict: dict) -> pd.DataFrame:
     """Convert a dictionary of numpy ndarrays to a pandas DataFrame."""
     data = data_dict['data']
@@ -143,7 +148,11 @@ def interpolate_to_max_resolution(
             y = data[:, j]
 
             if col_name in phase_col_names:
-                y_unwrapped = np.unwrap(y)
+                if is_monotonic(y):
+                    # no need to unwrap monotonic data, it is already unwrapped
+                    y_unwrapped = y
+                else:
+                    y_unwrapped = np.unwrap(y)
                 y_interp = np.interp(x_target, x, y_unwrapped)
                 if wrap_phase_output:
                     y_interp = np.angle(np.exp(1j * y_interp))
