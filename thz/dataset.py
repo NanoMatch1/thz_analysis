@@ -461,7 +461,8 @@ class DataSet:
                 # calculates refractive index and extinction coefficient
                 nguess = 1+((phidifference[1:]-phioffset[1:])*cs.c)/(2*np.pi*sample_freq_axis[1:]*thickness)
                 kguess = -cs.c/(2*np.pi*thickness*sample_freq_axis[1:])*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(sample_amp_axis[1:]/reference_amp_axis[1:]))
-                breakpoint("kguess is nan - need to debug")
+                print("kguess is nan - need to debug")
+                breakpoint()
                 #calculates complex permittivity
                 eps1 = nguess**2-kguess**2
                 eps2 = 2*nguess*kguess

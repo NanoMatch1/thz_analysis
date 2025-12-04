@@ -27,7 +27,7 @@ if __name__ == "__main__":
     # data_set.centerpad_legacy()
     # data_set.edge_window_pad()
     data_set.centerpad_legacy()
-    data_set.prepare_for_fft_all(pad_length_factor=3, window_alpha=0.2, baseline_points=10)
+    data_set.prepare_for_fft_all(pad_length_factor=2, window_alpha=0.6, baseline_points=10)
     # data_set.plot_current()
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
