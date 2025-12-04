@@ -23,9 +23,7 @@ from thz.data_structures.decorators import align_to_max_resolution
 )
 def phaseex(ref,sam,show_graph=False):
 
-    breakpoint()
     dff = sam['Phase']-ref['Phase']
-    
 
     #defines range of interest
     low = 0.5
@@ -33,24 +31,24 @@ def phaseex(ref,sam,show_graph=False):
     x = ref['Frequency (THz)'].loc[ref['Frequency (THz)'].between(low,up)]
     y = dff.loc[ref['Frequency (THz)'].between(low,up)]
     #least squares linear regression of the phase in the range of interest
-    breakpoint()
     lsq = linregress(x,y)
     ycross = lsq.intercept
     # extrapolates the phase from max amplitude to 0 THz using the gradient
     # breakpoint()
     delta_t_ps = -lsq.slope / (2 * np.pi)
-    print(f"Delay from phase (phaseex): {delta_t_ps:.3f} ps")
+    print(f"Delay from phase uncorrected (phaseex): {delta_t_ps:.3f} ps")
 
-    import matplotlib.pyplot as plt
-    plt.plot(sam['Frequency (THz)'], sam['Phase'], label='sample phase')
-    plt.plot(ref['Frequency (THz)'], ref['Phase'], label='ref phase')
-    plt.legend()
-    plt.title('Phaseex data')
-    plt.show()
-    plt.plot(x, y, 'o', label='data')
-    plt.plot(x, lsq.intercept + lsq.slope*x, 'r', label='fit')
-    plt.legend()
-    plt.show()
+    if show_graph:
+        import matplotlib.pyplot as plt
+        plt.plot(sam['Frequency (THz)'], sam['Phase'], label='sample phase')
+        plt.plot(ref['Frequency (THz)'], ref['Phase'], label='ref phase')
+        plt.legend()
+        plt.title('Phaseex data')
+        plt.show()
+        plt.plot(x, y, 'o', label='data')
+        plt.plot(x, lsq.intercept + lsq.slope*x, 'r', label='fit')
+        plt.legend()
+        plt.show()
     dff -= ycross
 
     return dff, delta_t_ps
@@ -58,6 +56,10 @@ def phaseex(ref,sam,show_graph=False):
 
 #to account for different time windows starts (use padded data!)
 def phaseoffset(ref,sam):
+
+    # WARNING: this phioffset assumes that ref and sam have the same time axis spacing, which is not strictly guaranteed! TODO: fix this, move function.
+    if len(ref) != len(sam):
+        print("CRITICAL WARNING: phaseoffset: PHASE DATA INVALID. To fix, ref and sam must have the same length/time axis spacing.")
     
     t0r = ref.iloc[0].at['Time (ps)']
     t0s = sam.iloc[0].at['Time (ps)']
@@ -66,6 +68,7 @@ def phaseoffset(ref,sam):
     freq = rfftfreq(len(ref['Time (ps)']), ref.iloc[1].at['Time (ps)']-ref.iloc[0].at['Time (ps)'])
     
     phioffset = 2*np.pi*freq*(t0s-t0r)
+
     
     return phioffset
 
@@ -181,7 +184,7 @@ def phaseex_v2(
     m, b = lsq.slope, lsq.intercept
 
     delta_t_ps = -m / (2 * np.pi)
-    print(f"Delay from phase (fit_range={fit_range}): {delta_t_ps:.3f} ps")
+    print(f"Delay from phase uncorrected (phaseexV2) (fit_range={fit_range}): {delta_t_ps:.3f} ps")
 
 
 
@@ -206,4 +209,4 @@ def phaseex_v2(
     # Return as a Series aligned with ref's index
     dphi_series = pd.Series(dphi_corr, index=ref.index, name="Phase difference")
 
-    return dphi_series, delta_t_ps/correction_factor
+    return dphi_series, delta_t_ps

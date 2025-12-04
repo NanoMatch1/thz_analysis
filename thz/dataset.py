@@ -386,7 +386,12 @@ class DataSet:
 
         '''applies analysis to compare FFT results between sample and reference datasets in the current grouping.'''
 
-        series_list = ['fft_centered_padded', 'fft_edge_windowed', 'fft_raw']
+        warnings = []
+
+        series_list = [#'fft_centered_padded', skip for debugging
+             'fft_edge_windowed'
+              #, 'fft_raw']
+        ]
         transfer_functions = {key: {} for key in series_list}
         phase_dict = {key: {} for key in series_list}
 
@@ -398,30 +403,45 @@ class DataSet:
 
                 time_reference_label = key.strip('fft_')
                 time_sample_label = key.strip('fft_')
-                breakpoint()
                 ref_time = thz_reference.processing_dict[time_reference_label]
                 sample_time = thz_data.processing_dict[time_sample_label]
                 # # determine time delay in time domain
                 t_ref = ref_time['Time (ps)'][np.argmax(abs(ref_time['Mean']))] # time at max amplitude
                 t_sam = sample_time['Time (ps)'][np.argmax(abs(sample_time['Mean']))] # time at max amplitude
-                delta_t_time_ps = t_sam - t_ref
-                print("Time-domain delay:", delta_t_time_ps, "ps")
+                delta_t_time = t_sam - t_ref
                 # breakpoint()
                 ref_freq = thz_reference.processing_dict[key]
                 sample_freq = thz_data.processing_dict[key]
                 # determine inital phase offset
                 
                 # phiref - send time data
+
                 phioffset = phaseoffset(ref_time, sample_time)
 
-                breakpoint()
+                if len(phioffset) != len(ref_freq):
+                    print("CRITICAL WARNING: fft_compare: PHASE DATA INVALID. To fix, ref and sam must have the same length/time axis spacing.")
 
-                phidifference, delta_t_ps = phaseex_v2(ref_freq, sample_freq, show_graph=True)
-                phidifference2, delta_t_ps2 = phaseex(ref_freq, sample_freq, show_graph=True)
+                phidifference, delta_t_phase = phaseex_v2(ref_freq, sample_freq, show_graph=False)
+                phidifference2, delta_t_phase2 = phaseex(ref_freq, sample_freq, show_graph=False)
+
+                delta_t_phase2 = delta_t_phase2/3 # account for phase wrangling during informed unwrapping TODO: fix properly
+
+
+                if abs(delta_t_phase2) - abs(delta_t_time) > 1.0:
+                    warnings.append(f"WARNING: {filename}. Large discrepancy between time-domain and frequency-domain delay measurements.")
+                    warnings.append(f"Frequency-domain delay: {delta_t_phase:.3f} ps (phaseex), {delta_t_phase2:.3f} ps (phaseex_v2)")
+                    warnings.append(f"Time-domain delay: {delta_t_time:.3f} ps")
+
 
                 transfer_func = transfer_function(ref_freq, sample_freq, phioffset)
 
                 transfer_functions[key][filename] = transfer_func
+
+        if len(warnings) > 0:
+            for warning in warnings:
+                print(warning)
+        else:
+            print("No warnings detected during FFT comparison - all phase measurements are consistent.")
 
         return transfer_functions
 

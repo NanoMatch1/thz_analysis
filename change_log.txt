@@ -12,15 +12,16 @@ I see two solutions:
 1. Use centering, but collect a symmetric time interval about t_0
 2. Use Tukey windowing algorithm, which works from the edges in. No centering.
 
-2. padding the time axis was done incorrectly, but accidentally resulted in the correct outcome. Patched to use a linear ramp.
+2. padding the time axis was done with incorrect function, but accidentally resulted in the correct outcome. Patched to use a linear ramp to prevent weird bugs later.
 
 
 
 Bugs:
-1. Phase calculations and transfer functions are wrong. The code uses the pandas dataframes to do the division math, which quietly passes an incorrect division if array lengths are unqueal. This is the case when the reference and data time domains or time steps are different, so almost always...
+1. Phase calculations and transfer functions are wrong. The code uses the pandas dataframes to do the division math, which quietly passes an incorrect/misaligned division if array lengths are unqueal. This is the case when the reference and data time domains or time steps are different, so almost always...
 1. a. Solution: interpolate each FFT before computing phase or transfer functions.
 2. Phaseex fits the wrapped phase, which results in a physically incorrect computation of phase. Code modified to unwrap the phase.
 3. Centering with Hann completely kills the phase calculations. Using edge-windowing with modest alpha fixes the phase issues
+4. phaseoffset suffers the same problem with dataframe division. Assumes both axes have the same length, and creates a mapping to the reference axis only.
 
 
 # Recommendations

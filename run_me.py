@@ -57,14 +57,26 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(1,len(transfer), figsize=(12,8))
     # plt.show()
 
+    # breakpoint()
+
     for idx, (series, data_dict) in enumerate(transfer.items()):
         for filename, data in data_dict.items():
             print(f"Series: {series}, File: {filename}")
             # print(data)
-            ax[idx].plot(data['Frequency (THz)'], data['Phase'], label=filename)
+            try:
+                # ax[idx].plot(data['Frequency (THz)'], data['Phase'], label='{}:{}'.format(filename, 'Phase'))
+                ax[idx].plot(data['Frequency (THz)'], data['Amplitude'], label='{}:{}'.format(filename, 'Amplitude'))
+            except TypeError as e:
+                ax = [ax]  # Ensure ax is iterable
+                # ax[idx].plot(data['Frequency (THz)'], data['Phase'], label='{}:{}'.format(filename, 'Phase'))
+                ax[idx].plot(data['Frequency (THz)'], data['Amplitude'], label='{}:{}'.format(filename, 'Amplitude'))
 
         ax[idx].legend()
         ax[idx].set_title(f'Transfer Function: {series}')
+        ax[idx].set_xlabel('Frequency (THz)')
+        ax[idx].set_ylabel('Amplitude')
+        ax[idx].set_xlim(0, 3)
+        # ax[idx].set_ylim())
 
     plt.show()
             # plt.plot(data['Frequency (THz)'], data['Amplitude'], label='Amplitude', label='{}:{}')
