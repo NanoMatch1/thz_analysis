@@ -10,7 +10,7 @@ def align_to_max_resolution(
     axis_col_name: str,
     clip_to_overlap: bool = True,
     phase_col_names: tuple[str, ...] = ('Phase', 'Δ(Phase)', 'delta Phase'),
-    wrap_phase_output: bool = True,
+    wrap_phase_output: bool = False,
 ):
     """
     Decorator that aligns multiple data-like arguments before passing them

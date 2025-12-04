@@ -138,7 +138,7 @@ def phaseex_v2(
     """
     show_graph = kwargs.get("show_graph", False)
     # Extract frequency axis
-    breakpoint()
+
     freq = ref[freq_col].to_numpy()
 
     # Extract phase (already unwrapped) from ref & sam

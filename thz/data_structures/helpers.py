@@ -73,7 +73,7 @@ def interpolate_to_max_resolution(
     axis_col_name: str = None,      # must be provided for header safety
     clip_to_overlap: bool = True,
     phase_col_names: tuple[str, ...] = ('Phase', 'Δ(Phase)', 'delta Phase'),
-    wrap_phase_output: bool = True,
+    wrap_phase_output: bool = False,
 ):
     """
     Interpolate all datasets onto a common axis defined by the dataset

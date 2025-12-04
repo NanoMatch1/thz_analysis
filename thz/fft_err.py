@@ -137,6 +137,7 @@ def transfer_function(ref,sam,offset):
     amplitude = sam['Amplitude']/ref['Amplitude']
     # phase = sam['Phase']-ref['Phase']-offset
     calc_phase = phaseex(ref, sam)
+    breakpoint()
     phase = calc_phase - offset
     breakpoint()
 

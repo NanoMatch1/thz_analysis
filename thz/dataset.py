@@ -396,9 +396,11 @@ class DataSet:
                 if thz_reference is None:
                     continue
 
-
-                ref_time = thz_reference.processing_dict['time_domain']
-                sample_time = thz_data.processing_dict['time_domain']
+                time_reference_label = key.strip('fft_')
+                time_sample_label = key.strip('fft_')
+                breakpoint()
+                ref_time = thz_reference.processing_dict[time_reference_label]
+                sample_time = thz_data.processing_dict[time_sample_label]
                 # # determine time delay in time domain
                 t_ref = ref_time['Time (ps)'][np.argmax(abs(ref_time['Mean']))] # time at max amplitude
                 t_sam = sample_time['Time (ps)'][np.argmax(abs(sample_time['Mean']))] # time at max amplitude
