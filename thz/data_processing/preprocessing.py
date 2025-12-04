@@ -151,7 +151,7 @@ def pad_zeros(df: pd.DataFrame, length_factor: int = 5) -> pd.DataFrame:
 
     return df_padded
 
-def pad_to_window_range(df: pd.DataFrame, time_window: tuple, pad_length_factor: int = 3, **kwargs) -> pd.DataFrame:
+def pad_to_window_range(df: pd.DataFrame, time_window: tuple, pad_length_factor: float = 3, **kwargs) -> pd.DataFrame:
     """
     Pads the dataset with zeros to ensure the time axis spans from t_min to t_max.
 
@@ -163,6 +163,11 @@ def pad_to_window_range(df: pd.DataFrame, time_window: tuple, pad_length_factor:
     pad_length_factor : int
         Additional padding factor to extend beyond the specified time window to ensure sufficient zero-padding for phase calculation.
     """
+
+    if time_window is None:
+        raise ValueError("time_window must be provided as (t_min, t_max)")
+    
+    # kwargs['show_graph'] = True
 
     time = df["Time (ps)"].to_numpy()
     y_mean = df["Mean"].to_numpy()

@@ -226,6 +226,12 @@ class DataSet:
 
         return self.data
     
+    def load_constants(self, constants: Constants) -> None:
+        '''Loads physical constants into all THzData objects in the dataset.'''
+        self.constants = constants
+        for thz_data in self.data.values():
+            thz_data.constants = constants
+        
     def grabone(self) -> THzData:
         '''Returns one THzData object from the data_dict for quick access.'''
         if self.data:
@@ -380,9 +386,7 @@ class DataSet:
         # from thz.data_processing.fft_processing import transfer_function
         from thz.phase_interpolation import phaseoffset, phaseex, phaseex_v2
         from thz.fft_err import transfer_function
-
-        import numpy as np
-        import pandas as pd
+        from scipy import constants as cs
 
         '''applies analysis to compare FFT results between sample and reference datasets in the current grouping.'''
 
@@ -424,6 +428,11 @@ class DataSet:
                 phidifference, delta_t_phase = phaseex_v2(ref_freq, sample_freq, show_graph=False)
                 phidifference2, delta_t_phase2 = phaseex(ref_freq, sample_freq, show_graph=False)
 
+
+
+                phidifference = phidifference.to_numpy()
+                phidifference2 = phidifference2.to_numpy()
+
                 delta_t_phase2 = delta_t_phase2/3 # account for phase wrangling during informed unwrapping TODO: fix properly
 
 
@@ -433,9 +442,54 @@ class DataSet:
                     warnings.append(f"Time-domain delay: {delta_t_time:.3f} ps")
 
 
+                # breakpoint()
                 transfer_func = transfer_function(ref_freq, sample_freq, phioffset)
 
-                transfer_functions[key][filename] = transfer_func
+
+                thickness = thz_data.constants.thickness
+                ns = thz_data.constants.ns
+                eps_inf = thz_data.constants.eps_inf
+
+                sample_freq_axis = sample_freq['Frequency (THz)'].to_numpy() * 1e12 
+                sample_amp_axis = sample_freq['Amplitude'].to_numpy()
+                reference_freq_axis = ref_freq['Frequency (THz)'].to_numpy() * 1e12
+                reference_amp_axis = ref_freq['Amplitude'].to_numpy()
+
+
+                # breakpoint()
+                # skip first point to avoid division by zero
+                # calculates refractive index and extinction coefficient
+                nguess = 1+((phidifference[1:]-phioffset[1:])*cs.c)/(2*np.pi*sample_freq_axis[1:]*thickness)
+                kguess = -cs.c/(2*np.pi*thickness*sample_freq_axis[1:])*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(sample_amp_axis[1:]/reference_amp_axis[1:]))
+                breakpoint("kguess is nan - need to debug")
+                #calculates complex permittivity
+                eps1 = nguess**2-kguess**2
+                eps2 = 2*nguess*kguess
+
+                #loss tangent
+                losstg =eps2/eps1
+
+                #calculates complex conductivity
+                realc = 4*np.pi*reference_freq_axis[1:]*cs.epsilon_0*nguess*kguess
+                imagc = 2*np.pi*reference_freq_axis[1:]*cs.epsilon_0*(eps_inf-nguess**2+kguess**2)
+
+                breakpoint()
+
+                physical_params = {
+                    # 'Dynamic Range Improvement (dB)': DRimpr,
+                    'Refractive Index (n)': nguess,
+                    'Extinction Coefficient (k)': kguess,
+                    'Real Permittivity ($\epsilon_{1}$)': eps1,
+                    'Imaginary Permittivity ($\epsilon_{2}$)': eps2,
+                    'Loss Tangent': losstg,
+                    'Real Conductivity ($\sigma_{1}$)': realc,
+                    'Imaginary Conductivity ($\sigma_{2}$)': imagc
+                }
+
+
+                transfer_functions[key][filename] = {'transfer': transfer_func, 'physical parameters': physical_params}
+                phase_dict[key][filename] = {'phase difference': phidifference, 'delta t (phase)': delta_t_phase, 'delta t (phaseex_v2)': delta_t_phase2, 'delta t (time)': delta_t_time}
+
 
         if len(warnings) > 0:
             for warning in warnings:
@@ -443,7 +497,7 @@ class DataSet:
         else:
             print("No warnings detected during FFT comparison - all phase measurements are consistent.")
 
-        return transfer_functions
+        return transfer_functions, phase_dict
 
         
 
@@ -490,11 +544,11 @@ class DataSet:
         return (min_time, max_time)
     
 
-    def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, show_graph=False) -> None:
+    def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, **kwargs) -> None:
         '''Prepares all THzData objects for FFT by subtracting DC offset, centering pulse, and padding time-domain data.'''
 
         time_window = self._find_series_time_range()
 
         for thz_data in self.data.values():
             # thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
-            thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph, time_window=time_window)
+            thz_data.prepare_for_fft(time_window=time_window, baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, **kwargs)

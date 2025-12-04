@@ -4,14 +4,20 @@ from typing import Iterable, Any
 
 import numpy as np
 import pandas as pd
-from thz.data_structures.helpers import interpolate_to_max_resolution, _extract_data_and_headers
+from thz.data_structures.helpers import interpolate_to_max_resolution_simple, _extract_data_and_headers
 
 def align_to_max_resolution(
     axis_col_name: str,
     clip_to_overlap: bool = True,
     phase_col_names: tuple[str, ...] = ('Phase', 'Δ(Phase)', 'delta Phase'),
     wrap_phase_output: bool = False,
+    **kwargs
 ):
+    # print("Dummy align_to_max_resolution called, returning unchanged function.")
+
+    # def decorator(func):
+    #     return func
+    # return decorator
     """
     Decorator that aligns multiple data-like arguments before passing them
     to the wrapped function.
@@ -39,7 +45,7 @@ def align_to_max_resolution(
 
             # Only align if more than one dataset is present
             if len(data_objs) >= 2:
-                aligned = interpolate_to_max_resolution(
+                aligned = interpolate_to_max_resolution_simple(
                     *data_objs,
                     axis_col_name=axis_col_name,
                     clip_to_overlap=clip_to_overlap,

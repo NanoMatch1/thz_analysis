@@ -60,16 +60,21 @@ def phaseoffset(ref,sam):
     # WARNING: this phioffset assumes that ref and sam have the same time axis spacing, which is not strictly guaranteed! TODO: fix this, move function.
     if len(ref) != len(sam):
         print("CRITICAL WARNING: phaseoffset: PHASE DATA INVALID. To fix, ref and sam must have the same length/time axis spacing.")
+        print("Assuming longest axis, but you should fix your data padding to ensure time traces have same length and spacing."
+        )
+        if len(ref) > len(sam):
+            freq_ax = rfftfreq(len(ref['Time (ps)']), ref.iloc[1].at['Time (ps)']-ref.iloc[0].at['Time (ps)'])
+        else:
+            freq_ax = rfftfreq(len(sam['Time (ps)']), sam.iloc[1].at['Time (ps)']-sam.iloc[0].at['Time (ps)'])
+    else:
+        freq_ax = rfftfreq(len(ref['Time (ps)']), ref.iloc[1].at['Time (ps)']-ref.iloc[0].at['Time (ps)'])
     
     t0r = ref.iloc[0].at['Time (ps)']
     t0s = sam.iloc[0].at['Time (ps)']
     
-    #define freq axis
-    freq = rfftfreq(len(ref['Time (ps)']), ref.iloc[1].at['Time (ps)']-ref.iloc[0].at['Time (ps)'])
-    
-    phioffset = 2*np.pi*freq*(t0s-t0r)
+    phioffset = 2*np.pi*freq_ax*(t0s-t0r)
 
-    
+
     return phioffset
 
 

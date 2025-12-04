@@ -173,3 +173,86 @@ def interpolate_to_max_resolution(
             final_results.append({"data": data, "headers": headers})
 
     return final_results
+
+def interpolate_to_max_resolution_simple(
+    *args,
+    axis_col_name: str = None,      # must be provided for header safety
+    phase_col_names: tuple[str, ...] = ('Phase', 'Δ(Phase)', 'delta Phase'),
+    **kwargs
+):
+    """
+    Interpolate all datasets onto a common axis defined by the dataset
+    with the longest array (i.e., highest resolution).
+
+    Only DataFrames or dict{'data','headers'} are accepted.
+
+    Phase columns (matched by name) are checked if need unwrapping (unwrapped) → interpolated.
+    """
+    if axis_col_name is None:
+        raise ValueError(
+            "axis_col_name must be provided (e.g., 'Time (ps)' or "
+            "'Frequency (THz)') to ensure header-safe alignment."
+        )
+
+    objs = list(args)
+    normalized = []
+    axes = []
+
+    # Normalize and collect metadata
+    for obj in objs:
+        data, headers, fmt = _extract_data_and_headers(obj)
+
+        if axis_col_name not in headers:
+            raise KeyError(f"Axis column '{axis_col_name}' not found in headers {headers}")
+
+        axis_idx = headers.index(axis_col_name)
+        x = data[:, axis_idx]
+
+        # Ensure x is increasing
+        if len(x) > 1 and x[1] < x[0]:
+            x = x[::-1]
+            data = data[::-1, :]
+
+        normalized.append((data, headers, fmt))
+        axes.append(x)
+
+    # Pick the target axis = longest array
+    idx_best = int(np.argmax([len(x) for x in axes]))
+    x_target = axes[idx_best]
+
+    resampled = []
+
+    # Interpolate each dataset
+    for (data, headers, fmt), x in zip(normalized, axes):
+
+        axis_idx = headers.index(axis_col_name)
+        cols = []
+
+        for j, col_name in enumerate(headers):
+            if j == axis_idx:
+                cols.append(x_target)
+                continue
+
+            y = data[:, j]
+
+            if col_name in phase_col_names:
+                if not is_monotonic(y):
+                    # non-monotonic phase needs unwrapping
+                    y = np.unwrap(y)
+
+            y_interp = np.interp(x_target, x, y)
+
+            cols.append(y_interp)
+
+        new_data = np.column_stack(cols)
+        resampled.append((new_data, headers, fmt))
+
+    # Convert back to original format
+    final_results = []
+    for (data, headers, fmt) in resampled:
+        if fmt == "dataframe":
+            final_results.append(pd.DataFrame(data, columns=headers))
+        else:  # fmt == 'dict'
+            final_results.append({"data": data, "headers": headers})
+
+    return final_results

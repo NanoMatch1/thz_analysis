@@ -680,8 +680,7 @@ class THzData:
                         baseline_points=10, 
                         pad_length_factor=5.0, 
                         window_alpha=0.2,
-                        show_graph=True,
-                        pad_range=None,
+                        time_window=None,
                         **kwargs
                         ):
         '''Preprocesses the current time-domain data for FFT by subtracting DC offset, centering pulse, and padding.
@@ -694,10 +693,11 @@ class THzData:
 
         if isinstance(self._data, np.ndarray):
             self._data = pd.DataFrame(self._data, columns=self._time_data_headers)
-        df_baselined = baseline_subtract(self._data, n_points=baseline_points, show_graph=show_graph, **kwargs)
-        df_windowed = edge_window(df_baselined, alpha=window_alpha, show_graph=show_graph, **kwargs)
-        data_out = pad_to_window_range(df_windowed, length_factor=pad_length_factor, show_graph=show_graph, **kwargs)
+        df_baselined = baseline_subtract(self._data, n_points=baseline_points, **kwargs)
+        df_windowed = edge_window(df_baselined, alpha=window_alpha, **kwargs)
+        data_out = pad_to_window_range(df_windowed, time_window, pad_length_factor=pad_length_factor, **kwargs)
         # breakpoint()
+        # data_out = df_windowed
 
         self._data = data_out
         # self._time_data_headers = data_out['headers']

@@ -133,7 +133,7 @@ def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.
     phase_col_names=('Phase', 'Δ(Phase)')
 )
 def transfer_function(ref,sam,offset):
-    
+    # breakpoint()
     amplitude = sam['Amplitude']/ref['Amplitude']
     # phase = sam['Phase']-ref['Phase']-offset
     calc_phase, delta_t_ps = phaseex(ref, sam)
