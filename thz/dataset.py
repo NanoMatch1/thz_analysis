@@ -328,7 +328,7 @@ class DataSet:
             print(f"File: {filename}, Time Constant: {time_const} s")
             std_dev = thz_data.calculate_std_dev()
             if normalise:
-                std_dev = std_dev * time_const
+                std_dev = std_dev * np.sqrt(time_const/2) # normalise by time constant because longer time constants integrate more shots, at the rate of 500 Hz
 
             plt.plot(thz_data.data[:,0], std_dev, label=f'Time Const: {time_const} s')
         plt.xlabel('Time (ps)')
