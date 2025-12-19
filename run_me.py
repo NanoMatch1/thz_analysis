@@ -19,7 +19,7 @@ if __name__ == "__main__":
     data_set.load_all_data()
     data_set.load_constants(constants)
     # data_set.plot_current()
-    data_set.calculate_std_dev_all(show_graph=True, limit=10)
+    data_set.calculate_std_dev_all(show_graph=True, limit=10, normalise=True)
     data_set.calculate_SNR_all(show_graph=True, limit=10)
     
     # test = data_set.grabone()

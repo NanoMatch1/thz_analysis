@@ -318,13 +318,18 @@ class DataSet:
             plt.show()
 
     # @df_to_dict
-    def calculate_std_dev_all(self, show_graph=False, limit=10) -> None:
+    # def itentify_time_constants
+
+    def calculate_std_dev_all(self, show_graph=False, limit=10, **kwargs) -> None:
         '''Calculates the standard deviation across all scans for each THzData object in the dataset.'''
         std_dev_dict = {}
 
         for filename, thz_data in self.data.items():
-            std_dev_dict[filename] = thz_data.calculate_std_dev(limit=limit)
-
+            std_dev = thz_data.calculate_std_dev(limit=limit)
+            if kwargs.get('normalise', False):
+                breakpoint()
+                # std_dev = std_dev / np.max(np.abs(thz_data.data[:,1]))
+            # std_dev_dict[filename] = 
         if show_graph:
             for filename, std_dev in std_dev_dict.items():
                 thz_data = self.data.get(filename)

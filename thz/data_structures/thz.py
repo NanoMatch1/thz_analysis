@@ -89,6 +89,8 @@ class THzData:
         self._freq_data = None
         self._freq_data_headers = None
 
+        # self._identify_time_constant()
+
         self._data = self._time_data  # Current working data (time or frequency domain)
 
     def __getitem__(self, key):
@@ -116,6 +118,14 @@ class THzData:
     # def reference_data(self):
     #     '''Consults the grouping service to get the reference THzData object if available. Returns the THzData object or None.'''
 
+    @property
+    def time_const(self) -> float | None:
+        '''Returns the time constant metadata if available. Tries to parse if not, else None.'''
+        time_const = self._meta_data.get('time_constant', None)
+        if time_const is None:
+            time_const = self._identify_time_constant()
+
+        return time_const
 
     @property
     def data(self) -> np.array:
@@ -134,6 +144,28 @@ class THzData:
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {len(self.data_list)}\n   -> Data type: {self.data_type}\n" 
     
+    def _identify_time_constant(self, time_unit='ms') -> None:
+        '''Work around function to pull time constant from filename, if available.'''
+        if 'time' in self.filename.lower() and 'const' in self.filename.lower():
+            stritem = self.filename.split(time_unit)[0].strip()
+            # check string before time for float until non-float character
+            stritem = stritem[::-1] # reverse string
+            timeconst_str = ''
+            for char in stritem:
+                if char.isdigit() or char == '.':
+                    timeconst_str = char + timeconst_str # adds to front so we dont need to reverse again
+                else:
+                    break
+
+            try:
+                timeconst = float(timeconst_str)
+                self._meta_data['time_constant'] = timeconst
+            except ValueError:
+                print(f"Could not parse time constant from filename: {self.filename}. Setting to None.")
+                self._meta_data['time_constant'] = None
+
+        return self._meta_data.get('time_constant', None)
+
     def _calculate_std_error(self) -> np.array:
         '''Calculates the standard error across all scans for each time point.'''
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
