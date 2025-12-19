@@ -6,6 +6,7 @@ from thz.io.acc_loader import ACCLoader
 from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
+from thz.data_structures.helpers import df_to_dict
 
 
 class DataService:
@@ -316,9 +317,44 @@ class DataSet:
             plt.legend()
             plt.show()
 
+    # @df_to_dict
+    def calculate_std_dev_all(self, show_graph=False, limit=10) -> None:
+        '''Calculates the standard deviation across all scans for each THzData object in the dataset.'''
+        std_dev_dict = {}
 
+        for filename, thz_data in self.data.items():
+            std_dev_dict[filename] = thz_data.calculate_std_dev(limit=limit)
 
+        if show_graph:
+            for filename, std_dev in std_dev_dict.items():
+                thz_data = self.data.get(filename)
+                time_axis = thz_data.data[:, 0]
+                plt.plot(time_axis, std_dev, label=filename)
+            plt.xlabel('Time (ps)')
+            plt.ylabel('Standard Deviation')
+            plt.title('Standard Deviation Across Scans')
+            plt.legend()
+            plt.show()
 
+    def calculate_SNR_all(self, show_graph=False, limit=None) -> None:
+        '''Calculates the signal-to-noise ratio across the time domain for all THzData objects in the dataset.'''
+        snr_dict = {}
+
+        for filename, thz_data in self.data.items():
+            snr_dict[filename] = thz_data.calculate_SNR(limit=limit)
+
+        if show_graph:
+            for filename, snr in snr_dict.items():
+                thz_data = self.data.get(filename)
+                time_axis = thz_data.data[:, 0]
+                plt.plot(time_axis, snr, label=filename)
+            plt.xlabel('Time (ps)')
+            plt.ylabel('Signal-to-Noise Ratio')
+            plt.title('Signal-to-Noise Ratio Across Time Domain')
+            plt.legend()
+            plt.show()
+
+        return snr_dict
 
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
@@ -459,8 +495,9 @@ class DataSet:
                 # breakpoint()
                 # skip first point to avoid division by zero
                 # calculates refractive index and extinction coefficient
-                nguess = 1+((phidifference[1:]-phioffset[1:])*cs.c)/(2*np.pi*sample_freq_axis[1:]*thickness)
-                kguess = -cs.c/(2*np.pi*thickness*sample_freq_axis[1:])*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(sample_amp_axis[1:]/reference_amp_axis[1:]))
+                skipindex = 0 if sample_freq_axis[0] != 0 else 1
+                nguess = 1+((phidifference[skipindex:]-phioffset[skipindex:])*cs.c)/(2*np.pi*sample_freq_axis[skipindex:]*thickness)
+                kguess = -cs.c/(2*np.pi*thickness*sample_freq_axis[skipindex:])*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(sample_amp_axis[skipindex:]/reference_amp_axis[skipindex:]))
                 print("kguess is nan - need to debug")
                 breakpoint()
                 #calculates complex permittivity

@@ -8,14 +8,19 @@ if __name__ == "__main__":
     import numpy as np
 
     constants = Constants(
-        thickness = 8e-4,
+        thickness = 4e-4,
         eps_inf = 1, # glass 3.42, Si 11.6
         ns = 1.9, #substate n
 )
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest'
+    # file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
     data_set.load_constants(constants)
+    # data_set.plot_current()
+    data_set.calculate_std_dev_all(show_graph=True, limit=10)
+    data_set.calculate_SNR_all(show_graph=True, limit=10)
     
     # test = data_set.grabone()
     # test.plot_current()
@@ -27,7 +32,7 @@ if __name__ == "__main__":
     # data_set.centerpad_legacy()
     # data_set.edge_window_pad()
     data_set.centerpad_legacy()
-    data_set.prepare_for_fft_all(pad_length_factor=2, window_alpha=0.6, baseline_points=10)
+    data_set.prepare_for_fft_all(pad_length_factor=1, window_alpha=0.6, baseline_points=10)
     # data_set.plot_current()
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')

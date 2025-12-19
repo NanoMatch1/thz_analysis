@@ -1,17 +1,14 @@
 import pandas as pd
 import numpy as np
+from typing import Any
 
 def df_to_array(df: pd.DataFrame) -> np.ndarray:
     """Convert a pandas DataFrame to a numpy ndarray - columns not preserved."""
     return df.to_numpy()
 
-def df_to_dict(df: pd.DataFrame) -> dict:
-    """Convert a pandas DataFrame to a the dictionary format with 'data' and 'headers' keys."""
-    # return {col: df[col].to_numpy() for col in df.columns}
-    return {
-        'data': df.to_numpy(),
-        'headers': df.columns.tolist()
-    }
+def df_to_dict(df: pd.DataFrame) -> dict[str, Any]:
+    """Convert a pandas DataFrame to a dictionary with dictonary keys as the column names and values as numpy ndarrays."""
+    return {col: df[col].to_numpy() for col in df.columns}
 
 def is_monotonic(x):
     d = np.diff(x)

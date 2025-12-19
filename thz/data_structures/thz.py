@@ -47,7 +47,7 @@ class BaseTHzData:
     def _resolve_timestamp(self) -> str:
         '''Extracts timestamp from headers if available.'''
         for item in self.headers:
-            if 'date' and 'time' in item.lower():
+            if 'date' in item.lower() and 'time' in item.lower():
                 stringlist = item.split(',') # Assumes format 'Data and time,YYYY-MM-DD HH:MM:SS'
                 timeobj = stringlist[1].split('.')[0].strip()
                 # convert to datetime object
@@ -140,10 +140,12 @@ class THzData:
         std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
         return std_error
 
-    def _compile_data_array(self) -> np.array:
+    def _compile_data_array(self, limit=None) -> np.array:
         '''Takes the data from all scans and compiles it into a single numpy array.'''
         compiled_data = None
-        for obj in self.data_list:
+        for idx, obj in enumerate(self.data_list):
+            if limit is not None and idx >= limit: # condition to limit number of scans compiled
+                break
             if compiled_data is None:
                 compiled_data = obj.raw_data
             else:
@@ -206,6 +208,13 @@ class THzData:
 
         self._data = np.column_stack((new_time_axis, dataY_interp, std_error_interp))
         return self._data
+
+    def calculate_std_dev(self, limit=None) -> np.array:
+        '''Calculates the standard deviation across all scans for each time point.'''
+        data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list[:limit]])
+        std_dev = np.std(data_matrix, axis=0)
+        self.std_dev = std_dev
+        return std_dev
     
     def center_pulse_in_window(self) -> None:
         """
@@ -272,6 +281,25 @@ class THzData:
         baseline = np.mean(self._data[:num_points, 1])
         self._data[:, 1] -= baseline
         # std_error unaffected (we’re just shifting mean)
+
+    def calculate_SNR(self, limit=None) -> np.array:
+        '''Calculates the signal-to-noise ratio across the time domain.'''
+        if self._data is None:
+            return np.array([])
+        
+        if limit is None:
+            array = self.raw_data[:, 1:]
+        else:
+            array = self.raw_data[:, 1:limit+1]
+        
+        mean = np.mean(array, axis=1)
+        stderr = np.std(array, axis=1) / np.sqrt(array.shape[1])
+
+        # Avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            snr = np.where(stderr != 0, np.abs(mean) / stderr, 0.0)
+
+        return snr
 
     def _estimate_noise_sigma(
         self,
