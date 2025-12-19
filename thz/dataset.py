@@ -319,6 +319,23 @@ class DataSet:
 
     # @df_to_dict
     # def itentify_time_constants
+    def compare_time_constants(self, normalise=True) -> None:
+        '''LEGACY: Simple comparison function. Uses normalise to decide whether to normalise std dev by time constant, for the instrument code where this parameter is not separated.'''
+        for filename, thz_data in self.data.items():
+            time_const = thz_data.time_const
+            if time_const is None:
+                continue # dont plot files without time constant info
+            print(f"File: {filename}, Time Constant: {time_const} s")
+            std_dev = thz_data.calculate_std_dev()
+            if normalise:
+                std_dev = std_dev * time_const
+
+            plt.plot(thz_data.data[:,0], std_dev, label=f'Time Const: {time_const} s')
+        plt.xlabel('Time (ps)')
+        plt.ylabel('Standard Deviation')
+        plt.title('Standard Deviation Comparison Across Time Constants: Normalised' if normalise else 'Standard Deviation Comparison Across Time Constants')
+        plt.legend()
+        plt.show()
 
     def calculate_std_dev_all(self, show_graph=False, limit=10, **kwargs) -> None:
         '''Calculates the standard deviation across all scans for each THzData object in the dataset.'''
@@ -326,10 +343,7 @@ class DataSet:
 
         for filename, thz_data in self.data.items():
             std_dev = thz_data.calculate_std_dev(limit=limit)
-            if kwargs.get('normalise', False):
-                breakpoint()
-                # std_dev = std_dev / np.max(np.abs(thz_data.data[:,1]))
-            # std_dev_dict[filename] = 
+            std_dev_dict[filename] = std_dev
         if show_graph:
             for filename, std_dev in std_dev_dict.items():
                 thz_data = self.data.get(filename)
