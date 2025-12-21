@@ -604,6 +604,9 @@ class THzData:
         '''Plots the current averaged data with error bars as a shaded region.'''
         import matplotlib.pyplot as plt
 
+        error_bars = kwargs.get('error_bars', True)
+        normalise = kwargs.get('normalise', False)
+
         if self._data is None:
             print("No averaged data to plot.")
             return
@@ -616,6 +619,12 @@ class THzData:
         mean_amplitude = self._data[:, 1]
         std_error = self._data[:, 2]
 
+        if normalise:
+            max_amp = np.max(np.abs(mean_amplitude))
+            if max_amp != 0:
+                mean_amplitude = mean_amplitude / max_amp
+                std_error = std_error / max_amp
+
         if 'figure_obj' in kwargs:
             figure_obj = kwargs.get('figure_obj')
             ax = figure_obj.ax
@@ -624,7 +633,8 @@ class THzData:
             fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
             show_plot = True
         ax.plot(time, mean_amplitude, '-', label=self.filename)
-        ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
+        if error_bars:
+            ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
                  alpha=kwargs.get('alpha', 0.3), color='tab:red')
         ax.set_title(kwargs.get('title', 'Averaged THz Data'))
         ax.set_xlabel(kwargs.get('xlabel', 'Time (ps)'))

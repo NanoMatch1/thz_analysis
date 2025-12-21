@@ -13,17 +13,21 @@ if __name__ == "__main__":
         ns = 1.9, #substate n
 )
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_2'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
     data_set.load_constants(constants)
     # data_set.plot_current()
-    # data_set.calculate_std_dev_all(show_graph=True, limit=10, normalise=True)
-    # data_set.calculate_SNR_all(show_graph=True, limit=10)
+    data_set.plot_current(error_bars=False, normalise=True)
 
-    data_set.compare_time_constants()
-    
+    # noise analysis -------
+    data_set.calculate_std_dev_all(show_graph=True, limit=10, normalise=False)
+    data_set.calculate_SNR_all(show_graph=True, limit=10)
+    # data_set.compare_time_constants(limit=10, normalise=False)
+    # ------
+
     # test = data_set.grabone()
     # test.plot_current()
     # test.plot_current()
@@ -34,13 +38,14 @@ if __name__ == "__main__":
     # data_set.centerpad_legacy()
     # data_set.edge_window_pad()
     data_set.centerpad_legacy()
-    data_set.prepare_for_fft_all(pad_length_factor=1, window_alpha=0.6, baseline_points=10)
+    data_set.prepare_for_fft_all(pad_length_factor=1.2, window_alpha=0.6, baseline_points=10)
     # data_set.plot_current()
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
     # data_set.plot_fft_current(series='fft_edge_windowed')
     # data_set.plot_fft_current(series='fft_centered_padded')
     transfer, phase = data_set.fft_compare()
+    breakpoint()
 
 
 
@@ -72,10 +77,13 @@ if __name__ == "__main__":
 
             data_x = data['Frequency (THz)'][1:]  # BUG: need to find source of array mismatch, I think it is earlier when dividing by zero in conductivity calc
             data_y = data['Amplitude'][1:]
+            #clamp data from 0.2 to 2.7 thz
+            skipindex = np.where(data_x > 0.2)[0][0]
+            endindex = np.where(data_x > 2.7)[0][0]
 
 
-            ax[0].plot(data_x, data_y, label='{}:{}'.format(filename, 'Amplitude'), color=colors[index])
-            ax[1].plot(data_x, real_c, label='{}:{}'.format(filename, 'Real Conductivity'), color=colors[index])
+            ax[0].plot(data_x[skipindex:endindex], data_y[skipindex:endindex], label='{}:{}'.format(filename, 'Amplitude'), color=colors[index])
+            ax[1].plot(data_x[skipindex:endindex], real_c[skipindex:endindex], label='{}:{}'.format(filename, 'Real Conductivity'), color=colors[index])
             # ax[2].plot(data_x, imag_c, label='{}:{}'.format(filename, 'Imaginary Conductivity'), color=colors[index])
 
 

@@ -319,18 +319,18 @@ class DataSet:
 
     # @df_to_dict
     # def itentify_time_constants
-    def compare_time_constants(self, normalise=True) -> None:
+    def compare_time_constants(self, normalise=True, limit=None) -> None:
         '''LEGACY: Simple comparison function. Uses normalise to decide whether to normalise std dev by time constant, for the instrument code where this parameter is not separated.'''
         for filename, thz_data in self.data.items():
             time_const = thz_data.time_const
             if time_const is None:
                 continue # dont plot files without time constant info
             print(f"File: {filename}, Time Constant: {time_const} s")
-            std_dev = thz_data.calculate_std_dev()
+            std_dev = thz_data.calculate_std_dev(limit=limit)
             if normalise:
                 std_dev = std_dev * np.sqrt(time_const/2) # normalise by time constant because longer time constants integrate more shots, at the rate of 500 Hz
 
-            plt.plot(thz_data.data[:,0], std_dev, label=f'Time Const: {time_const} s')
+            plt.plot(thz_data.data[:,0], std_dev, label=f'{filename}: {time_const} s')
         plt.xlabel('Time (ps)')
         plt.ylabel('Standard Deviation')
         plt.title('Standard Deviation Comparison Across Time Constants: Normalised' if normalise else 'Standard Deviation Comparison Across Time Constants')
@@ -436,7 +436,7 @@ class DataSet:
 
 
 
-    def fft_compare(self, low_threshold = 4, up_threshold = 10):
+    def fft_compare(self, low_threshold = 4, up_threshold = 10, clip_data=None):
         # import thz.data_processing.phase_interpolation as phi
         # from thz.data_processing.fft_processing import transfer_function
         from thz.phase_interpolation import phaseoffset, phaseex, phaseex_v2
@@ -475,6 +475,7 @@ class DataSet:
                 
                 # phiref - send time data
 
+
                 phioffset = phaseoffset(ref_time, sample_time)
 
                 if len(phioffset) != len(ref_freq):
@@ -496,7 +497,6 @@ class DataSet:
                     warnings.append(f"Frequency-domain delay: {delta_t_phase:.3f} ps (phaseex), {delta_t_phase2:.3f} ps (phaseex_v2)")
                     warnings.append(f"Time-domain delay: {delta_t_time:.3f} ps")
 
-
                 # breakpoint()
                 transfer_func = transfer_function(ref_freq, sample_freq, phioffset)
 
@@ -516,9 +516,36 @@ class DataSet:
                 # calculates refractive index and extinction coefficient
                 skipindex = 0 if sample_freq_axis[0] != 0 else 1
                 nguess = 1+((phidifference[skipindex:]-phioffset[skipindex:])*cs.c)/(2*np.pi*sample_freq_axis[skipindex:]*thickness)
+
+                f = sample_freq_axis[skipindex:]
+                n = nguess
+                As = sample_amp_axis[skipindex:]
+                Ar = reference_amp_axis[skipindex:]
+
+                log_arg = ((n+ns)**2 / ((1+ns)**2 * n)) * (As/Ar)
+
+                print("min f:", np.nanmin(f), "Hz")
+                print("nguess min/max:", np.nanmin(n), np.nanmax(n))
+                if np.any(n <= 0):
+                    neg = True
+                else:
+                    neg = False
+                print("Aref min:", np.nanmin(Ar), "As min:", np.nanmin(As))
+                print("log_arg finite fraction:", np.isfinite(log_arg).mean())
+                print("log_arg <= 0 fraction:", (log_arg <= 0).mean())
+                print("any nan in As/Ar:", np.isnan(As/Ar).any())
+                print("any nan in phidiff/phioff:", np.isnan(phidifference[skipindex:]).any(), np.isnan(phioffset[skipindex:]).any())
+
+
+
                 kguess = -cs.c/(2*np.pi*thickness*sample_freq_axis[skipindex:])*np.log(((nguess+ns)**2/(1+ns)**2/nguess)*(sample_amp_axis[skipindex:]/reference_amp_axis[skipindex:]))
                 print("kguess is nan - need to debug")
-                breakpoint()
+                if any(np.isnan(kguess)):
+                    print("kguess contains NaN values, likely due to invalid logarithm arguments.")
+                    if neg:
+                        warnings.append("NEG AND NAN FOUND")
+                
+                # breakpoint()
                 #calculates complex permittivity
                 eps1 = nguess**2-kguess**2
                 eps2 = 2*nguess*kguess
@@ -530,7 +557,7 @@ class DataSet:
                 realc = 4*np.pi*reference_freq_axis[1:]*cs.epsilon_0*nguess*kguess
                 imagc = 2*np.pi*reference_freq_axis[1:]*cs.epsilon_0*(eps_inf-nguess**2+kguess**2)
 
-                breakpoint()
+                # breakpoint()
 
                 physical_params = {
                     # 'Dynamic Range Improvement (dB)': DRimpr,
