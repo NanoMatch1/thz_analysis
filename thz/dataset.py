@@ -351,9 +351,11 @@ class DataSet:
                 plt.plot(time_axis, std_dev, label=filename)
             plt.xlabel('Time (ps)')
             plt.ylabel('Standard Deviation')
-            plt.title('Standard Deviation Across Scans')
+            plt.title(f'Standard Deviation Across {limit} Scans')
             plt.legend()
             plt.show()
+
+        return std_dev_dict
 
     def calculate_SNR_all(self, show_graph=False, limit=None) -> None:
         '''Calculates the signal-to-noise ratio across the time domain for all THzData objects in the dataset.'''

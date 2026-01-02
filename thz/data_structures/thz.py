@@ -192,6 +192,16 @@ class THzData:
         '''Compresses the dataset by removing redundant X-axis data from each scan.'''
         for obj in self.data_list:
             obj._compress_data()
+
+    def average_data(self, limit=None) -> np.array:
+        '''Public method to average the data across number of chosen scans.'''
+        data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list[:limit]])
+        std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list[:limit]))
+        mean_data = np.mean(data_matrix, axis=0)
+        time_axis = self.data_list[0].raw_data[:, 0]
+        averaged_data = np.column_stack((time_axis, mean_data, std_error))
+        return averaged_data
+
         
     def _average_data(self) -> np.array:
         '''returns array of:
