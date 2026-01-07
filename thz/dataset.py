@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
+from thz.io.dat_loader import DATLoader
 from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
@@ -210,9 +211,33 @@ class DataSet:
         loader = ACCLoader(filepath)
         thz_data = loader.load()
         return thz_data
+    
+    def load_dat_data(self, filename: str) -> THzData:
+        '''Loads a specific dat file and returns a THzData object.'''
+        import os
 
-    def load_all_data(self) -> None:
-        '''Loads all acc files in the specified directory into the data_dict attribute.'''
+        filepath = os.path.join(self.file_dir, filename)
+        loader = DATLoader(filepath)
+        thz_data = loader.load()
+        return thz_data
+    
+    def load_all_dat_files(self) -> None:
+        '''Loads all dat files in the specified directory into the data_dict attribute.'''
+
+        filelist = []
+        for filename in os.listdir(self.file_dir):
+            if filename.endswith('.dat'):
+                thz_data = self.load_dat_data(filename)
+                self.data.add_item(filename, thz_data)
+                filelist.append(filename)
+
+        self.data.update_filelist(filelist=filelist)
+
+        return self.data
+            
+
+    def load_all_data(self, data_type='acc') -> None:
+        '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.'''
 
         filelist = []
 

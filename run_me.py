@@ -16,9 +16,11 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_2'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2025-12-22\main'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-07_noise'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
-    data_set.load_all_data()
+    # data_set.load_all_data()
+    data_set.load_all_data(loader_type=DATLoader)
     data_set.load_constants(constants)
 
     # for filename, thzdata in data_set.data.items():
@@ -35,8 +37,14 @@ if __name__ == "__main__":
     # data_set.plot_current(error_bars=False)
     # data_set.plot_current(error_bars=False, normalise=False)
 
+    # manual x axis for comparison -------
+    for filename, thzdata in data_set.data.items():
+        x_axis = np.arange(thzdata.raw_data.shape[0])
+        thzdata._data = np.column_stack((x_axis, thzdata.raw_data[:,1], np.zeros_like(x_axis)))
+    # data_set.plot_current()
+
     # noise analysis -------
-    test = data_set.calculate_std_dev_all(show_graph=True, limit=3)
+    test = data_set.calculate_std_dev_all(show_graph=True, limit=5)
     for filename, data in test.items():
         std_dev = np.std(data, axis=0)
         # std_dev = round(std_dev, 7)
