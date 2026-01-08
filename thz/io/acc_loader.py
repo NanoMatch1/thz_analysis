@@ -7,6 +7,7 @@ from os import path
 
 class ACCLoader:
 
+    extension = '.acc'
     errors = []
 
     def __init__(self, filepath: str) -> None:
@@ -66,6 +67,6 @@ class ACCLoader:
             data = self._parse_data(value['spectrum'])
             new_data.append(BaseTHzData(data=data, headers=value['header'])) # parse each scan into BaseTHzData object
         
-        return THzData(data=new_data, header=None, filename=self.filename)
+        return THzData(data=new_data, header=None, filename=self.filename, data_type='acc')
 
         

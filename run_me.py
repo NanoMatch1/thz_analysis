@@ -1,8 +1,31 @@
 import os
 from thz.dataset import DataSet, Constants
-
+import numpy as np
+import matplotlib.pyplot as plt
 
 file_dir = os.path.join(os.path.dirname(__file__), 'thz', 'data')
+
+def monitor_analysis(data_set: DataSet):
+    # monotor analysis function
+    data_set.load_all_dat_files()
+
+        # manual x axis for comparison -------
+    for filename, thzdata in data_set.data.items():
+        x_axis = np.arange(thzdata.raw_data.shape[0])
+        new_data = np.column_stack((x_axis, thzdata.raw_data[:,1], np.zeros_like(x_axis)))
+        thzdata._time_data = new_data
+        thzdata._data = new_data
+
+    data_set.plot_current(line_alpha=0.5)
+
+    for filename, thz_data in data_set.data.items():
+        data = thz_data.data[:, 1]
+        plt.plot(data, label=filename)
+        plt.legend()
+        plt.show()
+        std_dev = np.std(data, axis=0)
+        # std_dev = round(std_dev, 10)
+        print(f"File: {filename}, Std Dev: {std_dev}")
 
 if __name__ == "__main__":
     import numpy as np
@@ -15,14 +38,18 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_2'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2025-12-22\main'
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-07_noise'
+    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2025-12-22\main'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-07_noise_STE\test2'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
-    # data_set.load_all_data()
-    data_set.load_all_data(loader_type=DATLoader)
-    data_set.load_constants(constants)
 
+    monitor_analysis(data_set)
+    breakpoint()
+    # data_set.load_all_data()
+    # data_set.load_all_data(loader_type='dat')
+    data_set.load_all_dat_files()
+    data_set.load_constants(constants)
+    # data_set.plot_current()
     # for filename, thzdata in data_set.data.items():
     #     dataX = thzdata.raw_data[:, 0]
     #     dataY = thzdata.raw_data[:, 1]

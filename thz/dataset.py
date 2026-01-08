@@ -205,7 +205,6 @@ class DataSet:
     
     def load_data(self, filename: str) -> THzData:
         '''Loads a specific acc file and returns a THzData object.'''
-        import os
 
         filepath = os.path.join(self.file_dir, filename)
         loader = ACCLoader(filepath)
@@ -214,7 +213,7 @@ class DataSet:
     
     def load_dat_data(self, filename: str) -> THzData:
         '''Loads a specific dat file and returns a THzData object.'''
-        import os
+        #TODO: refactor to use registry
 
         filepath = os.path.join(self.file_dir, filename)
         loader = DATLoader(filepath)
@@ -223,6 +222,7 @@ class DataSet:
     
     def load_all_dat_files(self) -> None:
         '''Loads all dat files in the specified directory into the data_dict attribute.'''
+        #TODO: refactor to use registry
 
         filelist = []
         for filename in os.listdir(self.file_dir):
@@ -236,8 +236,9 @@ class DataSet:
         return self.data
             
 
-    def load_all_data(self, data_type='acc') -> None:
+    def load_all_data(self, extension='.acc') -> None:
         '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.'''
+
 
         filelist = []
 

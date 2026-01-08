@@ -78,7 +78,7 @@ class THzData:
         self.data_list = data  # list of BaseTHz objects for each scan
         self.raw_data = self._compile_data_array()  # np.array of compiled data from all scans
         self.headers = header if header is not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
-        self.data_type = None  # 'sample' or 'reference'
+        self.data_type = kwargs.get('data_type', None) # e.g. 'acc', 'dat', etc.
         self.filename = kwargs.get('filename', 'unknown_file')
 
         self._meta_data = {} # stores statistical data like noise estimates, phase offset, etc. to be recalled in future processing steps
@@ -642,7 +642,8 @@ class THzData:
         else:
             fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
             show_plot = True
-        ax.plot(time, mean_amplitude, '-', label=self.filename)
+        line_alpha = kwargs.get('line_alpha', 1.0)
+        ax.plot(time, mean_amplitude, '-', label=self.filename, alpha=line_alpha)
         if error_bars:
             ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
                  alpha=kwargs.get('alpha', 0.3), color='tab:red')

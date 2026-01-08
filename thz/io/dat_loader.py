@@ -7,6 +7,7 @@ from os import path
 
 class DATLoader:
 
+    extension = '.dat'
     errors = []
 
     def __init__(self, filepath: str) -> None:
@@ -37,7 +38,7 @@ class DATLoader:
         return numeric_data
 
     def _simple_split(self, raw_data: str):
-        '''Parses the data from simple_load method.'''
+        '''Parses the data from simple_load method. Returns a dict with single scan to mimic the acc data structure for THz analysis methods.'''
 
         header = []
         spectrum = []
@@ -52,17 +53,19 @@ class DATLoader:
                     continue
                 spectrum.append(row)
 
-        return {'header': header, 'spectrum': spectrum}
+        scan_dict = {'scan_0': {'header': header, 'spectrum': spectrum}}
+        return scan_dict
 
     def load(self):
         '''Loads the data using simple load and parse methods.'''
         new_data = []
         raw_data = self._simple_load()
         parsed_data = self._simple_split(raw_data)
+        
         for key, value in parsed_data.items():
             data = self._parse_data(value['spectrum'])
             new_data.append(BaseTHzData(data=data, headers=value['header'])) # parse each scan into BaseTHzData object
         
-        return THzData(data=new_data, header=None, filename=self.filename)
+        return THzData(data=new_data, header=None, filename=self.filename, data_type='dat')
 
         
