@@ -47,7 +47,7 @@ if __name__ == "__main__":
     data_set.load_constants(constants)
     # data_set.plot_current()
     data_set.data.info
-    data_set.group_files(keywords=['type', 'series', 'power'])
+    data_set.group_files(keywords=['type', 'series'])
     breakpoint()
 
     data_set.centerpad_legacy()

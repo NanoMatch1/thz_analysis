@@ -22,22 +22,31 @@ class TemperatureItem:
 
 class FilenameItem:
 
+
     def __init__(self, filename: str, keywords=['type', 'series', 'temp'],**kwargs):
+        self.report_list = ['data_type', 'series']
         self.filename = filename
-        self.temperature = None
         self.series = None
         self.data_type = None
-        self.extra_details = None
         self.keywords = keywords
 
+        self.extra_details = None
         self.air_reference = None
         self.substrate_reference = None
 
         self._parse_filename(keywords=self.keywords, **kwargs)
 
     def __repr__(self):
-        # details = 
-        return f"Filename: {self.filename}\n -> type: {self.data_type}\n -> series:{self.series}\n -> temperature: {self.temperature}\n -> extra_details: {self.extra_details}\n -> air_reference: {self.air_reference}\n -> substrate_reference: {self.substrate_reference}\n"
+        # details =
+        infolist = []
+        for key in self.report_list:
+            value = self.__dict__.get(key, None)
+            infolist.append(f" -> {key}: {value}")
+        
+        for key in ['extra_details', 'air_reference', 'substrate_reference']:
+            infolist.append(f" -> {key}: {self.__dict__.get(key, None)}")
+        
+        return f"Filename: {self.filename}\n" + "\n".join(infolist)
     
     def __str__(self):
         return self.filename
@@ -46,7 +55,6 @@ class FilenameItem:
         '''Parses the filename into components based on provided delimiter and keywords order.'''
 
         details = '.'.join(self.filename.split('.')[:-1]) # Remove file extension
-
         components = details.split(delimiter)
         components = [comp.strip() for comp in components if comp.strip()] # remove empty strings and whitespace
 
@@ -64,6 +72,7 @@ class FilenameItem:
                     self.temperature = value
                 else:
                     self.__dict__[key] = value
+                    self.report_list.append(key) # add new keyword report list
 
         # handle any extra components *after* assigning main fields
         if len(components) > len(keywords):
@@ -83,7 +92,7 @@ class GroupingService:
         self.filelist = kwargs.get('filelist', [])
         self.file_items = {}
         self.keywords = keywords
-        self.filename_groups = {}
+        self.filename_groups = []
         self.global_reference = {}
         self.keywords = keywords
         self.delimiter = delimiter
@@ -98,6 +107,10 @@ class GroupingService:
         print(f"Current delimiter: '{self.delimiter}'")
         print(f"Number of filename groups: {len(self.filename_groups)}")
 
+    @property
+    def elaborate(self):
+        for filename, item in self.file_items.items():
+            print(item.__repr__())
 
     def set_grouping_keywords(self, new_keywords):
         self.keywords = new_keywords
@@ -154,7 +167,7 @@ class GroupingService:
             self.filelist.append(filename)
         
         self._current_data_list = self.filelist # note this is a shallow copy, i.e. a reference to filelist, and will follow any changes made to it.
-        self._build_fileitems()
+        # self._build_fileitems()
 
     def _build_fileitems(self, **kwargs):
         '''Builds FilenameItem objects for each filename in the filelist.'''
@@ -174,14 +187,31 @@ class GroupingService:
         for item in self.file_items.values():
             item._parse_filename(**kwargs)
 
-    def _group_by_temperature(self):
-        '''If temperature is part of the grouping, further groups files by temperature within each series. Operates on existing filename_groups objects.'''
+    def _group_by_keyword(self, keyword):
+        '''Tries to return a dictionary of files grouped by the keyword, if the keyword is present in the filename and itentified by the grouping service.'''
 
-        for series, temps in self.filename_groups.items():
-            for temp, data in temps.items():
-                if 'reference' not in data.keys():
-                    if 'substrate' in self.global_reference and temp in self.global_reference['substrate']:
-                        data['reference'] = self.global_reference['substrate'][temp]
+        grouping_dict = {}
+
+        for filename, fileitem in self.file_items.values():
+            key_value = getattr(fileitem, keyword, None)
+            if key_value is None:
+                continue
+            if key_value not in grouping_dict:
+                grouping_dict[key_value] = {filename: fileitem}
+            else:
+                grouping_dict[key_value][filename] = fileitem
+            
+        return grouping_dict
+    
+    def _identify_global_references(self):
+        for filename, item in self.file_items.items():
+            if item.data_type == 'reference' and 'air' in item.series.lower(): # special case for air reference
+                self.global_reference['air'] = item.filename 
+                continue
+            elif item.data_type == 'reference' and 'substrate' in item.series.lower(): # special case for substrate reference
+                self.global_reference['substrate'] = item.filename 
+                continue
+  
 
     def simple_grouping(self, delimiter='_', keywords=['type', 'series', 'temp']):
         '''Groups data by slicing the filename. Expects filename to contain data outlined in keywords, and does not (yet) logically check those parameters.
@@ -194,31 +224,9 @@ class GroupingService:
 
         self._build_fileitems(delimiter=delimiter, keywords=keywords, merge_extra=True)
         self.parse_filenames()
-        
-        for filename, item in self.file_items.items(): #
-            if item.data_type == 'reference' and item.series == 'substrate': # special case for substrate reference
-                if 'substrate' not in self.global_reference:
-                    self.global_reference['substrate'] = {item.temperature: item.filename}
-                else:
-                    self.global_reference['substrate'][item.temperature] = item.filename
-                continue
-
-            if item.data_type == 'reference' and 'air' in item.series.lower(): # special case for air reference
-                self.global_reference['air'] = item.filename 
-                continue
-
-            if filename not in self.filename_groups:
-                self.filename_groups[filename] = {}
-            if item.temperature not in self.filename_groups[filename]:
-                self.filename_groups[filename][item.temperature] = {}
-            self.filename_groups[filename][item.temperature][item.data_type] = item.filename
-        
-        breakpoint()
-        # Attach global references
-        if 'temp' in keywords:
-            self._group_by_temperature()
-
+        self._identify_global_references()
         print("Completed simple grouping of filenames.")
+
         self.integrity_check()
         self._pair_references()
 
@@ -231,12 +239,12 @@ class GroupingService:
             warnings.append("Warning: No air reference found in global references.")
         if 'substrate' not in self.global_reference.keys():
             warnings.append("Warning: No substrate reference found in global references.")
-        for series, temps in self.filename_groups.items():
-            for temp, data in temps.items():
-                if 'sample' not in data.keys():
-                    warnings.append(f"Warning: No sample found for series {series} at temperature {temp}.")
-                if 'reference' not in data.keys():
-                    warnings.append(f"Warning: No reference found for series {series} at temperature {temp}.")
+        # for series, temps in self.filename_groups.items():
+        #     for temp, data in temps.items():
+        #         if 'sample' not in data.keys():
+        #             warnings.append(f"Warning: No sample found for series {series} at temperature {temp}.")
+        #         if 'reference' not in data.keys():
+        #             warnings.append(f"Warning: No reference found for series {series} at temperature {temp}.")
         
         if warnings:
             for warning in warnings:
@@ -245,19 +253,33 @@ class GroupingService:
             print("Integrity check passed: All groups have required components.")
         
     def _pair_references(self):
-        '''Works through filename_groups to pair reference to the sample file_items.'''
+        '''Works through file_items to pair reference and samples based on the number of unique grouping keyword identifiers. Currently matches on all provided keywords except 'data_type' and 'series'. If no extra keywords are provided, matches all samples to global substrate reference.'''
+
+        references = {filename: item for filename, item in self.file_items.items() if item.data_type == 'reference'}
+        samples = {filename: item for filename, item in self.file_items.items() if item.data_type == 'sample'}
         
-        for series, temps in self.filename_groups.items():
-            for temp, data in temps.items():
-                sample_file = data.get('sample', None)
-                reference_file = data.get('reference', None)
+        for filename, fileitem in samples.items():
+            keywords = fileitem.report_list.copy()
+            keywords.remove('data_type')  # remove type to match on other keywords
+            keywords.remove('series')  # remove series to match on other keywords 
+            match_criteria = {key: getattr(fileitem, key, None) for key in keywords}
 
-                if sample_file is not None:
-                    sample_item = self.file_items[sample_file]
-                    # reference_item = self.file_items[reference_file]
+            if match_criteria == {}:
+                # if no extra keywords to match on, assign global substrate reference
+                fileitem.substrate_reference = self.global_reference.get('substrate', None)
+                continue
 
-                    sample_item.substrate_reference = reference_file
-                    sample_item.air_reference = self.global_reference.get('air', None)
+            # Find matching reference
+            for ref_filename, ref_item in references.items():
+                match = True
+                for key, value in match_criteria.items():
+                    if getattr(ref_item, key, None) != value:
+                        match = False
+                        break
+                if match:
+                    if ref_item.data_type == 'reference':
+                        fileitem.substrate_reference = ref_filename
+                        fileitem.air_reference = self.global_reference.get('air', None)
 
     def _separate_by_delimiters(self, delimiter=None):
         '''Separates a filename into components based on provided delimiters.'''
