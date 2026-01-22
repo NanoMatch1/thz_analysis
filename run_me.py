@@ -48,7 +48,7 @@ if __name__ == "__main__":
     # data_set.plot_current()
     data_set.data.info
     data_set.group_files(keywords=['type', 'series'])
-    breakpoint()
+
 
     data_set.centerpad_legacy()
     data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10)
@@ -74,10 +74,10 @@ if __name__ == "__main__":
 
 
     for idx, (series, data_dict) in enumerate(transfer.items()):
-            # order the dict based on temperature
-        data_dict = dict(sorted(data_dict.items(), key=lambda item: float(item[0].split('_')[2].split('K')[0])))
+        #     # order the dict based on temperature
+        # data_dict = dict(sorted(data_dict.items(), key=lambda item: float(item[0].split('_')[2].split('K')[0])))
         
-        colormap = plt.get_cmap('plasma')
+        colormap = plt.get_cmap('viridis')
         colors = colormap(np.linspace(0, 1, len(data_dict)))
 
         for index, (filename, output) in enumerate(data_dict.items()):
