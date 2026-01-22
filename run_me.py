@@ -20,12 +20,14 @@ def monitor_analysis(data_set: DataSet):
 
     for filename, thz_data in data_set.data.items():
         data = thz_data.data[:, 1]
-        plt.plot(data, label=filename)
-        plt.legend()
-        plt.show()
+        # plt.plot(data, label=filename)
+        # plt.legend()
+        # plt.show()
         std_dev = np.std(data, axis=0)
         # std_dev = round(std_dev, 10)
         print(f"File: {filename}, Std Dev: {std_dev}")
+
+    breakpoint()
 
 if __name__ == "__main__":
     import numpy as np
@@ -40,14 +42,21 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2025-12-22\main'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-07_noise_STE\test2'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_3' # before/after modification of power supply
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-09_znte_test4' # with/without 1 ohm resistor
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-12_STE_noise' # 25 ohm RC
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_5_ZnTe' # 25 ohm RC
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_6_STE' # 25 ohm RC
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_8' # 25 ohm RC
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_12'
+    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_4_hero' # 25 ohm RC
+
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
 
     monitor_analysis(data_set)
-    breakpoint()
-    # data_set.load_all_data()
-    # data_set.load_all_data(loader_type='dat')
-    data_set.load_all_dat_files()
+
+    data_set.load_all_data()
     data_set.load_constants(constants)
     # data_set.plot_current()
     # for filename, thzdata in data_set.data.items():
