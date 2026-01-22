@@ -37,68 +37,19 @@ if __name__ == "__main__":
         eps_inf = 1, # glass 3.42, Si 11.6
         ns = 1.9, #substate n
 )
-    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest'
-    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_2'
-    # file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
-    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2025-12-22\main'
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-07_noise_STE\test2'
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_3' # before/after modification of power supply
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-09_znte_test4' # with/without 1 ohm resistor
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-12_STE_noise' # 25 ohm RC
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_5_ZnTe' # 25 ohm RC
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_6_STE' # 25 ohm RC
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_8' # 25 ohm RC
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_12'
-    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_4_hero' # 25 ohm RC
-
+    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
 
-    monitor_analysis(data_set)
+    # monitor_analysis(data_set)
 
     data_set.load_all_data()
     data_set.load_constants(constants)
     # data_set.plot_current()
-    # for filename, thzdata in data_set.data.items():
-    #     dataX = thzdata.raw_data[:, 0]
-    #     dataY = thzdata.raw_data[:, 1]
-    #     thzdata._data = np.column_stack((dataX, dataY, np.zeros_like(dataY)))
-
-    # data_set.plot_current()
-    # for filename, thzdata in data_set.data.items():
-    #     averaged_data = thzdata.average_data(limit=3)
-    #     thzdata._data = averaged_data
-    
-
-    # data_set.plot_current(error_bars=False)
-    # data_set.plot_current(error_bars=False, normalise=False)
-
-    # manual x axis for comparison -------
-    for filename, thzdata in data_set.data.items():
-        x_axis = np.arange(thzdata.raw_data.shape[0])
-        thzdata._data = np.column_stack((x_axis, thzdata.raw_data[:,1], np.zeros_like(x_axis)))
-    # data_set.plot_current()
-
-    # noise analysis -------
-    test = data_set.calculate_std_dev_all(show_graph=True, limit=5)
-    for filename, data in test.items():
-        std_dev = np.std(data, axis=0)
-        # std_dev = round(std_dev, 7)
-        print(f"File: {filename}, Std Dev: {std_dev}")
+    data_set.data.info
+    data_set.group_files(keywords=['type', 'series', 'power'])
     breakpoint()
-    data_set.calculate_SNR_all(show_graph=True, limit=2)
-    # data_set.compare_time_constants(limit=10, normalise=False)
-    # ------
 
-    # test = data_set.grabone()
-    # test.plot_current()
-    # test.plot_current()
-    # test._interpolate_time_axis(new_limits=(, 140))
-    # data_set.interpolate_pulse_window()
-    data_set.group_files()
-    # data_set.center_pad_window_all(length_factor=5, window_alpha=0.2)
-    # data_set.centerpad_legacy()
-    # data_set.edge_window_pad()
     data_set.centerpad_legacy()
     data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10)
     # data_set.plot_current()

@@ -42,15 +42,15 @@ class FilenameItem:
     def __str__(self):
         return self.filename
 
-    def _parse_filename(self, delimiter: str = '_', grouping: list = ['type', 'series', 'temp'], **kwargs):
-        '''Parses the filename into components based on provided delimiter and grouping order.'''
+    def _parse_filename(self, delimiter: str = '_', keywords: list = ['type', 'series', 'temp'], **kwargs):
+        '''Parses the filename into components based on provided delimiter and keywords order.'''
 
         details = '.'.join(self.filename.split('.')[:-1]) # Remove file extension
 
         components = details.split(delimiter)
         components = [comp.strip() for comp in components if comp.strip()] # remove empty strings and whitespace
 
-        for index, key in enumerate(grouping):
+        for index, key in enumerate(keywords):
             if index < len(components):
                 value = components[index]
                 if key == 'type':
@@ -66,8 +66,8 @@ class FilenameItem:
                     self.__dict__[key] = value
 
         # handle any extra components *after* assigning main fields
-        if len(components) > len(grouping):
-            extras = components[len(grouping):]
+        if len(components) > len(keywords):
+            extras = components[len(keywords):]
             if kwargs.get('merge_extra', False):
                 self.series = delimiter.join([self.series, *extras])
             self.extra_details = extras
@@ -90,6 +90,14 @@ class GroupingService:
         self.__dict__.update(kwargs)
 
         self._current_data_list = []
+
+    @property
+    def info(self):
+        print(f"GroupingService with {len(self.filelist)} files.")
+        print(f"Current grouping keywords: {self.keywords}")
+        print(f"Current delimiter: '{self.delimiter}'")
+        print(f"Number of filename groups: {len(self.filename_groups)}")
+
 
     def set_grouping_keywords(self, new_keywords):
         self.keywords = new_keywords
@@ -155,22 +163,36 @@ class GroupingService:
             item = FilenameItem(filename, **kwargs)
             self.file_items[filename] = item
 
-    def parse_filenames(self, keywords=None, **kwargs):
+    def parse_filenames(self, **kwargs):
         '''Parses all filenames in file_items using provided delimiters and grouping order.'''
 
-        if keywords is None:
+        # Use existing keywords if none provided
+        if kwargs.get('keywords', None) is None:
             keywords = self.keywords
+            kwargs['keywords'] = keywords
 
         for item in self.file_items.values():
-            item._parse_filename(grouping=keywords, **kwargs)
+            item._parse_filename(**kwargs)
 
-    def simple_grouping(self, delimiter='_', grouping=['type', 'series', 'temp']):
-        '''Groups data by slicing the filename. Expects filename to contain data outlined in grouping, and does not (yet) logically check those parameters.
+    def _group_by_temperature(self):
+        '''If temperature is part of the grouping, further groups files by temperature within each series. Operates on existing filename_groups objects.'''
+
+        for series, temps in self.filename_groups.items():
+            for temp, data in temps.items():
+                if 'reference' not in data.keys():
+                    if 'substrate' in self.global_reference and temp in self.global_reference['substrate']:
+                        data['reference'] = self.global_reference['substrate'][temp]
+
+    def simple_grouping(self, delimiter='_', keywords=['type', 'series', 'temp']):
+        '''Groups data by slicing the filename. Expects filename to contain data outlined in keywords, and does not (yet) logically check those parameters.
         
-        currently: grouping: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
+        currently: keywords: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
+
+        # TODO: change logic to handle type independently, then grouping is performed on these separately, and on the rest of the keywords.
+        # TODO: Pair references based on filename inclusive of delimiters after type, not just temperature.
         '''
 
-        self._build_fileitems(delimiter=delimiter, grouping=grouping, merge_extra=True)
+        self._build_fileitems(delimiter=delimiter, keywords=keywords, merge_extra=True)
         self.parse_filenames()
         
         for filename, item in self.file_items.items(): #
@@ -185,18 +207,16 @@ class GroupingService:
                 self.global_reference['air'] = item.filename 
                 continue
 
-            if item.series not in self.filename_groups:
-                self.filename_groups[item.series] = {}
-            if item.temperature not in self.filename_groups[item.series]:
-                self.filename_groups[item.series][item.temperature] = {}
-            self.filename_groups[item.series][item.temperature][item.data_type] = item.filename
+            if filename not in self.filename_groups:
+                self.filename_groups[filename] = {}
+            if item.temperature not in self.filename_groups[filename]:
+                self.filename_groups[filename][item.temperature] = {}
+            self.filename_groups[filename][item.temperature][item.data_type] = item.filename
         
+        breakpoint()
         # Attach global references
-        for series, temps in self.filename_groups.items():
-            for temp, data in temps.items():
-                if 'reference' not in data.keys():
-                    if 'substrate' in self.global_reference and temp in self.global_reference['substrate']:
-                        data['reference'] = self.global_reference['substrate'][temp]
+        if 'temp' in keywords:
+            self._group_by_temperature()
 
         print("Completed simple grouping of filenames.")
         self.integrity_check()

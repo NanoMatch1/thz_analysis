@@ -18,6 +18,12 @@ class DataService:
         self.all = self._data_dict # alias for convenience
         self.grouping = GroupingService()
 
+    @property
+    def info(self):
+        print(f"DataService with {len(self._data_dict)} items.")
+        for filename, item in self._data_dict.items():
+            print(item)
+
     def __repr__(self):
         return f"DataService with {len(self._data_dict)} items."
 
@@ -77,6 +83,9 @@ class DataService:
     def update_filelist(self, filelist):
         self.grouping.update(filelist=filelist)
 
+    def group_simple(self, **kwargs):
+        '''Simple grouping based on sample and reference keys provided during initialization.'''
+        self.grouping.simple_grouping(**kwargs)
 
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
@@ -130,6 +139,7 @@ class DataSet:
     def __init__(self, file_dir: str, **kwargs) -> None:
         self.file_dir = file_dir
         self.data = DataService()
+        self.grouping = self.data.grouping # alias for convenience
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
@@ -150,6 +160,10 @@ class DataSet:
         current_data_dict = {key: self._data_dict[key] for key in current_data_list}
 
         return current_data_dict
+    
+    def group_simple(self, **kwargs):
+        '''Simple grouping based on sample and reference keys provided during initialization.'''
+        self.grouping.simple_grouping(sample_keys=self.sample_keys, reference_keys=self.reference_keys)
     
     def add_item(self, filename, obj):
         self._data_dict[filename] = obj
@@ -427,7 +441,7 @@ class DataSet:
 
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
-        self.data.grouping.simple_grouping()
+        self.data.group_simple(**kwargs)
 
     def get_file_item(self, filename):
         '''Access the grouping information for a specific filename.'''
