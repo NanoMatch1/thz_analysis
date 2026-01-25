@@ -37,7 +37,8 @@ if __name__ == "__main__":
         eps_inf = 1, # glass 3.42, Si 11.6
         ns = 1.9, #substate n
 )
-    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO'
+    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-01-23_MINTS_2'
+    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
 
@@ -45,14 +46,37 @@ if __name__ == "__main__":
 
     data_set.load_all_data()
     data_set.load_constants(constants)
-    # data_set.plot_current()
+    data_set.plot_current()
+    # std_dev_dict = data_set.calculate_std_dev_all(limit=8)
+    # fig, ax = plt.subplots(2,1, figsize=(12,6))
+
+    # values = []
+    # max_values = []
+
+    # for filename, thzdata in data_set.data.items():
+    #     data = thzdata.raw_data[:, 1:9]
+    #     data = np.average(data, axis=1)
+    #     std_dev = np.std(thzdata.raw_data[:, 1:9], axis=1)
+    #     ax[0].plot(data, label=filename)
+    #     ax[1].plot(std_dev, label=filename)
+    #     values.append(np.average(std_dev[:20]))
+    
+    # ax[0].legend()
+    # ax[0].set_title('Averaged signal')
+    # ax[1].legend()
+    # ax[1].set_title('Standard Deviation across Averages')
+    # improvement = (max(values)/min(values)) 
+    # ax[1].set_xlabel(f'Average Std Dev Improvement: {improvement:.6f}')
+        
+    # plt.show()
+
     data_set.data.info
     data_set.group_files(keywords=['type', 'series'])
 
 
+    data_set.plot_current()
     data_set.centerpad_legacy()
-    data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10)
-    # data_set.plot_current()
+    data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=False)
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
     # data_set.plot_fft_current(series='fft_edge_windowed')

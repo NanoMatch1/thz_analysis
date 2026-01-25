@@ -100,11 +100,11 @@ def edge_window(df, alpha=0.2, **kwargs) -> pd.DataFrame:
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(8, 5))
-        plt.plot(df['Time (ps)'], df['Mean'], label='Original', alpha=0.5, linewidth=4)
+        plt.plot(df['Time (ps)'], df['Mean'], label='Original', alpha=0.5, linewidth=3)
         plt.plot(df_windowed['Time (ps)'], df_windowed['Mean'], label='Windowed')
         plt.xlabel('Time (ps)')
         plt.ylabel('Mean')
-        plt.title('Edge Windowing with Tukey Window')
+        plt.title('Edge Windowing with Tukey Window (alpha={})'.format(alpha))
         plt.legend()
         plt.grid()
         plt.show()
