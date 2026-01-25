@@ -9,6 +9,8 @@ from thz.services.grouping import GroupingService
 from collections.abc import Mapping
 from thz.data_structures.helpers import df_to_dict
 
+# TODO: Adding subplots to FigureObject for multi-axis plots
+
 
 class DataService:
     '''Custom dict-like object holds data and accesses it as needed. Holds master data dictionary and allows access to subsets via filename keys.'''
@@ -25,6 +27,12 @@ class DataService:
     @property
     def samples(self):
         return self.grouping.samples
+    
+    def is_reference(self, filename):
+        return self.grouping.is_reference(filename)
+
+    def is_sample(self, filename):
+        return self.grouping.is_sample(filename)
 
     @property
     def info(self):
@@ -116,6 +124,11 @@ class FigureObject:
 
     def clear(self):
         self.ax.clear()
+
+    def add_subplot(self, *args, **kwargs):
+        ax = self.figure.add_subplot(*args, **kwargs)
+        return ax
+
 
 class Constants:
 
@@ -686,3 +699,36 @@ class DataSet:
         for thz_data in self.data.values():
             # thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
             thz_data.prepare_for_fft(time_window=time_window, baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, **kwargs)
+
+    def plot_all_reference_and_data(self):
+        '''Plots all sample and reference THzData objects in the dataset for comparison.'''
+        fig, ax = plt.subplots(2, 1, sharex=True)
+        # figure_obj = self._generate_figure_object('main')
+        # figure_obj.clear()
+        
+        # ax = (figure_obj.add_subplot(1,1,1), figure_obj.add_subplot(2,1,2))
+
+        for filename, thz_data in self.data.items():
+            group_info = self.data.grouping(filename)
+
+            if group_info.data_type == 'reference':
+                data = thz_data.data
+                ax[0].plot(data[:,0], data[:,1], label=f'Reference: {filename}')
+                # (figure_obj=figure_obj, label=f'Reference: {filename}')
+            elif group_info.data_type == 'sample':
+                data = thz_data.data
+                ax[1].plot(data[:,0], data[:,1], label=f'Sample: {filename}')
+                # thz_data.plot_current(figure_obj=figure_obj, label=f'Sample: {filename}')
+            else:
+                print(f"Unknown data type for file {filename}, skipping plot.")
+
+        ax[0].set_title('Reference Data')
+        ax[0].set_xlabel('Time (ps)')
+        ax[0].set_ylabel('Amplitude')
+        ax[0].legend()
+        ax[1].set_title('Sample Data')
+        ax[1].set_xlabel('Time (ps)')
+        ax[1].set_ylabel('Amplitude')
+        ax[1].legend()
+
+        plt.show()

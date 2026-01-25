@@ -75,13 +75,21 @@ if __name__ == "__main__":
 
     references = data_set.data.references
     samples = data_set.data.samples
+
+    data_set.plot_all_reference_and_data()
     fig, ax = plt.subplots(2, 1, figsize=(10,8), sharex=True)
-    for filename, fileitem in references.items():
-        thzdata = data_set.data[filename]
-        ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
-    for filename, fileitem in samples.items():
-        thzdata = data_set.data[filename]
-        ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    # for filename, fileitem in references.items():
+    #     thzdata = data_set.data[filename]
+    #     ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    # for filename, fileitem in samples.items():
+    #     thzdata = data_set.data[filename]
+    #     ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    for filename, thzdata in data_set.data.items():
+        if data_set.data.is_reference(filename):
+            ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+        elif data_set.data.is_sample(filename):
+            ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+        
     
     ax[0].set_title('References')
     ax[0].legend()

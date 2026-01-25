@@ -27,7 +27,7 @@ class FilenameItem:
         self.report_list = ['data_type', 'series']
         self.filename = filename
         self.series = None
-        self.data_type = None
+        self.data_type = None # 'sample' or 'reference'
         self.keywords = keywords
 
         self.extra_details = None
@@ -99,6 +99,18 @@ class GroupingService:
         self.__dict__.update(kwargs)
 
         self._current_data_list = []
+
+    def is_reference(self, filename):
+        item = self.file_items.get(filename, None)
+        if item is None:
+            return False
+        return item.data_type == 'reference'
+
+    def is_sample(self, filename):
+        item = self.file_items.get(filename, None)
+        if item is None:
+            return False
+        return item.data_type == 'sample'
 
     @property
     def info(self):
