@@ -37,7 +37,7 @@ if __name__ == "__main__":
         eps_inf = 1, # glass 3.42, Si 11.6
         ns = 1.9, #substate n
 )
-    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-01-23_MINTS_2'
+    file_dir = r'C:\Users\Sam\Data\THz\Sam\13-11-25_Co-HHTP'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
@@ -46,7 +46,7 @@ if __name__ == "__main__":
 
     data_set.load_all_data()
     data_set.load_constants(constants)
-    data_set.plot_current()
+    # data_set.plot_current()
     # std_dev_dict = data_set.calculate_std_dev_all(limit=8)
     # fig, ax = plt.subplots(2,1, figsize=(12,6))
 
@@ -71,7 +71,23 @@ if __name__ == "__main__":
     # plt.show()
 
     data_set.data.info
-    data_set.group_files(keywords=['type', 'series'])
+    data_set.group_files(keywords=['type', 'series', 'temp'])
+
+    references = data_set.data.references
+    samples = data_set.data.samples
+    fig, ax = plt.subplots(2, 1, figsize=(10,8), sharex=True)
+    for filename, fileitem in references.items():
+        thzdata = data_set.data[filename]
+        ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    for filename, fileitem in samples.items():
+        thzdata = data_set.data[filename]
+        ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    
+    ax[0].set_title('References')
+    ax[0].legend()
+    ax[1].set_title('Samples')
+    ax[1].legend()
+    plt.show()
 
 
     data_set.plot_current()

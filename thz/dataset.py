@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import pandas as pd
+# import pandas as pd
 import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
 from thz.io.dat_loader import DATLoader
@@ -17,6 +17,14 @@ class DataService:
         self._data_dict = {}
         self.all = self._data_dict # alias for convenience
         self.grouping = GroupingService()
+
+    @property
+    def references(self):
+        return self.grouping.references
+
+    @property
+    def samples(self):
+        return self.grouping.samples
 
     @property
     def info(self):

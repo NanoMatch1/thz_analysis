@@ -93,6 +93,9 @@ class THzData:
 
         self._data = self._time_data  # Current working data (time or frequency domain)
 
+        self.is_referenced = False  # Flag to indicate if data is a reference
+        self.is_sample = False     # Flag to indicate if data is a sample
+
     def __getitem__(self, key):
         """
         Backwards-compatible dictionary-style access.

@@ -294,5 +294,22 @@ class GroupingService:
             components = [comp.strip() for comp in components if comp.strip()] # remove empty strings and whitespace
             return components
 
+    @property
+    def references(self):
+        '''Returns a dictionary of all identified references in the file items.'''
+        references = {}
+        for filename, item in self.file_items.items():
+            if item.data_type == 'reference':
+                references[filename] = item
+        return references
+
+    @property
+    def samples(self):
+        '''Returns a dictionary of all identified samples in the file items.'''
+        samples = {}
+        for filename, item in self.file_items.items():
+            if item.data_type == 'sample':
+                samples[filename] = item
+        return samples
 
         
