@@ -11,6 +11,7 @@ def monitor_analysis(data_set: DataSet):
 
         # manual x axis for comparison -------
     for filename, thzdata in data_set.data.items():
+        # thzdata.raw_data = thzdata.raw_data[:30, :]
         x_axis = np.arange(thzdata.raw_data.shape[0])
         new_data = np.column_stack((x_axis, thzdata.raw_data[:,1], np.zeros_like(x_axis)))
         thzdata._time_data = new_data
@@ -37,7 +38,7 @@ if __name__ == "__main__":
         eps_inf = 1, # glass 3.42, Si 11.6
         ns = 1.9, #substate n
 )
-    file_dir = r'C:\Users\Sam\Data\THz\Sam\13-11-25_Co-HHTP'
+    file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
@@ -73,32 +74,34 @@ if __name__ == "__main__":
     data_set.data.info
     data_set.group_files(keywords=['type', 'series', 'temp'])
 
-    references = data_set.data.references
-    samples = data_set.data.samples
+    # references = data_set.data.references
+    # samples = data_set.data.samples
 
-    data_set.plot_all_reference_and_data()
-    fig, ax = plt.subplots(2, 1, figsize=(10,8), sharex=True)
-    # for filename, fileitem in references.items():
-    #     thzdata = data_set.data[filename]
-    #     ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
-    # for filename, fileitem in samples.items():
-    #     thzdata = data_set.data[filename]
-    #     ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
-    for filename, thzdata in data_set.data.items():
-        if data_set.data.is_reference(filename):
-            ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
-        elif data_set.data.is_sample(filename):
-            ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    # data_set.plot_all_reference_and_data()
+    # fig, ax = plt.subplots(2, 1, figsize=(10,8), sharex=True)
+
+    # # for filename, fileitem in references.items():
+    # #     thzdata = data_set.data[filename]
+    # #     ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    # # for filename, fileitem in samples.items():
+    # #     thzdata = data_set.data[filename]
+    # #     ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    # for filename, thzdata in data_set.data.items():
+    #     if data_set.data.is_reference(filename):
+    #         ax[0].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
+    #     elif data_set.data.is_sample(filename):
+    #         ax[1].plot(thzdata.data[:,0], thzdata.data[:,1], label=filename)
         
     
-    ax[0].set_title('References')
-    ax[0].legend()
-    ax[1].set_title('Samples')
-    ax[1].legend()
-    plt.show()
+    # ax[0].set_title('References')
+    # ax[0].legend()
+    # ax[1].set_title('Samples')
+    # ax[1].legend()
+    # plt.show()
 
 
-    data_set.plot_current()
+    # data_set.plot_current()
+    breakpoint()
     data_set.centerpad_legacy()
     data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=False)
     data_set.fft_set()

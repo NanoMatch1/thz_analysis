@@ -50,7 +50,7 @@ class DataService:
         self._data_dict[filename] = obj
 
     def __iter__(self):
-        filelist = self.grouping_service.get_current_data_list()
+        filelist = self.grouping.get_current_data_list()
         data_dict = {key: self._data_dict[key] for key in filelist}
         return iter(data_dict.values())
     
@@ -705,6 +705,7 @@ class DataSet:
         fig, ax = plt.subplots(2, 1, sharex=True)
         # figure_obj = self._generate_figure_object('main')
         # figure_obj.clear()
+        plt.tight_layout()
         
         # ax = (figure_obj.add_subplot(1,1,1), figure_obj.add_subplot(2,1,2))
 
@@ -722,11 +723,17 @@ class DataSet:
             else:
                 print(f"Unknown data type for file {filename}, skipping plot.")
 
-        ax[0].set_title('Reference Data')
-        ax[0].set_xlabel('Time (ps)')
+        # ax[0].set_title('Reference Data')
+        # ax[0].set_xlabel('Time (ps)')
         ax[0].set_ylabel('Amplitude')
+        ax[0].grid()
         ax[0].legend()
-        ax[1].set_title('Sample Data')
+        ax[0].show_xtick_labels = True
+        ax[0].tick_params(axis='x', which='both', labelbottom=True)
+        # reduce white space between subplots
+        plt.subplots_adjust(hspace=0.3)
+        # ax[1].set_title('Sample Data')
+        ax[1].grid()
         ax[1].set_xlabel('Time (ps)')
         ax[1].set_ylabel('Amplitude')
         ax[1].legend()
