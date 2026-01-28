@@ -40,7 +40,7 @@ if __name__ == "__main__":
 )
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-26'
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_15_QWP'
+    file_dir = r'C:\Users\Sam\Data\THz\test_15_QWP'
     # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
@@ -79,9 +79,10 @@ if __name__ == "__main__":
     # plt.show()
 
 
-    # data_set.plot_current()
-    breakpoint()
-    data_set.centerpad_legacy()
+    data_set.plot_current()
+    # breakpoint()
+    data_set.align_and_trim()
+    # data_set.centerpad_legacy()
     data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=False)
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')

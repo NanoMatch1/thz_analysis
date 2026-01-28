@@ -258,6 +258,13 @@ class THzData:
         self.std_dev = std_dev
         return std_dev
     
+    def find_t0_index(self) -> float:
+        '''Finds the index of the time-zero point (t0) in the averaged data as the time of maximum absolute amplitude.'''
+
+        mean_data = self._data[:, 1]
+        t0_index = int(np.argmax(np.abs(mean_data)))
+        return t0_index
+    
     def center_pulse_in_window(self) -> None:
         """
         Center the main THz pulse in the current time window by padding and

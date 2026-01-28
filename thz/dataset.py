@@ -700,6 +700,23 @@ class DataSet:
             # thz_data.prepare_for_fft(baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, show_graph=show_graph)
             thz_data.prepare_for_fft(time_window=time_window, baseline_points=baseline_points, pad_length_factor=pad_length_factor, window_alpha=window_alpha, **kwargs)
 
+    def align_and_trim(self):
+        '''Aligns all spectra to the T0 maxima, and trims the data so that they share a common time window of real data. 
+        This is the safest pretreatment method to ensure consistent frequency-domain transformation for the dataset, but sacrifices resolution in the frequency domain from trimming.
+        
+        Sequence: Baseline subtraction -> Centering and Trimming'''
+
+
+        t0_indices = {}
+
+        for filename, thz_data in self.data.items():
+            t0_index = thz_data.find_t0_index()
+            t0_indices[filename] = t0_index
+        
+
+        for thz_data in self.data.values():
+            thz_data.center_and_trim(time_window=time_window)
+
     def plot_all_reference_and_data(self):
         '''Plots all sample and reference THzData objects in the dataset for comparison.'''
         fig, ax = plt.subplots(2, 1, sharex=True)
