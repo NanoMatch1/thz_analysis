@@ -51,14 +51,95 @@ if __name__ == "__main__":
     data_set.load_constants(constants)
 
     referenced_data = []
+    intensity_data = {}
     for filename, thzdata in data_set.data.items():
-        print(thzdata)
+        if 'no-qwp' not in filename.lower():
+            data_type = 'reference'
+        else:
+            data_type = 'sample'
         data = thzdata.raw_data[:, 1:5] 
         data = np.average(data, axis=1)
         data = (data - np.min(data)) / (np.max(data) - np.min(data))
+        baseline = np.average(data[:10])
+        data = data - np.average(baseline)
+        # intensity normalization
+        # plt.plot(data, label=f'{data_type}: {filename}')
         thzdata.data[:, 1] = data
+        intensity_data[data_type] = data # add to dict for processing later
         referenced_data.append(data)
+    # plt.title('Normalized Intensity Data')
+    # plt.xlabel('Time Point Index')
+    # plt.ylabel('Normalized Intensity')
+    # plt.legend()
+    # plt.show()
         
+    # plt.show()
+    reference_intensity = intensity_data['reference']
+    sample_intensity = intensity_data['sample']
+    delta = sample_intensity - reference_intensity
+    relative_delta = sample_intensity / reference_intensity
+    intensity_comparison = np.column_stack((reference_intensity, delta, relative_delta))
+
+    plt.plot(reference_intensity, label='Reference Intensity'
+             )
+    plt.plot(sample_intensity, label='Sample Intensity')
+    plt.plot(delta, label='Delta Intensity (Sample - Reference)')
+    plt.plot(sample_intensity-reference_intensity, label='Delta Intensity manual')
+    plt.legend()
+    plt.show()
+    # plt.plot(reference_intensity, label='Reference Intensity'
+    # )
+    # plt.plot(sample_intensity, label='Sample Intensity')
+    # plt.plot(delta, label='Delta Intensity (Sample - Reference)')
+    # plt.plot(relative_delta, label='Relative Delta Intensity (Sample / Reference)')
+    # plt.title('Intensity Comparison')
+    # plt.xlabel('Time Point Index')
+    # plt.ylabel('Intensity')
+    # plt.legend()
+    # plt.show()
+
+    sorted_indexes = np.argsort(intensity_comparison[:, 0])
+    sorted_intensity = intensity_comparison[sorted_indexes]
+    fig, ax = plt.subplots(3,1)
+    ax[0].scatter(sorted_intensity[:,0], sorted_intensity[:,1], label='sorted delta', color='blue')
+    ax[0].plot(sorted_intensity[:,0], sorted_intensity[:,1], color='lightblue', alpha=0.5)
+    bestfit = np.polyfit(sorted_intensity[:,0], sorted_intensity[:,1], 1)
+    fitline = np.poly1d(bestfit)
+    ax[0].plot(sorted_intensity[:,0], fitline(sorted_intensity[:,0]), label=f'Best Fit Line {bestfit[0]:.6f}', color='red')
+    ax[0].set_title('Sorted Delta Intensity (Sample - Reference)')
+    ax[0].set_xlabel('Reference Intensity')
+    ax[0].set_ylabel('Delta Intensity')
+    ax[0].legend()
+
+
+    ax[1].scatter(intensity_comparison[:,0], intensity_comparison[:,1], label='Delta Intensity', color='orange')
+    bestfit2 = np.polyfit(intensity_comparison[:,0], intensity_comparison[:,1], 1)
+    fitline2 = np.poly1d(bestfit2)
+    ax[1].plot(intensity_comparison[:,0], fitline2(intensity_comparison[:,0]), label=f'Best Fit Line {bestfit2[0]:.6f}', color='red')
+    ax[1].set_title('Delta Intensity (Sample - Reference)')
+    ax[1].set_xlabel('Reference Intensity')
+    ax[1].set_ylabel('Delta Intensity')
+    ax[1].legend()
+
+
+    ax[2].scatter(intensity_comparison[:,0], intensity_comparison[:,2], label='Relative Delta Intensity', color='green')
+    bestfit3 = np.polyfit(intensity_comparison[:,0], intensity_comparison[:,2], 1)
+    fitline3 = np.poly1d(bestfit3)
+    ax[2].plot(intensity_comparison[:,0], fitline3(intensity_comparison[:,0]), label=f'Best Fit Line {bestfit3[0]:.6f}', color='red')
+    ax[2].set_title('Relative Delta Intensity (Sample / Reference)')
+    ax[2].set_xlabel('Reference Intensity')
+    ax[2].set_ylabel('Relative Delta Intensity')
+    ax[2].legend()
+    plt.tight_layout()
+
+    print(f"Delta Intensity Best Fit: Slope={bestfit[0]:.6f}, Intercept={bestfit[1]:.6f}")
+    print(f"Delta Intensity Best Fit 2: Slope={bestfit2[0]:.6f}, Intercept={bestfit2[1]:.6f}")
+    print(f"Relative Delta Intensity Best Fit: Slope={bestfit3[0]:.6f}, Intercept={bestfit3[1]:.6f}")
+    plt.show()
+
+
+
+
     data_set.plot_current()
     compare = np.column_stack((referenced_data[0], referenced_data[1]))
     difference = compare[:, 0] - compare[:, 1]
