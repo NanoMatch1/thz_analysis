@@ -39,7 +39,9 @@ if __name__ == "__main__":
         ns = 1.9, #substate n
 )
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
-    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-26'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_15_QWP'
+    # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
 
@@ -47,7 +49,29 @@ if __name__ == "__main__":
 
     data_set.load_all_data()
     data_set.load_constants(constants)
-    # data_set.plot_current()
+
+    referenced_data = []
+    for filename, thzdata in data_set.data.items():
+        print(thzdata)
+        data = thzdata.raw_data[:, 1:5] 
+        data = np.average(data, axis=1)
+        data = (data - np.min(data)) / (np.max(data) - np.min(data))
+        thzdata.data[:, 1] = data
+        referenced_data.append(data)
+        
+    data_set.plot_current()
+    compare = np.column_stack((referenced_data[0], referenced_data[1]))
+    difference = compare[:, 0] - compare[:, 1]
+    division = compare[:, 0] / compare[:, 1]
+    fig, ax = plt.subplots(2, 1)
+    ax[0].plot(compare[:, 0], label='Data 1')
+    ax[0].plot(compare[:, 1], label='Data 2')
+    ax[0].legend()
+    ax[1].plot(difference, label='Difference')
+    ax[1].plot(division, label='Division')
+    ax[1].legend()
+    plt.show()
+
     # std_dev_dict = data_set.calculate_std_dev_all(limit=8)
     # fig, ax = plt.subplots(2,1, figsize=(12,6))
 
@@ -70,6 +94,21 @@ if __name__ == "__main__":
     # ax[1].set_xlabel(f'Average Std Dev Improvement: {improvement:.6f}')
         
     # plt.show()
+    index_dict = {}
+    for filename, data in data_set.data.items():
+        max_index = np.argmax(np.abs(data.data[:,1]))
+        index_dict[filename] = max_index
+    minimum = min(index_dict.values())
+    for filename, data in data_set.data.items():
+
+        shift = index_dict[filename] - minimum
+        breakpoint()
+        data._data = data._data[shift:, :]
+        plt.plot(data._data[:,1], label=filename)
+    plt.legend()
+    plt.title('Data aligned to maximum point')
+    plt.show()
+    # data_set.plot_current()
 
     data_set.data.info
     data_set.group_files(keywords=['type', 'series', 'temp'])
