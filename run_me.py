@@ -41,6 +41,7 @@ if __name__ == "__main__":
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-26'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_15_QWP'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_17'
     # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
@@ -51,12 +52,15 @@ if __name__ == "__main__":
     data_set.load_constants(constants)
 
     referenced_data = []
-    intensity_data = {}
+    reference = []
+    samples = {}
+
     for filename, thzdata in data_set.data.items():
-        if 'no-qwp' not in filename.lower():
+        if 'reference' in filename.lower():
             data_type = 'reference'
         else:
             data_type = 'sample'
+
         data = thzdata.raw_data[:, 1:5] 
         data = np.average(data, axis=1)
         data = (data - np.min(data)) / (np.max(data) - np.min(data))
@@ -65,7 +69,10 @@ if __name__ == "__main__":
         # intensity normalization
         # plt.plot(data, label=f'{data_type}: {filename}')
         thzdata.data[:, 1] = data
-        intensity_data[data_type] = data # add to dict for processing later
+        if data_type == 'reference':
+            reference = data  # store reference data
+            continue
+        samples[filename] = data # add to dict for processing later
         referenced_data.append(data)
     # plt.title('Normalized Intensity Data')
     # plt.xlabel('Time Point Index')
@@ -74,18 +81,23 @@ if __name__ == "__main__":
     # plt.show()
         
     # plt.show()
-    reference_intensity = intensity_data['reference']
-    sample_intensity = intensity_data['sample']
-    delta = sample_intensity - reference_intensity
-    relative_delta = sample_intensity / reference_intensity
-    intensity_comparison = np.column_stack((reference_intensity, delta, relative_delta))
+    reference_intensity = reference
+    fig, ax = plt.subplots(2, 1)
+    ax[0].plot(reference_intensity, label='Reference Intensity'
+            )
 
-    plt.plot(reference_intensity, label='Reference Intensity'
-             )
-    plt.plot(sample_intensity, label='Sample Intensity')
-    plt.plot(delta, label='Delta Intensity (Sample - Reference)')
-    plt.plot(sample_intensity-reference_intensity, label='Delta Intensity manual')
-    plt.legend()
+    for filename, data in samples.items():
+        power = filename.split('_')[-1]
+        power = power.split('.')[0]
+        sample_intensity = data
+        delta = sample_intensity - reference_intensity
+        relative_delta = sample_intensity / reference_intensity
+        intensity_comparison = np.column_stack((reference_intensity, delta, relative_delta))
+
+        ax[0].plot(sample_intensity, label='Sample Intensity {}'.format(power))
+        ax[1].plot(delta, label='Delta {}'.format(power))
+    ax[0].legend()
+    ax[1].legend()
     plt.show()
     # plt.plot(reference_intensity, label='Reference Intensity'
     # )
