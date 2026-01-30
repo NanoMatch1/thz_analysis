@@ -6,6 +6,7 @@ Future improvements:
 3. Add methods for advanced processing - waveform fitting, deconvolution, baseline correction, etc.
 4. Refactor noise methods into separate module.'''
 
+from __future__ import annotations
 import numpy as np
 import datetime
 import pandas as pd
@@ -13,6 +14,120 @@ import pandas as pd
 from thz.data_processing.preprocessing import preprocess_trace, edge_window, baseline_subtract, pad_to_window_range
 from thz.data_structures.helpers import df_to_dict, dict_to_df
 from thz.fft_err import fft_err #TODO: resolve circular imports later
+
+
+from dataclasses import dataclass
+from typing import Optional, Union
+import numpy as np
+
+
+@dataclass(frozen=True)
+class TimeDomainStats:
+    time: np.ndarray                 # (N_time,)
+    mean: np.ndarray                 # (N_time,)
+    std: np.ndarray                  # (N_time,)  scatter across repeats at each timepoint
+    stderr: np.ndarray               # (N_time,)  std / sqrt(N_repeats)
+    n_repeats: int                   # number of repeats used
+    baseline_sigma: Optional[float]  # single-number sigma from baseline window on mean (if requested)
+    snr_from_baseline: Optional[np.ndarray]  # (N_time,) |mean| / baseline_sigma (if requested)
+
+
+def _as_slice(idx: Union[slice, np.ndarray, list, tuple, None], n: int) -> Union[slice, np.ndarray]:
+    """
+    Accept slice or index array/list. Validates bounds for slice.
+    """
+    if idx is None:
+        return slice(None)
+
+    if isinstance(idx, slice):
+        # Basic bounds safety for slice
+        start = 0 if idx.start is None else idx.start
+        stop = n if idx.stop is None else idx.stop
+        if start < 0 or stop < 0 or start > n or stop > n or start >= stop:
+            raise ValueError(f"Invalid baseline_slice={idx} for length {n}.")
+        return idx
+
+    # Otherwise treat as array-like of indices / boolean mask
+    arr = np.asarray(idx)
+    if arr.dtype == bool and arr.shape != (n,):
+        raise ValueError(f"Boolean baseline mask must have shape {(n,)}, got {arr.shape}.")
+    return arr
+
+
+def calculate_time_domain_stats(
+    raw_data: np.ndarray,
+    *,
+    limit: Optional[int] = None,
+    ddof: int = 1,
+    baseline_slice: Union[slice, np.ndarray, list, tuple, None] = None,
+    compute_baseline_snr: bool = False,
+) -> TimeDomainStats:
+    """
+    raw_data expected shape: (N_time, 1 + N_repeats)
+      - column 0 = time axis
+      - columns 1: = repeated traces (same time grid)
+
+    Returns per-timepoint mean/std/stderr across repeats.
+    Optionally computes a single baseline sigma from a baseline time window on the MEAN trace,
+    and SNR(t) = |mean(t)| / baseline_sigma.
+    """
+
+    if raw_data is None or raw_data.size == 0:
+        # Return empty object with consistent fields
+        empty = np.array([])
+        return TimeDomainStats(
+            time=empty, mean=empty, std=empty, stderr=empty,
+            n_repeats=0, baseline_sigma=None, snr_from_baseline=None
+        )
+
+    if raw_data.ndim != 2 or raw_data.shape[1] < 2:
+        raise ValueError(f"raw_data must be 2D with at least 2 columns (time + >=1 repeat). Got {raw_data.shape}.")
+
+    time = raw_data[:, 0]
+    traces = raw_data[:, 1:]  # (N_time, N_repeats_total)
+
+    if limit is not None:
+        if limit <= 0:
+            raise ValueError("limit must be a positive integer.")
+        traces = traces[:, :limit]
+
+    n_time, n_repeats = traces.shape
+    if n_repeats < 1:
+        raise ValueError("No repeat traces available after slicing.")
+
+    mean = np.mean(traces, axis=1)
+
+    # If only one repeat, ddof=1 would give NaNs; fall back safely
+    ddof_eff = ddof if n_repeats > 1 else 0
+    std = np.std(traces, axis=1, ddof=ddof_eff)
+    stderr = std / np.sqrt(n_repeats)
+
+    baseline_sigma = None
+    snr = None
+
+    if compute_baseline_snr:
+        # baseline window is applied to the MEAN trace (classic approach)
+        bidx = _as_slice(baseline_slice, n_time)
+
+        # Again: if baseline region is too small, ddof=1 could be problematic
+        baseline_vals = mean[bidx]
+        if baseline_vals.size < 2:
+            raise ValueError("Baseline region must include at least 2 points to estimate sigma.")
+
+        baseline_sigma = float(np.std(baseline_vals, ddof=1))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            snr = np.where(baseline_sigma > 0, np.abs(mean) / baseline_sigma, 0.0)
+
+    return TimeDomainStats(
+        time=time,
+        mean=mean,
+        std=std,
+        stderr=stderr,
+        n_repeats=n_repeats,
+        baseline_sigma=baseline_sigma,
+        snr_from_baseline=snr,
+    )
+
 
 
 class BaseTHzData:
@@ -324,8 +439,8 @@ class THzData:
         self._data[:, 1] -= baseline
         # std_error unaffected (we’re just shifting mean)
 
-    def calculate_SNR(self, limit=None) -> np.array:
-        '''Calculates the signal-to-noise ratio across the time domain.'''
+    def calculate_SNR(self, limit=None, baseline_points=10) -> np.array:
+        '''#current: Calculates the signal-to-noise ratio across the time domain.'''
         if self._data is None:
             return np.array([])
         
@@ -335,13 +450,27 @@ class THzData:
             array = self.raw_data[:, 1:limit+1]
         
         mean = np.mean(array, axis=1)
-        stderr = np.std(array, axis=1) / np.sqrt(array.shape[1])
+        std = np.std(array, axis=1, ddof=1)
+        baseline = np.median(np.abs(std[:baseline_points]))
+        peak = np.max(np.abs(mean))
+
 
         # Avoid division by zero
         with np.errstate(divide='ignore', invalid='ignore'):
-            snr = np.where(stderr != 0, np.abs(mean) / stderr, 0.0)
+            stderr = np.where(std != 0, std / np.sqrt(array.shape[1]), 0.0)
+            snr = np.where(std != 0, np.abs(mean) / std, 0.0)
 
-        return snr
+        report = {
+            'mean': mean,
+            'std': std,
+            'snr': snr,
+            'stderr': stderr,
+            'baseline_std': baseline,
+            'peak_amplitude': peak,
+
+        }
+
+        return report
 
     def _estimate_noise_sigma(
         self,

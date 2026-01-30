@@ -41,7 +41,9 @@ if __name__ == "__main__":
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-26'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_15_QWP'
-    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_17'
+    file_dir = r'C:\Users\Samuel\Data\THz\noisetest\test_17_hero_balance-point'
+    file_dir = r'C:\Users\Samuel\Data\THz\Dani\2026-01-29_germanium'
+    file_dir = r'C:\Users\Samuel\Data\THz\Dani\2026-01-29_germanium\test'
     # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
@@ -51,9 +53,39 @@ if __name__ == "__main__":
     data_set.load_all_data()
     data_set.load_constants(constants)
 
+    data_set.plot_current()
+    breakpoint()
+
     referenced_data = []
     reference = []
     samples = {}
+
+    def noise_analysis(data_set):
+        fig, ax = plt.subplots(2,1)
+        for filename, thzdata in data_set.data.items():
+            print(thzdata.filename)
+            print(thzdata)
+            SNR_data = thzdata.calculate_SNR(limit=10)
+            x_axis = np.arange(len(thzdata.data[:, 0]))
+            raw_SNR = SNR_data['peak_amplitude'] / SNR_data['baseline_std']
+            ax[0].plot(x_axis, thzdata.data[:, 1]*1000, label='{}\n raw total SNR: {:.2f}'.format(filename, raw_SNR))
+            ax[1].plot(x_axis, SNR_data['snr'], label=filename)
+            # ax[2].plot(x_axis, SNR_data['stderr']*1000, label=filename)
+
+        ax[0].set_title('Time Traces')
+        ax[1].set_xlabel('Time Point Index')
+        ax[1].set_title('Signal-to-Noise Ratio Per time point (SNR)')
+        ax[0].set_ylabel('Signal Amplitude (mV)')
+        ax[1].set_ylabel('SNR')
+        ax[1].grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
+        ax[0].legend()
+        ax[1].legend()
+        # ax[2].legend()
+        plt.show()
+
+        breakpoint()
+
+    noise_analysis(data_set)
 
     for filename, thzdata in data_set.data.items():
         if 'reference' in filename.lower():
@@ -63,7 +95,7 @@ if __name__ == "__main__":
 
         data = thzdata.raw_data[:, 1:5] 
         data = np.average(data, axis=1)
-        data = (data - np.min(data)) / (np.max(data) - np.min(data))
+        # data = (data - np.min(data)) / (np.max(data) - np.min(data))
         baseline = np.average(data[:10])
         data = data - np.average(baseline)
         # intensity normalization
@@ -85,6 +117,11 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(2, 1)
     ax[0].plot(reference_intensity, label='Reference Intensity'
             )
+    
+    snr = {}
+
+    # test = samples.copy()
+    # test.update({'reference': reference_intensity})
 
     for filename, data in samples.items():
         power = filename.split('_')[-1]
@@ -94,11 +131,17 @@ if __name__ == "__main__":
         relative_delta = sample_intensity / reference_intensity
         intensity_comparison = np.column_stack((reference_intensity, delta, relative_delta))
 
-        ax[0].plot(sample_intensity, label='Sample Intensity {}'.format(power))
+        peak = np.max(np.abs(data))
+        noise = np.std(data[:20])
+        snr[filename] = peak / noise
+
+        ax[0].plot(sample_intensity, label='power {}: SNR: {:.2f}'.format(power, snr[filename]))
         ax[1].plot(delta, label='Delta {}'.format(power))
     ax[0].legend()
     ax[1].legend()
     plt.show()
+
+
     # plt.plot(reference_intensity, label='Reference Intensity'
     # )
     # plt.plot(sample_intensity, label='Sample Intensity')
