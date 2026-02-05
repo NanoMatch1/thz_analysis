@@ -4,8 +4,10 @@ acc files are text documents containing the full collected data, with all scans 
 import numpy as np
 from thz.data_structures.thz import THzData, BaseTHzData
 from os import path
+from thz.io.registry import BaseLoader, register_loader
 
-class ACCLoader:
+@register_loader
+class ACCLoader(BaseLoader):
 
     extension = '.acc'
     errors = []

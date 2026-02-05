@@ -5,9 +5,12 @@ import matplotlib.pyplot as plt
 from thz.io.acc_loader import ACCLoader
 from thz.io.dat_loader import DATLoader
 from thz.data_structures.thz import THzData
+from thz.io.txt_loader import TXTLoader
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
 from thz.data_structures.helpers import df_to_dict
+from pathlib import Path
+from thz.io import get_loader_for_extension
 
 # TODO: Adding subplots to FigureObject for multi-axis plots
 
@@ -238,50 +241,61 @@ class DataSet:
 
         return fig_obj
     
-    def load_data(self, filename: str) -> THzData:
-        '''Loads a specific acc file and returns a THzData object.'''
+    # def load_data(self, filename: str) -> THzData:
+    #     '''Loads a specific acc file and returns a THzData object.'''
 
-        filepath = os.path.join(self.file_dir, filename)
-        loader = ACCLoader(filepath)
-        thz_data = loader.load()
-        return thz_data
+    #     filepath = os.path.join(self.file_dir, filename)
+    #     loader = ACCLoader(filepath)
+    #     thz_data = loader.load()
+    #     return thz_data
     
-    def load_dat_data(self, filename: str) -> THzData:
-        '''Loads a specific dat file and returns a THzData object.'''
-        #TODO: refactor to use registry
+    # def load_dat_data(self, filename: str) -> THzData:
+    #     '''Loads a specific dat file and returns a THzData object.'''
+    #     #TODO: refactor to use registry
 
-        filepath = os.path.join(self.file_dir, filename)
-        loader = DATLoader(filepath)
-        thz_data = loader.load()
-        return thz_data
+    #     filepath = os.path.join(self.file_dir, filename)
+    #     loader = DATLoader(filepath)
+    #     thz_data = loader.load()
+    #     return thz_data
     
-    def load_all_dat_files(self) -> None:
-        '''Loads all dat files in the specified directory into the data_dict attribute.'''
-        #TODO: refactor to use registry
+    # def load_all_dat_files(self) -> None:
+    #     '''Loads all dat files in the specified directory into the data_dict attribute.'''
+    #     #TODO: refactor to use registry
 
-        filelist = []
-        for filename in os.listdir(self.file_dir):
-            if filename.endswith('.dat'):
-                thz_data = self.load_dat_data(filename)
-                self.data.add_item(filename, thz_data)
-                filelist.append(filename)
+    #     filelist = []
+    #     for filename in os.listdir(self.file_dir):
+    #         if filename.endswith('.dat'):
+    #             thz_data = self.load_dat_data(filename)
+    #             self.data.add_item(filename, thz_data)
+    #             filelist.append(filename)
 
-        self.data.update_filelist(filelist=filelist)
+    #     self.data.update_filelist(filelist=filelist)
 
         return self.data
+    
+    # def load_data_txt(self, filename: str) -> THzData:
+    #     '''Loads a specific txt file and returns a THzData object.'''
+    #     filepath = os.path.join(self.file_dir, filename)
+    #     loader = TXTLoader(filepath)
+    #     thz_data = loader.load()
+    #     return thz_data
+
+    def load_any(self, path: str):
+        ext = Path(path).suffix  # includes the dot
+        Loader = get_loader_for_extension(ext)
+        return Loader(path).load()
             
 
-    def load_all_data(self, extension='.acc') -> None:
+    def load_all_data(self) -> None:
         '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.'''
-
 
         filelist = []
 
         for filename in os.listdir(self.file_dir):
-            if filename.endswith('.acc'):
-                thz_data = self.load_data(filename)
-                self.data.add_item(filename, thz_data)
-                filelist.append(filename)
+            filepath = os.path.join(self.file_dir, filename)
+            thz_data = self.load_any(filepath)
+            self.data.add_item(filename, thz_data)
+            filelist.append(filename)
 
         # self.grouping.update(filelist=filelist)
         self.data.update_filelist(filelist=filelist)

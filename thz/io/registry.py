@@ -1,4 +1,4 @@
-# io/registry.py
+# thz/io/registry.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,48 +9,48 @@ class LoaderError(RuntimeError):
     pass
 
 
+class BaseLoader:
+    """All loaders should subclass this."""
+    extension: str  # e.g. ".acc"
+
+    @classmethod
+    def can_load(cls, ext: str) -> bool:
+        '''Edit this to be smarter when we have more complex loading needs.'''
+        return ext.lower() == cls.extension.lower()
+
+
 @dataclass(frozen=True)
 class LoaderInfo:
     extension: str
-    cls: Type["BaseLoader"]
+    cls: Type[BaseLoader]
 
 
-_REGISTRY: Dict[str, LoaderInfo] = {}
+_REGISTRY: Dict[str, Type[BaseLoader]] = {}
 
 
-def normalize_ext(ext: str) -> str:
-    ext = ext.strip().lower()
-    if not ext:
-        raise LoaderError("Empty extension")
-    if not ext.startswith("."):
-        ext = "." + ext
-    return ext
+def register_loader(cls: Type[BaseLoader]) -> Type[BaseLoader]:
+    ext = getattr(cls, "extension", None)
+    if not isinstance(ext, str) or not ext.startswith("."):
+        raise LoaderError(f"{cls.__name__} must define extension like '.acc'")
 
-
-def register_loader(cls: Type["BaseLoader"]) -> Type["BaseLoader"]:
-    ext = normalize_ext(getattr(cls, "extension", ""))
-    if ext in _REGISTRY:
+    key = ext.lower()
+    if key in _REGISTRY and _REGISTRY[key] is not cls:
         raise LoaderError(
-            f"Duplicate loader for {ext}: "
-            f"{_REGISTRY[ext].cls.__name__} vs {cls.__name__}"
+            f"Duplicate loader for extension {ext}: "
+            f"{_REGISTRY[key].__name__} and {cls.__name__}"
         )
-    _REGISTRY[ext] = LoaderInfo(extension=ext, cls=cls)
+
+    _REGISTRY[key] = cls
     return cls
 
 
-def get_loader(ext: str) -> Optional[Type["BaseLoader"]]:
-    info = _REGISTRY.get(normalize_ext(ext))
-    return None if info is None else info.cls
+def get_loader_for_extension(ext: str) -> Type[BaseLoader]:
+    key = ext.lower()
+    try:
+        return _REGISTRY[key]
+    except KeyError as e:
+        raise LoaderError(f"No loader registered for extension: {ext}. Cannot load file.") from e
 
 
-def all_loaders() -> Dict[str, Type["BaseLoader"]]:
-    return {ext: info.cls for ext, info in _REGISTRY.items()}
-
-
-class BaseLoader:
-    # each subclass must set: extension = ".acc" etc.
-    extension: str
-
-    @classmethod
-    def load(cls, path: str):
-        raise NotImplementedError
+def registered_extensions() -> Dict[str, Type[BaseLoader]]:
+    return dict(_REGISTRY)

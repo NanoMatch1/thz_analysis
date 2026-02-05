@@ -158,6 +158,7 @@ class BaseTHzData:
                 return title, scan_index
             else:
                 return 'unknown_file', None
+        return 'unknown_file', None # if header is empty
 
     def _resolve_timestamp(self) -> str:
         '''Extracts timestamp from headers if available.'''
@@ -323,7 +324,7 @@ class THzData:
          0: time (x-axis),
          1: averaged data across all scans (y-axis),
          2: Standard error as third column.'''
-
+        
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
         std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
         mean_data = np.mean(data_matrix, axis=0)
@@ -450,7 +451,7 @@ class THzData:
             array = self.raw_data[:, 1:limit+1]
         
         mean = np.mean(array, axis=1)
-        std = np.std(array, axis=1, ddof=1)
+        std = np.std(array, axis=1)#, ddof=1)
         baseline = np.median(np.abs(std[:baseline_points]))
         peak = np.max(np.abs(mean))
 
