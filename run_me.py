@@ -137,6 +137,7 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-29_hero-scan'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\Chris'
+    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     # compare_noise_jan() # Compare the noise levels before/after modifications
@@ -148,11 +149,11 @@ if __name__ == "__main__":
     
     data_set.plot_current()
 
-    monitor_analysis(data_set)
+    # monitor_analysis(data_set)
 
 
     data_set.data.info
-    # data_set.group_files(keywords=['type', 'series', 'temp'])
+    data_set.group_files(keywords=['type', 'series'])
 
     # references = data_set.data.references
     # samples = data_set.data.samples
@@ -181,9 +182,8 @@ if __name__ == "__main__":
 
 
     # data_set.plot_current()
-    breakpoint()
     # data_set.centerpad_legacy()
-    data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=False)
+    data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=True)
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
     # data_set.plot_fft_current(series='fft_edge_windowed')

@@ -1,15 +1,15 @@
-'''Module for loading acc files. Returns a dataclass placeholder object.
-acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, and each spectrum/collection is demarcated by %%.'''
+'''Module for loading dat files. Returns a dataclass placeholder object.
+acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, data begins after the last header line.'''
 
 import numpy as np
 from thz.data_structures.thz import THzData, BaseTHzData
 from os import path
-from thz.io.registry import BaseLoader, register_loader
+from thz.io.loaders.registry import BaseLoader, register_loader
 
 @register_loader
-class ACCLoader(BaseLoader):
+class DATLoader(BaseLoader):
 
-    extension = '.acc'
+    extension = '.dat'
     errors = []
 
     def __init__(self, filepath: str) -> None:
@@ -40,24 +40,22 @@ class ACCLoader(BaseLoader):
         return numeric_data
 
     def _simple_split(self, raw_data: str):
-        '''Parses the data from simple_load method.'''
-        scans = raw_data.split("%%") # split by scans
-        scan_dict = {}
+        '''Parses the data from simple_load method. Returns a dict with single scan to mimic the acc data structure for THz analysis methods.'''
 
-        for index, item in enumerate(scans):
-            header = []
-            spectrum = []
-            rows = item.split("\n")
-            for row in rows:
-                row = row.strip()
-                if row.startswith('%'):
-                    header.append(row.strip('%').strip())
-                else:
-                    if row == '': # skip empty lines
-                        continue
-                    spectrum.append(row)
+        header = []
+        spectrum = []
 
-            scan_dict[f'scan_{index}'] = {'header': header, 'spectrum': spectrum}
+        rows = raw_data.split("\n")
+        for row in rows:
+            row = row.strip()
+            if row.startswith('%'):
+                header.append(row.strip('%').strip())
+            else:
+                if row == '': # skip empty lines
+                    continue
+                spectrum.append(row)
+
+        scan_dict = {'scan_0': {'header': header, 'spectrum': spectrum}}
         return scan_dict
 
     def load(self):
@@ -65,10 +63,11 @@ class ACCLoader(BaseLoader):
         new_data = []
         raw_data = self._simple_load()
         parsed_data = self._simple_split(raw_data)
+        
         for key, value in parsed_data.items():
             data = self._parse_data(value['spectrum'])
             new_data.append(BaseTHzData(data=data, headers=value['header'])) # parse each scan into BaseTHzData object
         
-        return THzData(data=new_data, header=None, filename=self.filename, data_type='acc')
+        return THzData(data=new_data, header=None, filename=self.filename, data_type='dat')
 
         

@@ -2,15 +2,16 @@ import os
 import numpy as np
 # import pandas as pd
 import matplotlib.pyplot as plt
-from thz.io.acc_loader import ACCLoader
-from thz.io.dat_loader import DATLoader
+from thz.io.loaders.acc_loader import ACCLoader
+from thz.io.loaders.dat_loader import DATLoader
+from thz.io.loaders.txt_loader import TXTLoader
 from thz.data_structures.thz import THzData
-from thz.io.txt_loader import TXTLoader
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
 from thz.data_structures.helpers import df_to_dict
 from pathlib import Path
 from thz.io import get_loader_for_extension
+import pandas as pd
 
 # TODO: Adding subplots to FigureObject for multi-axis plots
 
@@ -292,6 +293,8 @@ class DataSet:
         filelist = []
 
         for filename in os.listdir(self.file_dir):
+            if os.path.isdir(os.path.join(self.file_dir, filename)):
+                continue # skip folders
             filepath = os.path.join(self.file_dir, filename)
             thz_data = self.load_any(filepath)
             self.data.add_item(filename, thz_data)

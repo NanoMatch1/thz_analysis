@@ -4,7 +4,7 @@
 import numpy as np
 from thz.data_structures.thz import THzData, BaseTHzData
 from os import path
-from thz.io.registry import BaseLoader, register_loader
+from thz.io.loaders.registry import BaseLoader, register_loader
 
 @register_loader
 class TXTLoader(BaseLoader):

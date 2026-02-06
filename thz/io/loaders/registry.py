@@ -49,7 +49,9 @@ def get_loader_for_extension(ext: str) -> Type[BaseLoader]:
     try:
         return _REGISTRY[key]
     except KeyError as e:
-        raise LoaderError(f"No loader registered for extension: {ext}. Cannot load file.") from e
+        print("Available loaders: ", list(_REGISTRY.keys()))
+        print(f"No loader registered for extension: '{ext}'. Cannot load file.")
+        print("Placeholder for attempting to load with a default loader or raising an error.")
 
 
 def registered_extensions() -> Dict[str, Type[BaseLoader]]:

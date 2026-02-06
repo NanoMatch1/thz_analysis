@@ -11,6 +11,6 @@ for m in pkgutil.iter_modules(__path__):
         importlib.import_module(f"{__name__}.{m.name}")
 
 # Export the public API
-from .registry import BaseLoader, get_loader_for_extension, registered_extensions
+from .loaders.registry import BaseLoader, get_loader_for_extension, registered_extensions
 
 __all__ = ["BaseLoader", "get_loader_for_extension", "registered_extensions"]
