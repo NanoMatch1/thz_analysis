@@ -260,6 +260,16 @@ class THzData:
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {len(self.data_list)}\n   -> Data type: {self.data_type}\n" 
     
+    def find_time_zero(self) -> tuple:
+        '''Finds the index and time value of the main pulse peak in the averaged time-domain data.'''
+        if self._time_data is None:
+            return None, None
+        mean = self._time_data[:, 1]
+        time = self._time_data[:, 0]
+        peak_index = int(np.argmax(np.abs(mean)))
+        time_zero = time[peak_index]
+        return peak_index, time_zero
+    
     def _identify_time_constant(self, time_unit='ms') -> None:
         '''Work around function to pull time constant from filename, if available.'''
         if 'time' in self.filename.lower() and 'const' in self.filename.lower():
@@ -746,6 +756,7 @@ class THzData:
 
         error_bars = kwargs.get('error_bars', True)
         normalise = kwargs.get('normalise', False)
+        index_axis = kwargs.get('index_axis', False)
 
         if self._data is None:
             print("No averaged data to plot.")
@@ -755,7 +766,10 @@ class THzData:
             self._headers = self._data.columns.tolist()
             self._data = self._data.to_numpy()
 
-        time = self._data[:, 0]
+        if index_axis:
+            time = np.arange(self._data.shape[0])
+        else:
+            time = self._data[:, 0]
         mean_amplitude = self._data[:, 1]
         std_error = self._data[:, 2]
 
@@ -778,7 +792,10 @@ class THzData:
             ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
                  alpha=kwargs.get('alpha', 0.3), color='tab:red')
         ax.set_title(kwargs.get('title', 'Averaged THz Data'))
-        ax.set_xlabel(kwargs.get('xlabel', 'Time (ps)'))
+        if index_axis:
+            ax.set_xlabel(kwargs.get('xlabel', 'Index'))
+        else:
+            ax.set_xlabel(kwargs.get('xlabel', 'Time (ps)'))
         ax.set_ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
         ax.legend()
         ax.grid(kwargs.get('show_grid', True))

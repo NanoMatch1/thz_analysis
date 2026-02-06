@@ -3,7 +3,6 @@ import inspect
 from typing import Iterable, Any
 
 import numpy as np
-import pandas as pd
 from thz.data_structures.helpers import interpolate_to_max_resolution_simple, _extract_data_and_headers
 
 def align_to_max_resolution(

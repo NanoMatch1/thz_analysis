@@ -2,16 +2,19 @@ import os
 import numpy as np
 # import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.widgets import SpanSelector
+
 from thz.io.loaders.acc_loader import ACCLoader
 from thz.io.loaders.dat_loader import DATLoader
 from thz.io.loaders.txt_loader import TXTLoader
 from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
-from thz.data_structures.helpers import df_to_dict
+from thz.data_structures.helpers import df_to_dict, smooth_trace_savgol, interpolate_data
 from pathlib import Path
 from thz.io import get_loader_for_extension
 import pandas as pd
+
 
 # TODO: Adding subplots to FigureObject for multi-axis plots
 
@@ -706,6 +709,166 @@ class DataSet:
         print('Identified time window for all data:', (min_time, max_time))
 
         return (min_time, max_time)
+    
+    def align_on_peak(self):
+        '''Centers all THzData objects in the dataset on their main pulse peak. Operates explicitly on the time-domain data, and modifies the time-domain data in place.'''
+
+        peak_index_dict = {}
+
+        for filename, thz_data in self.data.items():
+            figure_object = self._generate_figure_object('peak_alignment')
+            fig, ax, state = self.span_select_extremum(thz_data._time_data, mode='abs', title='Select main pulse region to center on', figure_object=figure_object)
+            peak_index_dict[filename] = state
+            
+        min_index = min([state['last_pick']['idx'] for state in peak_index_dict.values()])
+        max_index = 0
+
+        for filename, thz_data in self.data.items():
+            state = peak_index_dict[filename]
+            idx = state['last_pick']['idx']
+            cut = idx - min_index
+            thz_data._time_data = thz_data._time_data[cut:, :]
+            max_index = max(max_index, len(thz_data._time_data))
+        
+        for filename, thz_data in self.data.items():
+            # truncate to max length to ensure all are the same length after centering
+            thz_data._time_data = thz_data._time_data[:max_index]
+        
+
+
+
+        
+
+
+
+
+
+
+    def span_select_extremum(self,
+        data,
+        mode: str = "abs",          # "abs" (default), "max", or "min"
+        axis_labels=("Time (ps)", "E(t) (arb.)"),
+        title=None,
+        marker_kwargs=None,
+        on_pick=None,               # optional callback: on_pick(idx, x, y)
+        figure_object=None
+    ):
+        """
+        Plot data[:,0] vs data[:,1] and attach a SpanSelector.
+        Drag to select an x-range; returns the index + x-value of the extremum in that region.
+
+        Parameters
+        ----------
+        data : array-like
+            Must be a 2D array with columns [x, y].
+        mode : str
+            "abs": pick the point with largest |y| in the span (robust for symmetric wavepackets)
+            "max": pick maximum y in the span
+            "min": pick minimum y in the span
+        on_pick : callable or None
+            If provided, called as on_pick(idx, x, y) after selection.
+
+        Returns
+        -------
+        fig, ax, state : (matplotlib Figure, Axes, dict)
+            state contains last_pick = {"idx":..., "x":..., "y":...}
+        """
+        data = np.asarray(data)
+        # data = interpolate_data(data, 0.01)
+        dataX = data[:, 0]
+
+        dataY = smooth_trace_savgol(data[:, 1], window_length=11, polyorder=3) # smooth data for more robust peak picking
+        if data.ndim != 2 or data.shape[1] < 2:
+            raise ValueError("data must be a 2D array with at least 2 columns [x, y].")
+
+
+        if figure_object is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = figure_object.figure
+            ax = figure_object.ax
+        ax.plot(dataX, dataY)
+        ax.set_xlim(dataX.min(), dataX.max())
+        ax.set_xlabel(axis_labels[0])
+        ax.set_ylabel(axis_labels[1])
+        ax.set_title(title or "THz trace")
+
+        marker_kwargs = marker_kwargs or {}
+        marker_kwargs.setdefault("marker", "o")
+        marker_kwargs.setdefault("ms", 8)
+        marker_kwargs.setdefault("mec", "k")
+        marker_kwargs.setdefault("mew", 1)
+        marker_kwargs.setdefault("zorder", 5)
+
+        # A marker we move around after each selection
+        pick_marker, = ax.plot([np.nan], [np.nan], **marker_kwargs)
+
+        state = {"last_pick": None}
+
+        def _pick_in_span(xmin, xmax):
+            # Ensure xmin <= xmax
+            if xmax < xmin:
+                xmin, xmax = xmax, xmin
+
+            # Find indices in span
+            in_span = (dataX >= xmin) & (dataX <= xmax)
+            idxs = np.flatnonzero(in_span)
+
+            if idxs.size == 0:
+                print("Span selection contains no points.")
+                return
+
+            ys = dataY[idxs]
+
+            if mode == "abs":
+                ex_index = int(np.argmax(np.abs(ys)))
+            elif mode == "max":
+                ex_index = int(np.argmax(ys))
+            elif mode == "min":
+                ex_index = int(np.argmin(ys))
+            else:
+                raise ValueError("mode must be one of: 'abs', 'max', 'min'")
+
+            idx = int(idxs[ex_index])
+            x0 = float(dataX[idx])
+            y0 = float(dataY[idx])
+
+            # Update marker
+            pick_marker.set_data([x0], [y0])
+            fig.canvas.draw_idle()
+
+            state["last_pick"] = {"idx": idx, "x": x0, "y": y0}
+            print(f"Picked {mode} extremum: idx={idx}, x={x0:.6g}, y={y0:.6g}")
+
+            if callable(on_pick):
+                on_pick(idx, x0, y0)
+
+        span = SpanSelector(
+            ax,
+            onselect=_pick_in_span,
+            direction="horizontal",
+            useblit=True,
+            interactive=True,
+            props=dict(alpha=0.2),
+            # You can also set minspan to prevent tiny accidental spans
+            minspan=0.0,
+        )
+
+        # Helpful instruction text
+        ax.text(
+            0.01, 0.99,
+            "Drag to select region → picks extremum inside\n"
+            f"Mode: {mode}  |  Press ESC to cancel selection",
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", alpha=0.2),
+        )
+
+        plt.show()
+        return fig, ax, state
+
     
 
     def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, **kwargs) -> None:

@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from typing import Any
+from scipy.signal import savgol_filter
 
 def df_to_array(df: pd.DataFrame) -> np.ndarray:
     """Convert a pandas DataFrame to a numpy ndarray - columns not preserved."""
@@ -253,3 +254,69 @@ def interpolate_to_max_resolution_simple(
             final_results.append({"data": data, "headers": headers})
 
     return final_results
+
+
+def smooth_trace_savgol(
+    y: np.ndarray,
+    window_length: int = 11,
+    polyorder: int = 3,
+    mode: str = "interp"
+) -> np.ndarray:
+    """
+    Smooth a 1D THz time trace using a Savitzky-Golay filter.
+
+    Parameters
+    ----------
+    y : np.ndarray
+        1D array of field values.
+    window_length : int
+        Length of the filter window (must be odd).
+        Typical THz values: 7–21 samples.
+    polyorder : int
+        Polynomial order (must be < window_length).
+        2–3 is typical.
+    mode : str
+        Boundary handling mode passed to savgol_filter.
+
+    Returns
+    -------
+    y_smooth : np.ndarray
+        Smoothed y-axis, same shape as input.
+    """
+    y = np.asarray(y)
+
+    if window_length % 2 == 0:
+        window_length += 1  # enforce odd window
+
+    if window_length >= y.size:
+        raise ValueError("window_length must be smaller than y.size")
+
+    return savgol_filter(
+        y,
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=mode
+    )
+
+def interpolate_data(data, resolution, new_limits=None) -> np.ndarray:
+    '''Interpolates data using np.interp.
+    
+    Parameters:
+    - data: 2D array with columns [x, y]
+    - resolution: desired spacing between x values in the output
+    - new_limits: tuple (min, max) for x values in the output. If None, uses min and max of input data.
+    
+    Returns:
+    - new_data: 2D array with columns [x_interp, y_interp]'''
+
+    if new_limits is None:
+        new_limits = (data[:, 0].min(), data[:, 0].max())
+    dataX = data[:, 0]
+    dataY = data[:, 1]
+    
+    new_dataX = np.arange(new_limits[0], new_limits[1], resolution)
+    dataY_interp = np.interp(new_dataX, dataX, dataY)
+    std_error_interp = np.interp(new_dataX, dataX, data[:, 2])
+
+    data = np.column_stack((new_dataX, dataY_interp, std_error_interp))
+    return data

@@ -137,7 +137,7 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-29_hero-scan'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\Chris'
-    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
+    # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     # compare_noise_jan() # Compare the noise levels before/after modifications
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     data_set.load_all_data()
     print(data_set.data)
     
-    data_set.plot_current()
+    # data_set.plot_current()
 
     # monitor_analysis(data_set)
 
@@ -179,6 +179,8 @@ if __name__ == "__main__":
     # ax[1].set_title('Samples')
     # ax[1].legend()
     # plt.show()
+    data_set.align_on_peak()
+    data_set.plot_current(index_axis=True)
 
 
     # data_set.plot_current()
