@@ -6,10 +6,11 @@ from matplotlib.gridspec import GridSpec
 
 file_dir = os.path.join(os.path.dirname(__file__), 'thz', 'data')
 
-def compare_noise_jan(scale='linear'):
-    fileDir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
+def compare_noise_jan(file_dir=None, scale='linear'):
+    if file_dir is None:
+        file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
 
-    data_set = DataSet(file_dir=fileDir, sample_keys=['sample'], reference_keys=['reference'])
+    data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
 
     # for filename, thzdata in data_set.data.items():
@@ -98,7 +99,7 @@ def compare_noise_jan(scale='linear'):
 
 def monitor_analysis(data_set: DataSet):
     # monotor analysis function
-    data_set.load_all_files()
+    data_set.load_all_data()
 
         # manual x axis for comparison -------
     for filename, thzdata in data_set.data.items():
@@ -119,7 +120,42 @@ def monitor_analysis(data_set: DataSet):
         # std_dev = round(std_dev, 10)
         print(f"File: {filename}, Std Dev: {std_dev}")
 
-    breakpoint()
+
+def power_series_test(data_set: DataSet):
+    # power series test function
+    data_set.load_all_files()
+
+    std_dict = {}
+    for filename, thzdata in data_set.data.items():
+        tempstr = filename.split('V')[0]
+        temp_str = tempstr.split('_')[-1]
+        try:
+            voltage = float(temp_str)
+        except ValueError:
+            print(f"Could not extract temperature from filename: {filename}")
+            continue
+        thzdata.voltage = voltage
+        std_dict[voltage] = np.std(thzdata.data[:, 1], axis=0)
+        print(thzdata.data.shape)
+
+    # print(std_dict)
+
+    
+    voltage_series = [[key, value] for key, value in std_dict.items()]
+    voltage_series.sort(key=lambda x: x[0])  # Sort by voltage
+    voltage_series = np.array(voltage_series).astype(float)
+    print(voltage_series)
+
+    rescale = True
+    if rescale:
+        voltage_series[:, 1] = voltage_series[:, 1] ** 2
+        # voltage_series[:, 0] = voltage_series[:, 0] ** 2
+        
+    plt.scatter(voltage_series[:, 0], voltage_series[:, 1], label='Baseline Standard Deviation vs Voltage')
+    plt.xlabel('Voltage (V)')
+    plt.ylabel('Baseline Standard Deviation (V)')
+    plt.show()
+
 
 if __name__ == "__main__":
     import numpy as np
@@ -137,7 +173,9 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-29_hero-scan'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\Chris'
-    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
+    # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
+    # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
+    # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
     # r'C:\Users\Samuel\Data\THz\noisetest\test_13_comparison'
 
     # compare_noise_jan() # Compare the noise levels before/after modifications
@@ -146,10 +184,12 @@ if __name__ == "__main__":
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
     print(data_set.data)
-    
-    data_set.plot_current()
+
+
+    # data_set.plot_current()
 
     # monitor_analysis(data_set)
+    # compare_noise_jan(file_dir=file_dir) # Compare the noise levels before/after modifications
 
 
     data_set.data.info
@@ -179,13 +219,16 @@ if __name__ == "__main__":
     # ax[1].set_title('Samples')
     # ax[1].legend()
     # plt.show()
-    data_set.align_on_peak()
+    data_set.align_on_peak(auto_range=(47, 53))
+    data_set.baseline_all(baseline_points=10)
+    
     data_set.plot_current(index_axis=True)
+    breakpoint()
+    # data_set.plot_current(index_axis=True)
 
 
-    # data_set.plot_current()
     # data_set.centerpad_legacy()
-    data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=True)
+    # data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=True)
     data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
     # data_set.plot_fft_current(series='fft_edge_windowed')

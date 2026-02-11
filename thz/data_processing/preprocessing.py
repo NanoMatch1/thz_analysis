@@ -6,102 +6,57 @@ from scipy.signal.windows import tukey, hann   # change to hann if you prefer
 
 from thz.data_structures.decorators import with_dataframe
 
-def window(df):
 
-    '''Legacy windowing function - kept for reference'''
-
-    #create window function
-    # w = boxcar(len(df['Time (ps)'])) # no window
-    # w = hamming(len(df['Time (ps)']))
-    # w = flattop(len(df['Time (ps)']))
-    w = hann(len(df['Time (ps)']))
-    # w = kaiser(len(df['Time (ps)']),14)
-    
-    #windowing
-    df['Mean'] = df['Mean']*w
-    df['std error'] = df['std error']*w
-
-    return
 
 
 # ---------- 1. Baseline subtraction ----------
-
-def baseline_subtract(
-    df: pd.DataFrame,
-    n_points: int = 10,
-    **kwargs,
-) -> pd.DataFrame:
-    """
-    Subtract a DC offset estimated from the first `n_points` of the trace.
-
+def baseline_subtract(dataY: np.array, n_points: int = 10, **kwargs) -> np.array:
+    """Subtract the mean of the first n_points from the y-values in the data array.
+    
     Parameters
     ----------
-    df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+    dataY : np.array
+    1D array of y-values to baseline subtract.
     n_points : int
-        Number of initial points to use for the baseline estimate.
+    Number of initial points to use for baseline calculation. Default is 10."""
 
-    Returns
-    -------
-    df_out : DataFrame
-        Copy of df with 'Mean' baseline-corrected.
-    """
-    df_baseline = df.copy()
-    if len(df_baseline) < n_points:
-        return df_baseline
-
-    offset = df_baseline['Mean'].iloc[:n_points].mean()
-    df_baseline['Mean'] = df_baseline['Mean'] - offset
-
-    if kwargs.get('show_graph', False):
-        import matplotlib.pyplot as plt
-
-        plt.figure(figsize=(8, 5))
-        plt.plot(df['Time (ps)'], df['Mean'], label='Original', alpha=0.5, linewidth=4)
-        plt.plot(df_baseline['Time (ps)'], df_baseline['Mean'], label='Baselined')
-        plt.axhline(offset, color='red', linestyle='--', label='Estimated baseline')
-        plt.xlabel('Time (ps)')
-        plt.ylabel('Mean')
-        plt.title('Baseline Subtraction')
-        plt.legend()
-        plt.grid()
-        plt.show()
-    
-    return df_baseline
-
+    baseline = np.mean(dataY[:n_points])
+    data_baselined = dataY - baseline
+    return data_baselined
 
 # ---------- 2. Windowing ----------
-@with_dataframe(columns=["Time (ps)", "Mean", "std error"])
-def edge_window(df, alpha=0.2, **kwargs) -> pd.DataFrame:
+def edge_window(data: np.array, alpha=0.2, **kwargs) -> pd.DataFrame:
     """
     Apply a Tukey window with edge tapering to the THz time-domain data.
 
     Parameters
     ----------
-    df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+    data : np.array
+        2D array with columns ['Time (ps)', 'Mean']
     alpha : float
         Shape parameter of the Tukey window (0 < alpha < 1).
 
     Returns
     -------
-    df_windowed : DataFrame
-        Copy of df with windowed 'Mean' and 'std error'.
+    data_windowed : np.array
+        Copy of data with windowed 'Mean' and 'std error'.
     """
-    df_windowed = df.copy()
-    y_mean = df_windowed['Mean'].values
-    std_err = df_windowed['std error'].values
-    N = len(y_mean)
-    w = tukey(N, alpha)  # 5% edge taper
-    windowed_data = y_mean * w
-    windowed_error = std_err * w
+    dataX = data[:, 0]
+    dataY = data[:, 1]
+    std_err = data[:, 2]
 
-    df_windowed['Mean'] = windowed_data
-    df_windowed['std error'] = windowed_error
+    n_points = len(dataY)
+    window = tukey(n_points, alpha)  # 5% edge taper
+    windowed_data = dataY * window
+    windowed_error = std_err * window
+
+    data_windowed = np.column_stack((dataX, windowed_data, windowed_error))
     if kwargs.get('show_graph', False):
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(8, 5))
-        plt.plot(df['Time (ps)'], df['Mean'], label='Original', alpha=0.5, linewidth=3)
-        plt.plot(df_windowed['Time (ps)'], df_windowed['Mean'], label='Windowed')
+        plt.plot(data[:, 0], data[:, 1], label='Original', alpha=0.5, linewidth=3)
+        plt.plot(data_windowed[:, 0], data_windowed[:, 1], label='Windowed')
         plt.xlabel('Time (ps)')
         plt.ylabel('Mean')
         plt.title('Edge Windowing with Tukey Window (alpha={})'.format(alpha))
@@ -109,7 +64,7 @@ def edge_window(df, alpha=0.2, **kwargs) -> pd.DataFrame:
         plt.grid()
         plt.show()
 
-    return df_windowed
+    return data_windowed
 
 
 # ---------- 3. Padding ----------

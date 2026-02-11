@@ -390,6 +390,10 @@ class DataSet:
 
     #     # self.interpolate_pulse_window()
 
+    def baseline_all(self, **kwargs):
+        for filename, data_obj in self.data.items():
+            data_obj.baseline_subtract(**kwargs)
+
     def center_pad_window_all(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
         for thz_data in self.data.values():
             plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='pre-process')
@@ -710,15 +714,24 @@ class DataSet:
 
         return (min_time, max_time)
     
-    def align_on_peak(self):
+    def align_on_peak(self, auto_range=None, **kwargs):
         '''Centers all THzData objects in the dataset on their main pulse peak. Operates explicitly on the time-domain data, and modifies the time-domain data in place.'''
 
         peak_index_dict = {}
 
+        if auto_range is not None:
+            try:
+                float(auto_range[0])
+                float(auto_range[1])
+            
+            except (ValueError, TypeError):
+                print("Invalid mode tuple. Must be (float, float) representing time window around expected peak.")
+
         for filename, thz_data in self.data.items():
             figure_object = self._generate_figure_object('peak_alignment')
-            fig, ax, state = self.span_select_extremum(thz_data._time_data, mode='abs', title='Select main pulse region to center on', figure_object=figure_object)
+            fig, ax, state = self.span_select_extremum(thz_data._time_data, mode='abs', title='Select main pulse region to center on', figure_object=figure_object, auto_range=auto_range, **kwargs)
             peak_index_dict[filename] = state
+
             
         min_index = min([state['last_pick']['idx'] for state in peak_index_dict.values()])
         max_index = 0
@@ -735,15 +748,6 @@ class DataSet:
             thz_data._time_data = thz_data._time_data[:max_index]
         
 
-
-
-        
-
-
-
-
-
-
     def span_select_extremum(self,
         data,
         mode: str = "abs",          # "abs" (default), "max", or "min"
@@ -751,7 +755,8 @@ class DataSet:
         title=None,
         marker_kwargs=None,
         on_pick=None,               # optional callback: on_pick(idx, x, y)
-        figure_object=None
+        figure_object=None,
+        auto_range=None # set a specific index range to select the data without using the span selector, for more automated processing
     ):
         """
         Plot data[:,0] vs data[:,1] and attach a SpanSelector.
@@ -865,6 +870,20 @@ class DataSet:
             fontsize=9,
             bbox=dict(boxstyle="round,pad=0.3", alpha=0.2),
         )
+
+        if auto_range is not None:
+            try:
+                int(auto_range[0])
+                int(auto_range[1])
+                xmin = dataX[auto_range[0]]
+                xmax = dataX[auto_range[1]]
+                print(f"Auto-selecting extremum in range: {xmin:.3f} to {xmax:.3f} (indices {auto_range[0]} to {auto_range[1]})")
+                _pick_in_span(xmin, xmax)
+                plt.close()
+                return fig, ax, state
+            except (ValueError, TypeError):
+                print("Invalid auto_range. Must be a tuple of (int, int) representing the x-range indicies to automatically select.")
+            
 
         plt.show()
         return fig, ax, state

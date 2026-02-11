@@ -3,6 +3,82 @@ import numpy as np
 from typing import Any
 from scipy.signal import savgol_filter
 
+import numpy as np
+
+def find_maxima(data, window, mode="abs", values="index", return_idx=False):
+    """
+    Find an extremum (abs/max/min) within a window.
+
+    Parameters
+    ----------
+    data : (N, 2) array_like
+        Column 0 is x, column 1 is y.
+    window : tuple
+        (xmin, xmax) where meaning depends on `values`:
+        - values='index' -> integer indices [xmin, xmax)
+        - values='value' -> x-axis values within [xmin, xmax]
+    mode : {'abs', 'max', 'min'}
+        Which extremum to pick inside the window.
+    values : {'index', 'value'}
+        Whether `window` is in index space or x-value space.
+    return_idx : bool
+        If True, also return the integer index into `data`.
+
+    Returns
+    -------
+    (x0, y0) or (idx, x0, y0)
+        The picked extremum. Returns None if the window selects no points.
+    """
+    # --- validate inputs ---
+    data = np.asarray(data)
+    if data.ndim != 2 or data.shape[1] < 2:
+        raise ValueError("data must be an (N, 2) array (x in col 0, y in col 1).")
+
+    try:
+        a, b = window
+    except Exception as e:
+        raise ValueError("window must be a tuple/list like (min, max).") from e
+
+    x = data[:, 0]
+    y = data[:, 1]
+
+    # --- select indices for the window ---
+    if values == "value":
+        xmin, xmax = (a, b) if a <= b else (b, a)
+        idxs = np.flatnonzero((x >= xmin) & (x <= xmax))
+    elif values == "index":
+        # allow floats but interpret as indices
+        i0, i1 = int(a), int(b)
+        if i1 < i0:
+            i0, i1 = i1, i0
+        # treat as python slice [i0, i1)
+        i0 = max(i0, 0)
+        i1 = min(i1, len(x))
+        idxs = np.arange(i0, i1, dtype=int)
+    else:
+        raise ValueError("values must be one of: 'index', 'value'")
+
+    if idxs.size == 0:
+        return None
+
+    y_sel = y[idxs]
+
+    # --- pick extremum within selected region ---
+    if mode == "abs":
+        rel = int(np.argmax(np.abs(y_sel)))
+    elif mode == "max":
+        rel = int(np.argmax(y_sel))
+    elif mode == "min":
+        rel = int(np.argmin(y_sel))
+    else:
+        raise ValueError("mode must be one of: 'abs', 'max', 'min'")
+
+    idx = int(idxs[rel])
+    x0 = float(x[idx])
+    y0 = float(y[idx])
+
+    return (idx, x0, y0) if return_idx else (x0, y0)
+
 def df_to_array(df: pd.DataFrame) -> np.ndarray:
     """Convert a pandas DataFrame to a numpy ndarray - columns not preserved."""
     return df.to_numpy()

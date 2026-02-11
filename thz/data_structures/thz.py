@@ -340,8 +340,7 @@ class THzData:
         mean_data = np.mean(data_matrix, axis=0)
         time_axis = self.data_list[0].raw_data[:, 0]
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
-        self.processing_dict['time_domain'] = pd.DataFrame(averaged_data, columns=['Time (ps)', 'Mean', 'std error'])
-        # self.processing_dict['time_domain'] = {'data': averaged_data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']}
+        self.processing_dict['time_domain'] = averaged_data.copy()
         return averaged_data
     
     # def centerpad_window(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
@@ -903,6 +902,12 @@ class THzData:
         fft_result = fft_err(edge_windowed_data) # returns dictionary
         self.processing_dict['fft_edge_windowed'] = fft_result
         return fft_result
+    
+    def baseline_subtract(self, baseline_points=10, **kwargs):
+        dataY_baselined = baseline_subtract(self._data, n_points=baseline_points, **kwargs)
+        data = np.column_stack((self._data[:, 0], dataY_baselined, self._data[:, 2])) 
+        self.processing_dict['baseline_subtracted'] = data
+
     
     def prepare_for_fft(self, 
                         baseline_points=10, 
