@@ -4,9 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import SpanSelector
 
-from thz.io.loaders.acc_loader import ACCLoader
-from thz.io.loaders.dat_loader import DATLoader
-from thz.io.loaders.txt_loader import TXTLoader
+import thz.io.loaders   # <-- imports package, which auto-imports all loader modules
+from thz.io import get_loader_for_extension
 from thz.data_structures.thz import THzData
 from thz.services.grouping import GroupingService
 from collections.abc import Mapping
@@ -521,7 +520,10 @@ class DataSet:
     # def interpolate_dataset(self, series_key=None):
     #     '''Interpolates all datasets in the processing_dict to a common spacing. Important'''
 
-
+    def edge_window_all(self, alpha=0.2, show_graph=False, **kwargs):
+        '''Applies edge windowing to all THzData objects in the dataset.'''
+        for thz_data in self.data.values():
+            thz_data.edge_window(alpha=alpha, show_graph=show_graph, **kwargs)
 
     def fft_compare(self, low_threshold = 4, up_threshold = 10, clip_data=None):
         # import thz.data_processing.phase_interpolation as phi

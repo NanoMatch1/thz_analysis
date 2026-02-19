@@ -173,6 +173,7 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-29_hero-scan'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\Chris'
+    file_dir = r'C:\Users\Samuel\Data\dispersion tests'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
@@ -221,7 +222,7 @@ if __name__ == "__main__":
     # plt.show()
     data_set.align_on_peak(auto_range=(47, 53))
     data_set.baseline_all(baseline_points=10)
-    
+    data_set.edge_window_all(alpha=0.2, show_graph=True)
     data_set.plot_current(index_axis=True)
     breakpoint()
     # data_set.plot_current(index_axis=True)

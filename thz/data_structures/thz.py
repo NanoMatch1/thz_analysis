@@ -749,8 +749,13 @@ class THzData:
 
 
 
-    def plot_current(self, **kwargs) -> None:
-        '''Plots the current averaged data with error bars as a shaded region.'''
+    def plot_current(self, *, figure_obj=None, **kwargs) -> None:
+        """Plot the current averaged data.
+
+        Accepts an optional `figure_obj` (the dataset's FigureObject). If it is
+        provided the method will draw onto `figure_obj.ax` and will not call
+        `plt.show()`; otherwise a new figure is created and shown.
+        """
         import matplotlib.pyplot as plt
 
         error_bars = kwargs.get('error_bars', True)
@@ -760,17 +765,20 @@ class THzData:
         if self._data is None:
             print("No averaged data to plot.")
             return
-        
+
+        # do not mutate self._data in-place; operate on a local view
         if isinstance(self._data, pd.DataFrame):
-            self._headers = self._data.columns.tolist()
-            self._data = self._data.to_numpy()
+            data_view = self._data.to_numpy()
+        else:
+            data_view = self._data
 
         if index_axis:
-            time = np.arange(self._data.shape[0])
+            time = np.arange(data_view.shape[0])
         else:
-            time = self._data[:, 0]
-        mean_amplitude = self._data[:, 1]
-        std_error = self._data[:, 2]
+            time = data_view[:, 0]
+
+        mean_amplitude = data_view[:, 1]
+        std_error = data_view[:, 2]
 
         if normalise:
             max_amp = np.max(np.abs(mean_amplitude))
@@ -778,23 +786,31 @@ class THzData:
                 mean_amplitude = mean_amplitude / max_amp
                 std_error = std_error / max_amp
 
-        if 'figure_obj' in kwargs:
-            figure_obj = kwargs.get('figure_obj')
-            ax = figure_obj.ax
-            show_plot = False
-        else:
+        # Acquire axis: prefer provided FigureObject, otherwise create a temporary
+        show_plot = False
+        if figure_obj is None:
             fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
             show_plot = True
+        else:
+            ax = getattr(figure_obj, 'ax', None)
+            if ax is None:
+                # fallback to creating a new figure if the object is malformed
+                fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+                show_plot = True
+
         line_alpha = kwargs.get('line_alpha', 1.0)
         ax.plot(time, mean_amplitude, '-', label=self.filename, alpha=line_alpha)
         if error_bars:
-            ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
-                 alpha=kwargs.get('alpha', 0.3), color='tab:red')
+            ax.fill_between(
+                time,
+                mean_amplitude - std_error,
+                mean_amplitude + std_error,
+                alpha=kwargs.get('alpha', 0.3),
+                color=kwargs.get('error_color', 'tab:red'),
+            )
+
         ax.set_title(kwargs.get('title', 'Averaged THz Data'))
-        if index_axis:
-            ax.set_xlabel(kwargs.get('xlabel', 'Index'))
-        else:
-            ax.set_xlabel(kwargs.get('xlabel', 'Time (ps)'))
+        ax.set_xlabel(kwargs.get('xlabel', 'Index' if index_axis else 'Time (ps)'))
         ax.set_ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
         ax.legend()
         ax.grid(kwargs.get('show_grid', True))

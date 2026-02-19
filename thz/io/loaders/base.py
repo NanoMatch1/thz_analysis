@@ -4,9 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from analysis_spectroscopy.data_classes.common import FileObject
-from analysis_spectroscopy.data_classes.base import BaseData
-from analysis_spectroscopy.io.registry import register_structure
+from thz.data_structures.common import FileObject, DataObject as BaseData
 
 
 class BaseStructureParser:
