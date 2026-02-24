@@ -2,7 +2,8 @@ import os
 import numpy as np
 # import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.widgets import SpanSelector
+from matplotlib.widgets import SpanSelector, Slider, CheckButtons, Button
+
 
 import thz.io.loaders   # <-- imports package, which auto-imports all loader modules
 from thz.io import get_loader_for_extension
@@ -287,14 +288,21 @@ class DataSet:
         ext = Path(path).suffix  # includes the dot
         Loader = get_loader_for_extension(ext)
         return Loader(path).load()
-            
 
-    def load_all_data(self) -> None:
-        '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.'''
+    def load_all_data(self, prefer_acc=True) -> None:
+        '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.
+        prefer_acc bool specifies that if True, acc files of the same name are loaded instead of dat files, if both are present.'''
+
+        def gen_filelist():
+            files = os.listdir(self.file_dir)
+            if prefer_acc:
+                files = [f for f in files if not (f.endswith('.dat') and f[:-4] + '.acc' in files)] # filter out dat files if acc of same name exists
+            return files
 
         filelist = []
+        files = gen_filelist()
 
-        for filename in os.listdir(self.file_dir):
+        for filename in files:
             if os.path.isdir(os.path.join(self.file_dir, filename)):
                 continue # skip folders
             filepath = os.path.join(self.file_dir, filename)
@@ -302,6 +310,8 @@ class DataSet:
             self.data.add_item(filename, thz_data)
             filelist.append(filename)
 
+        if filelist == []:
+            raise FileNotFoundError(f"No valid data files found in {self.file_dir}. Please check the directory and file formats.")
         # self.grouping.update(filelist=filelist)
         self.data.update_filelist(filelist=filelist)
 
@@ -463,9 +473,9 @@ class DataSet:
 
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
-        for name, thz_data in self.data.items():
+        for name, data_object in self.data.items():
             figure_obj = self._generate_figure_object('main')
-            thz_data.plot_current(figure_obj=figure_obj, **kwargs)
+            data_object.plot_current(figure_obj=figure_obj, **kwargs)
         
         plt.show()
 
@@ -940,3 +950,152 @@ class DataSet:
         ax[1].legend()
 
         plt.show()
+
+    def modify_acquisitions(self):
+        """
+        Interactive inspector per file:
+          1) Slider selects the 'current' acquisition (highlighted green), others grey with alpha=0.5
+          2) Checkboxes control which acquisitions are shown (default: all on)
+          3) "Exclude selected" deselects (hides) the currently selected acquisition by toggling its checkbox off
+
+        MODIFIES IN PLACE:
+          - When each window is closed, self.data[filename].raw_data is replaced with a reduced array
+            containing the time column and only the acquisitions still selected.
+
+        Returns:
+          dict[str, np.ndarray] mapping filename -> modified raw_data array (post-edit, same as in-place)
+        """
+        modified_raw_data_by_file: dict[str, np.ndarray] = {}
+
+        for filename, thzdata in self.data.items():
+            raw = thzdata.raw_data
+            if raw is None or raw.size == 0 or raw.shape[1] < 2:
+                modified_raw_data_by_file[filename] = raw
+                continue
+
+            time = raw[:, 0]
+            acq_indices = list(range(1, raw.shape[1]))  # acquisitions are columns 1..end
+
+            # --- Figure / axes layout ---
+            fig = plt.figure(figsize=(11, 6))
+            ax = fig.add_axes([0.08, 0.18, 0.62, 0.75])  # main plot
+            ax_slider = fig.add_axes([0.08, 0.08, 0.62, 0.04])
+            ax_checks = fig.add_axes([0.74, 0.25, 0.23, 0.65])
+            ax_button = fig.add_axes([0.74, 0.15, 0.23, 0.06])
+
+            fig.suptitle(f"Acquisition Comparison: {filename}", y=0.98)
+
+            # --- Plot lines ---
+            lines: dict[int, plt.Line2D] = {}
+            active: dict[int, bool] = {idx: True for idx in acq_indices}
+
+            for idx in acq_indices:
+                y = raw[:, idx]
+                (ln,) = ax.plot(time, y, alpha=0.5)
+                lines[idx] = ln
+
+            ax.set_xlabel("Time")
+            ax.set_ylabel("Signal Amplitude")
+
+            # --- Slider ---
+            slider = Slider(
+                ax=ax_slider,
+                label="Selected (index)",
+                valmin=0,
+                valmax=max(0, len(acq_indices) - 1),
+                valinit=0,
+                valstep=1 if len(acq_indices) > 1 else None,
+            )
+
+            selected_idx = acq_indices[0]
+
+            def apply_styling():
+                nonlocal selected_idx
+                for idx, ln in lines.items():
+                    is_on = active.get(idx, False)
+                    ln.set_visible(is_on)
+
+                    if not is_on:
+                        continue
+
+                    if idx == selected_idx:
+                        ln.set_color("green")
+                        ln.set_alpha(1.0)
+                        ln.set_linewidth(2.2)
+                        ln.set_zorder(3)
+                    else:
+                        ln.set_color("0.5")
+                        ln.set_alpha(0.5)
+                        ln.set_linewidth(1.0)
+                        ln.set_zorder(2)
+
+                slider.label.set_text(f"Selected (Acq {selected_idx})")
+                fig.canvas.draw_idle()
+
+            def on_slider(val):
+                nonlocal selected_idx
+                if not acq_indices:
+                    return
+                pos = int(slider.val)
+                pos = max(0, min(pos, len(acq_indices) - 1))
+                selected_idx = acq_indices[pos]
+                apply_styling()
+
+            slider.on_changed(on_slider)
+
+            # --- Checkboxes ---
+            labels = [f"Acq {idx}" for idx in acq_indices]
+            checks = CheckButtons(ax_checks, labels, [True] * len(acq_indices))
+            ax_checks.set_title("Shown acquisitions", fontsize=10)
+            for spine in ax_checks.spines.values():
+                spine.set_visible(True)
+
+            label_to_idx = {f"Acq {idx}": idx for idx in acq_indices}
+            idx_to_check_pos = {idx: i for i, idx in enumerate(acq_indices)}
+
+            def on_check(label):
+                idx = label_to_idx[label]
+                active[idx] = not active[idx]
+                apply_styling()
+
+            checks.on_clicked(on_check)
+
+            # --- Exclude button ---
+            btn = Button(ax_button, "Exclude selected")
+
+            def on_exclude(event):
+                idx = selected_idx
+                if not active.get(idx, False):
+                    return
+                checks.set_active(idx_to_check_pos[idx])  # toggles checkbox (and triggers styling)
+
+            btn.on_clicked(on_exclude)
+
+            # Initial styling
+            apply_styling()
+
+            # --- Close handler: modify in place + record dict ---
+            def commit():
+                kept = [idx for idx in acq_indices if active.get(idx, False)]
+                cols = [time] + [raw[:, idx] for idx in kept]
+                new_raw = np.column_stack(cols) if cols else raw[:, [0]]
+
+                # MODIFY IN PLACE
+                thzdata.raw_data = new_raw
+
+                # record return dict
+                modified_raw_data_by_file[filename] = new_raw
+
+            def on_close(event):
+                commit()
+
+            fig.canvas.mpl_connect("close_event", on_close)
+
+            print(f"File: {filename}")
+            plt.show()  # blocks until closed
+
+            # Safety: if close_event doesn't fire in some backends
+            if filename not in modified_raw_data_by_file:
+                commit()
+
+        return modified_raw_data_by_file

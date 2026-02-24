@@ -174,6 +174,7 @@ if __name__ == "__main__":
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\Chris'
     file_dir = r'C:\Users\Samuel\Data\dispersion tests'
+    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
@@ -186,15 +187,47 @@ if __name__ == "__main__":
     data_set.load_all_data()
     print(data_set.data)
 
+    data_set.data.info
+    # breakpoint()
+
+    # def inspect_acquisitions(data_set: DataSet):
+    #     for filename, thzdata in data_set.data.items():
+    #         acquisition_dict = {}
+    #         print(f"File: {filename}")
+    #         # print(thzdata.raw_data)
+    #         for index in range(len(thzdata.raw_data[0, :])):
+    #             if index == 0:
+    #                 continue
+    #             column_data = thzdata.raw_data[:, index]
+    #             acquisition_dict[index] = column_data
+
+    #         time = thzdata.raw_data[:, 0]
+    #         for index, column_data in acquisition_dict.items():
+    #             plt.plot(time, column_data, label=f'Acquisition {index}')
+    #         plt.title('Acquisition Comparison:{}'.format(filename))
+    #         plt.xlabel('Time Point Index')
+    #         plt.ylabel('Signal Amplitude')
+    #         plt.legend()
+    #         plt.show()
+            
+
+    new_data = data_set.modify_acquisitions()
+    breakpoint()
+
+    # inspect_acquisitions(data_set)
 
     # data_set.plot_current()
 
     # monitor_analysis(data_set)
-    # compare_noise_jan(file_dir=file_dir) # Compare the noise levels before/after modifications
-
-
-    data_set.data.info
+    # compare_noise_jan() # Compare the noise levels before/after modifications
     data_set.group_files(keywords=['type', 'series'])
+    import sys
+
+    dirtest = os.path.dirname(__file__)
+    breakpoint()
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+
+
 
     # references = data_set.data.references
     # samples = data_set.data.samples

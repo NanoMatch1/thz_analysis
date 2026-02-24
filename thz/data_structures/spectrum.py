@@ -57,20 +57,21 @@ class Spectrum:
     def __repr__(self) -> str:
         return f"<Spectrum:{self.filename or 'unnamed'}, shape={self.data.shape}, type={self.data_type}>"
     
-    def plot_current(self, figure_object=None, **kwargs):
+    def plot_current(self, figure_obj=None, **kwargs):
         import matplotlib.pyplot as plt
         # Acquire axis: prefer provided FigureObject, otherwise create a temporary
         show_plot = False
-        if figure_object is None:
+        if figure_obj is None:
             fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
             show_plot = True
         else:
-            ax = figure_object
+            ax = getattr(figure_obj, 'ax', None)
+            if ax is None:
+                # fallback to creating a new figure if the object is malformed
+                fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+                show_plot = True
 
-        ax.plot(self.x, self.y)
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_title(self.filename or "Spectrum")
+        ax.plot(self.x, self.y, label=self.filename)
 
         if show_plot:
             plt.show()
