@@ -173,6 +173,21 @@ class DataSet:
         self.figure_objects = {}
         # self.grouping = GroupingService()
 
+    def metadata_hook(self, filename: str, thzdata: THzData):
+        """
+        Hook you can implement later to pull rich metadata from your data service.
+
+        Contract:
+          - Return a JSON-serializable dict (or at least something json.dumps can handle with default=str).
+          - Keep it "dynamic": arbitrary keys are fine.
+
+        Example future implementations:
+          - Look up filename in a SQLite DB / REST API
+          - Pull instrument settings, operator, sample details, calibration refs, etc.
+        """
+        # DUMMY implementation: return empty dict by default
+        return {}
+
     @property
     def all_data(self) -> list:
         """Returns dictionary of all objects in the dataset."""
@@ -951,19 +966,26 @@ class DataSet:
 
         plt.show()
 
-    def modify_acquisitions(self):
+    def modify_acquisitions(self, page_size: int = 25):
         """
         Interactive inspector per file:
-          1) Slider selects the 'current' acquisition (highlighted green), others grey with alpha=0.5
-          2) Checkboxes control which acquisitions are shown (default: all on)
-          3) "Exclude selected" deselects (hides) the currently selected acquisition by toggling its checkbox off
+
+        Plot:
+          - Slider selects the 'current' acquisition (highlighted green).
+          - Included acquisitions are shown in grey (alpha=0.5).
+          - Excluded acquisitions are hidden.
+          - Toggle button switches the selected acquisition between included/excluded.
+
+        Lists (instead of checkboxes):
+          - Two clickable lists: Included and Excluded.
+          - Clicking an item toggles its state (moves between lists).
+          - Each list is paginated with its own page slider (for long lists).
 
         MODIFIES IN PLACE:
-          - When each window is closed, self.data[filename].raw_data is replaced with a reduced array
-            containing the time column and only the acquisitions still selected.
+          - On close, self.data[filename].raw_data becomes [time | included acquisitions].
 
         Returns:
-          dict[str, np.ndarray] mapping filename -> modified raw_data array (post-edit, same as in-place)
+          dict[str, np.ndarray] mapping filename -> modified raw_data array
         """
         modified_raw_data_by_file: dict[str, np.ndarray] = {}
 
@@ -974,43 +996,154 @@ class DataSet:
                 continue
 
             time = raw[:, 0]
-            acq_indices = list(range(1, raw.shape[1]))  # acquisitions are columns 1..end
+            acq_indices = list(range(1, raw.shape[1]))  # acquisitions: columns 1..end
+
+            # --- State ---
+            active = {idx: True for idx in acq_indices}   # included
+            selected_idx = acq_indices[0]
 
             # --- Figure / axes layout ---
-            fig = plt.figure(figsize=(11, 6))
-            ax = fig.add_axes([0.08, 0.18, 0.62, 0.75])  # main plot
-            ax_slider = fig.add_axes([0.08, 0.08, 0.62, 0.04])
-            ax_checks = fig.add_axes([0.74, 0.25, 0.23, 0.65])
-            ax_button = fig.add_axes([0.74, 0.15, 0.23, 0.06])
+            fig = plt.figure(figsize=(12.5, 6.5))
+            ax = fig.add_axes([0.07, 0.18, 0.60, 0.75])   # main plot
+            ax_sel = fig.add_axes([0.07, 0.08, 0.60, 0.04])  # acquisition selector slider
 
-            fig.suptitle(f"Acquisition Comparison: {filename}", y=0.98)
+            ax_incl = fig.add_axes([0.70, 0.55, 0.28, 0.38])  # included list
+            ax_excl = fig.add_axes([0.70, 0.10, 0.28, 0.38])  # excluded list
+
+            ax_incl_page = fig.add_axes([0.70, 0.50, 0.28, 0.03])
+            ax_excl_page = fig.add_axes([0.70, 0.05, 0.28, 0.03])
+
+            ax_btn = fig.add_axes([0.70, 0.92, 0.28, 0.05])  # toggle selected
+
+            fig.suptitle(f"Acquisition Comparison: {filename}", y=0.99)
 
             # --- Plot lines ---
-            lines: dict[int, plt.Line2D] = {}
-            active: dict[int, bool] = {idx: True for idx in acq_indices}
-
+            lines = {}
             for idx in acq_indices:
-                y = raw[:, idx]
-                (ln,) = ax.plot(time, y, alpha=0.5)
+                (ln,) = ax.plot(time, raw[:, idx], alpha=0.5)
                 lines[idx] = ln
 
             ax.set_xlabel("Time")
             ax.set_ylabel("Signal Amplitude")
 
-            # --- Slider ---
-            slider = Slider(
-                ax=ax_slider,
-                label="Selected (index)",
+            # --- Slider to select acquisition ---
+            sel_slider = Slider(
+                ax=ax_sel,
+                label="Selected",
                 valmin=0,
                 valmax=max(0, len(acq_indices) - 1),
                 valinit=0,
                 valstep=1 if len(acq_indices) > 1 else None,
             )
 
-            selected_idx = acq_indices[0]
+            # --- Page sliders for Included / Excluded lists ---
+            incl_page_slider = Slider(
+                ax=ax_incl_page,
+                label="Included page",
+                valmin=0,
+                valmax=0,
+                valinit=0,
+                valstep=1,
+            )
+            excl_page_slider = Slider(
+                ax=ax_excl_page,
+                label="Excluded page",
+                valmin=0,
+                valmax=0,
+                valinit=0,
+                valstep=1,
+            )
+
+            # --- Toggle button ---
+            btn_toggle = Button(ax_btn, "Toggle selected (include/exclude)")
+
+            # --- List rendering helpers ---
+            # We store currently drawn text artists so we can replace them cleanly.
+            incl_text_artists = []
+            excl_text_artists = []
+
+            def get_included():
+                return [i for i in acq_indices if active.get(i, False)]
+
+            def get_excluded():
+                return [i for i in acq_indices if not active.get(i, False)]
+
+            def _clear_list(ax_list, artists):
+                for t in artists:
+                    try:
+                        t.remove()
+                    except Exception:
+                        pass
+                artists.clear()
+                ax_list.cla()
+                ax_list.set_xticks([])
+                ax_list.set_yticks([])
+                for spine in ax_list.spines.values():
+                    spine.set_visible(True)
+
+            def _render_list(ax_list, title, items, page, artists, pick_prefix: str):
+                """
+                Draws a simple clickable list. Each item is a Text artist with a gid encoding
+                which acquisition it corresponds to.
+                """
+                _clear_list(ax_list, artists)
+                ax_list.set_title(title, fontsize=10, pad=6)
+
+                start = page * page_size
+                end = min(len(items), start + page_size)
+                view = items[start:end]
+
+                if not view:
+                    t = ax_list.text(
+                        0.02, 0.95, "(none on this page)",
+                        transform=ax_list.transAxes, va="top", fontsize=9, alpha=0.7
+                    )
+                    artists.append(t)
+                    return
+
+                # Evenly space lines vertically
+                n = len(view)
+                top = 0.95
+                bottom = 0.05
+                step = (top - bottom) / max(1, n)
+
+                for k, idx in enumerate(view):
+                    y = top - k * step
+                    t = ax_list.text(
+                        0.02, y, f"Acq {idx}",
+                        transform=ax_list.transAxes,
+                        va="top",
+                        fontsize=9,
+                        picker=True,  # enables pick_event
+                    )
+                    # Encode identity for click handler
+                    t.set_gid(f"{pick_prefix}:{idx}")
+                    artists.append(t)
+
+            def _update_page_sliders():
+                incl = get_included()
+                excl = get_excluded()
+
+                incl_pages = max(1, int(np.ceil(len(incl) / page_size)))
+                excl_pages = max(1, int(np.ceil(len(excl) / page_size)))
+
+                # update max ranges
+                incl_page_slider.valmax = incl_pages - 1
+                excl_page_slider.valmax = excl_pages - 1
+
+                # clamp current values if needed
+                if incl_page_slider.val > incl_page_slider.valmax:
+                    incl_page_slider.set_val(incl_page_slider.valmax)
+                if excl_page_slider.val > excl_page_slider.valmax:
+                    excl_page_slider.set_val(excl_page_slider.valmax)
+
+                # force slider to redraw its bounds
+                incl_page_slider.ax.set_xlim(incl_page_slider.valmin, incl_page_slider.valmax)
+                excl_page_slider.ax.set_xlim(excl_page_slider.valmin, excl_page_slider.valmax)
 
             def apply_styling():
                 nonlocal selected_idx
+
                 for idx, ln in lines.items():
                     is_on = active.get(idx, False)
                     ln.set_visible(is_on)
@@ -1029,72 +1162,92 @@ class DataSet:
                         ln.set_linewidth(1.0)
                         ln.set_zorder(2)
 
-                slider.label.set_text(f"Selected (Acq {selected_idx})")
+                sel_slider.label.set_text(f"Selected (Acq {selected_idx})")
+
+                # Update lists + page sliders
+                _update_page_sliders()
+
+                incl_page = int(incl_page_slider.val)
+                excl_page = int(excl_page_slider.val)
+
+                _render_list(ax_incl, "Included", get_included(), incl_page, incl_text_artists, "incl")
+                _render_list(ax_excl, "Excluded", get_excluded(), excl_page, excl_text_artists, "excl")
+
                 fig.canvas.draw_idle()
 
-            def on_slider(val):
+            def toggle_idx(idx: int):
+                # Toggle include/exclude
+                active[idx] = not active.get(idx, True)
+                apply_styling()
+
+            # --- Widget callbacks ---
+            def on_sel_slider(_val):
                 nonlocal selected_idx
-                if not acq_indices:
-                    return
-                pos = int(slider.val)
+                pos = int(sel_slider.val)
                 pos = max(0, min(pos, len(acq_indices) - 1))
                 selected_idx = acq_indices[pos]
                 apply_styling()
 
-            slider.on_changed(on_slider)
+            sel_slider.on_changed(on_sel_slider)
 
-            # --- Checkboxes ---
-            labels = [f"Acq {idx}" for idx in acq_indices]
-            checks = CheckButtons(ax_checks, labels, [True] * len(acq_indices))
-            ax_checks.set_title("Shown acquisitions", fontsize=10)
-            for spine in ax_checks.spines.values():
-                spine.set_visible(True)
-
-            label_to_idx = {f"Acq {idx}": idx for idx in acq_indices}
-            idx_to_check_pos = {idx: i for i, idx in enumerate(acq_indices)}
-
-            def on_check(label):
-                idx = label_to_idx[label]
-                active[idx] = not active[idx]
+            def on_incl_page(_val):
                 apply_styling()
 
-            checks.on_clicked(on_check)
+            def on_excl_page(_val):
+                apply_styling()
 
-            # --- Exclude button ---
-            btn = Button(ax_button, "Exclude selected")
+            incl_page_slider.on_changed(on_incl_page)
+            excl_page_slider.on_changed(on_excl_page)
 
-            def on_exclude(event):
-                idx = selected_idx
-                if not active.get(idx, False):
+            def on_toggle_selected(_event):
+                toggle_idx(selected_idx)
+
+            btn_toggle.on_clicked(on_toggle_selected)
+
+            # Clickable list items via pick_event
+            def on_pick(event):
+                artist = event.artist
+                gid = getattr(artist, "get_gid", lambda: None)()
+                if not gid or ":" not in gid:
                     return
-                checks.set_active(idx_to_check_pos[idx])  # toggles checkbox (and triggers styling)
+                _, idx_str = gid.split(":", 1)
+                try:
+                    idx = int(idx_str)
+                except ValueError:
+                    return
 
-            btn.on_clicked(on_exclude)
+                # Also move selection to what you clicked
+                nonlocal selected_idx
+                selected_idx = idx
+                # Update selection slider position accordingly
+                try:
+                    sel_pos = acq_indices.index(idx)
+                    sel_slider.set_val(sel_pos)
+                except ValueError:
+                    pass
 
-            # Initial styling
+                toggle_idx(idx)
+
+            fig.canvas.mpl_connect("pick_event", on_pick)
+
+            # Initial paint
             apply_styling()
 
-            # --- Close handler: modify in place + record dict ---
+            # --- Commit edits on close ---
             def commit():
                 kept = [idx for idx in acq_indices if active.get(idx, False)]
                 cols = [time] + [raw[:, idx] for idx in kept]
                 new_raw = np.column_stack(cols) if cols else raw[:, [0]]
 
-                # MODIFY IN PLACE
-                thzdata.raw_data = new_raw
-
-                # record return dict
+                thzdata.raw_data = new_raw  # MODIFY IN PLACE
                 modified_raw_data_by_file[filename] = new_raw
 
-            def on_close(event):
-                commit()
-
-            fig.canvas.mpl_connect("close_event", on_close)
+            fig.canvas.mpl_connect("close_event", lambda _evt: commit())
 
             print(f"File: {filename}")
-            plt.show()  # blocks until closed
+            plt.show()
 
-            # Safety: if close_event doesn't fire in some backends
+            # Safety fallback if close_event doesn't fire
             if filename not in modified_raw_data_by_file:
                 commit()
 
