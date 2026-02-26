@@ -1120,6 +1120,8 @@ class DataSet:
 
         for filename, thzdata in self.data.items():
             raw = thzdata.raw_data
+            avg = thzdata.data
+            breakpoint()
             if raw is None or raw.size == 0 or raw.shape[1] < 2:
                 modified_raw_data_by_file[filename] = raw
                 continue
