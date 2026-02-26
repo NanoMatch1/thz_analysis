@@ -7,8 +7,10 @@ from matplotlib.widgets import SpanSelector, Slider, CheckButtons, Button
 
 import thz.io.loaders   # <-- imports package, which auto-imports all loader modules
 from thz.io import get_loader_for_extension
-from thz.data_structures.thz import THzData
+from thz.data_structures.thz import THzData, BaseTHzData
 from thz.services.grouping import GroupingService
+from thz.services.database import DatabaseService
+from thz.services.provenance import record_provenance
 from collections.abc import Mapping
 from thz.data_structures.helpers import df_to_dict, smooth_trace_savgol, interpolate_data
 from pathlib import Path
@@ -171,7 +173,126 @@ class DataSet:
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
+        self.seriesname = kwargs.get('seriesname', Path(file_dir).name)
+        self.metadata = dict(kwargs.get('metadata', {}) or {})
+        self.file_metadata = dict(kwargs.get('file_metadata', {}) or {})
+        self.database_service = kwargs.get('database_service', DatabaseService())
         # self.grouping = GroupingService()
+
+    def set_dataset_metadata_tag(self, tag_name: str, tag_value):
+        self.metadata[tag_name] = tag_value
+
+    def remove_dataset_metadata_tag(self, tag_name: str):
+        self.metadata.pop(tag_name, None)
+
+    def set_file_metadata_tags(self, filename: str, **tags):
+        current_tags = self.file_metadata.get(filename, {})
+        current_tags.update(tags)
+        self.file_metadata[filename] = current_tags
+
+    def remove_file_metadata_tag(self, filename: str, tag_name: str):
+        current_tags = self.file_metadata.get(filename, None)
+        if not isinstance(current_tags, dict):
+            return
+        current_tags.pop(tag_name, None)
+
+    def export_h5(
+        self,
+        path: str | Path,
+        *,
+        dataset_metadata: dict | None = None,
+        per_file_metadata: dict[str, dict] | None = None,
+        compression: str | None = 'gzip',
+        compression_opts: int = 1,
+        store_acq_mask: bool = True,
+        registry_path: str | Path | None = None,
+        update_registry: bool = True,
+    ) -> Path:
+        """Export current dataset to one HDF5 file."""
+        file_data_map = {
+            filename: np.asarray(thz_data.raw_data)
+            for filename, thz_data in self.data.items()
+        }
+
+        merged_dataset_metadata = dict(self.metadata)
+        merged_dataset_metadata.update(dataset_metadata or {})
+
+        merged_per_file_metadata = {
+            filename: dict(tags)
+            for filename, tags in self.file_metadata.items()
+            if isinstance(tags, dict)
+        }
+        for filename, tags in (per_file_metadata or {}).items():
+            merged_per_file_metadata.setdefault(filename, {})
+            merged_per_file_metadata[filename].update(tags or {})
+
+        return self.database_service.export_h5(
+            path=path,
+            series_name=self.seriesname,
+            file_data_map=file_data_map,
+            dataset_metadata=merged_dataset_metadata,
+            per_file_metadata=merged_per_file_metadata,
+            compression=compression,
+            compression_opts=compression_opts,
+            store_acq_mask=store_acq_mask,
+            registry_path=registry_path,
+            update_registry=update_registry,
+        )
+
+    def import_h5(
+        self,
+        path: str | Path,
+        *,
+        strict_schema: bool = False,
+        registry_path: str | Path | None = None,
+        update_registry: bool = True,
+    ):
+        """Import dataset contents from one HDF5 file into this DataSet instance."""
+        loaded_payload = self.database_service.load_h5(path=path, strict_schema=strict_schema)
+
+        self.seriesname = loaded_payload.get('series_name', self.seriesname)
+        self.metadata = dict(loaded_payload.get('dataset_metadata', {}) or {})
+        self.file_metadata = {}
+
+        self.data = DataService()
+        self.grouping = self.data.grouping
+
+        for filename, file_payload in loaded_payload.get('files', {}).items():
+            raw_data = np.asarray(file_payload.get('raw_data'))
+            thz_data = self._build_thzdata_from_raw_array(raw_data=raw_data, filename=filename)
+            self.data.add_item(filename, thz_data)
+            self.file_metadata[filename] = dict(file_payload.get('file_metadata', {}) or {})
+
+        self.data.update_filelist(filelist=list(self.data.get_all_data().keys()))
+
+        if update_registry and self.seriesname:
+            self.database_service.update_registry(
+                series_name=self.seriesname,
+                registry_path=registry_path,
+                last_opened_path=str(Path(path).expanduser().resolve()),
+            )
+
+        return self
+
+    def _build_thzdata_from_raw_array(self, raw_data: np.ndarray, filename: str) -> THzData:
+        """Convert compiled raw array [time | acquisitions...] into THzData."""
+        if raw_data.ndim != 2 or raw_data.shape[1] < 2:
+            raise ValueError(
+                f"Invalid raw_data shape for '{filename}': expected (N, >=2), got {raw_data.shape}."
+            )
+
+        scan_list = []
+        time_axis = raw_data[:, 0]
+        for acquisition_column_index in range(1, raw_data.shape[1]):
+            scan_array = np.column_stack((time_axis, raw_data[:, acquisition_column_index]))
+            scan_list.append(BaseTHzData(data=scan_array, headers=[]))
+
+        return THzData(
+            data=scan_list,
+            header=[],
+            filename=filename,
+            data_type='h5',
+        )
 
     def metadata_hook(self, filename: str, thzdata: THzData):
         """

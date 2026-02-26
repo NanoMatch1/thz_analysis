@@ -196,6 +196,7 @@ class THzData:
         self.headers = header if header is not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
         self.data_type = kwargs.get('data_type', None) # e.g. 'acc', 'dat', etc.
         self.filename = kwargs.get('filename', 'unknown_file')
+        self.reference_filename = None
 
         self._meta_data = {} # stores statistical data like noise estimates, phase offset, etc. to be recalled in future processing steps
         self.processing_dict = {}  # stores processed data at various steps for rewind capability and inspection
