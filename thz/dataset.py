@@ -1120,8 +1120,6 @@ class DataSet:
 
         for filename, thzdata in self.data.items():
             raw = thzdata.raw_data
-            avg = thzdata.data
-            breakpoint()
             if raw is None or raw.size == 0 or raw.shape[1] < 2:
                 modified_raw_data_by_file[filename] = raw
                 continue
@@ -1135,7 +1133,8 @@ class DataSet:
 
             # --- Figure / axes layout ---
             fig = plt.figure(figsize=(12.5, 6.5))
-            ax = fig.add_axes([0.07, 0.18, 0.60, 0.75])   # main plot
+            ax = fig.add_axes([0.07, 0.40, 0.60, 0.53])      # main plot
+            ax_std = fig.add_axes([0.07, 0.18, 0.60, 0.18])  # std-dev subplot (~1/3 of main height)
             ax_sel = fig.add_axes([0.07, 0.08, 0.60, 0.04])  # acquisition selector slider
 
             ax_incl = fig.add_axes([0.70, 0.55, 0.28, 0.38])  # included list
@@ -1154,8 +1153,18 @@ class DataSet:
                 (ln,) = ax.plot(time, raw[:, idx], alpha=0.5)
                 lines[idx] = ln
 
-            ax.set_xlabel("Time")
+            # Live aggregate overlays (updated on every include/exclude)
+            (mean_line,) = ax.plot(time, np.full_like(time, np.nan, dtype=float), color="tab:red", linewidth=2.0, zorder=4, label="Mean (included)")
+            (std_line,) = ax_std.plot(time, np.full_like(time, np.nan, dtype=float), color="tab:purple", linewidth=1.6, label="Std (included)")
+
             ax.set_ylabel("Signal Amplitude")
+            ax.grid(alpha=0.25)
+
+            ax_std.set_xlabel("Time")
+            ax_std.set_ylabel("Std dev")
+            ax_std.grid(alpha=0.25)
+            ax_std.set_yscale("log")
+            ax_std.set_xlim(ax.get_xlim()) #workaround for log scale which also resets x-limits, not sure why
 
             # --- Slider to select acquisition ---
             sel_slider = Slider(
@@ -1283,7 +1292,7 @@ class DataSet:
                         continue
 
                     if idx == selected_idx:
-                        ln.set_color("green")
+                        ln.set_color("tab:green")
                         ln.set_alpha(1.0)
                         ln.set_linewidth(2.2)
                         ln.set_zorder(3)
@@ -1292,6 +1301,24 @@ class DataSet:
                         ln.set_alpha(0.5)
                         ln.set_linewidth(1.0)
                         ln.set_zorder(2)
+
+                included = get_included()
+                if included:
+                    included_stack = np.column_stack([raw[:, idx] for idx in included])
+                    mean_trace = np.mean(included_stack, axis=1)
+                    std_trace = np.std(included_stack, axis=1, ddof=1 if len(included) > 1 else 0)
+                else:
+                    mean_trace = np.full_like(time, np.nan, dtype=float)
+                    std_trace = np.full_like(time, np.nan, dtype=float)
+
+                mean_line.set_data(time, mean_trace)
+                std_line.set_data(time, std_trace)
+
+                # Keep both y-axes responsive as exclusions change
+                ax.relim()
+                ax.autoscale_view(scalex=False, scaley=True)
+                ax_std.relim()
+                ax_std.autoscale_view(scalex=False, scaley=True)
 
                 sel_slider.label.set_text(f"Selected (Acq {selected_idx})")
 
