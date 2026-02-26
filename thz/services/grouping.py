@@ -1,6 +1,7 @@
 '''Service for grouping of filenames based on strings, keywords and delimiters. Used to correlate reference and sample across variable datasets suhch as temperature series.'''
 
 from dataclasses import dataclass
+from thz.data_structures.filename_info import FilenameInfo
 
 @dataclass
 class TemperatureItem:
@@ -20,66 +21,8 @@ class TemperatureItem:
         pass
 
 
-class FilenameItem:
-
-
-    def __init__(self, filename: str, keywords=['type', 'series', 'temp'],**kwargs):
-        self.report_list = ['data_type', 'series']
-        self.filename = filename
-        self.series = None
-        self.data_type = None # 'sample' or 'reference'
-        self.keywords = keywords
-
-        self.extra_details = None
-        self.air_reference = None
-        self.substrate_reference = None
-
-        self._parse_filename(keywords=self.keywords, **kwargs)
-
-    def __repr__(self):
-        # details =
-        infolist = []
-        for key in self.report_list:
-            value = self.__dict__.get(key, None)
-            infolist.append(f" -> {key}: {value}")
-        
-        for key in ['extra_details', 'air_reference', 'substrate_reference']:
-            infolist.append(f" -> {key}: {self.__dict__.get(key, None)}")
-        
-        return f"Filename: {self.filename}\n" + "\n".join(infolist)
-    
-    def __str__(self):
-        return self.filename
-
-    def _parse_filename(self, delimiter: str = '_', keywords: list = ['type', 'series', 'temp'], **kwargs):
-        '''Parses the filename into components based on provided delimiter and keywords order.'''
-
-        details = '.'.join(self.filename.split('.')[:-1]) # Remove file extension
-        components = details.split(delimiter)
-        components = [comp.strip() for comp in components if comp.strip()] # remove empty strings and whitespace
-
-        for index, key in enumerate(keywords):
-            if index < len(components):
-                value = components[index]
-                if key == 'type':
-                    self.data_type = value
-                elif key == 'series':
-                    if '.' in value:
-                        indicies = [i for i, ch in enumerate(value) if ch == '.']
-                        value = value[:indicies[-1]]
-                    self.series = value
-                elif key == 'temp':
-                    self.temperature = value
-                else:
-                    self.__dict__[key] = value
-                    self.report_list.append(key) # add new keyword report list
-
-        # handle any extra components *after* assigning main fields
-        if len(components) > len(keywords):
-            extras = components[len(keywords):]
-            if kwargs.get('merge_extra', False):
-                self.series = delimiter.join([self.series, *extras])
-            self.extra_details = extras
+# Backwards-compatible alias. Prefer FilenameInfo in new code.
+FilenameItem = FilenameInfo
             
 
 class GroupingService:
@@ -88,13 +31,12 @@ class GroupingService:
     
     Handles tracking of the current dataset through modifications to the _current_data_list attribute. DataSet can access and modify this attribute to control which files are being worked on.'''
 
-    def __init__(self, keywords=['type', 'series', 'temp'], delimiter='_', **kwargs):
+    def __init__(self, keywords=None, delimiter='_', **kwargs):
         self.filelist = kwargs.get('filelist', [])
         self.file_items = {}
-        self.keywords = keywords
+        self.keywords = keywords if keywords is not None else ['type', 'series', 'temp']
         self.filename_groups = []
         self.global_reference = {}
-        self.keywords = keywords
         self.delimiter = delimiter
         self.__dict__.update(kwargs)
 
@@ -172,8 +114,11 @@ class GroupingService:
             return None
 
     
-    def update(self, filelist=[]):
+    def update(self, filelist=None):
         '''Updates the grouping service with new filelist by appending to the old, and rebuilds file items.'''
+
+        if filelist is None:
+            filelist = []
 
         for filename in filelist:
             self.filelist.append(filename)
@@ -185,7 +130,7 @@ class GroupingService:
         '''Builds FilenameItem objects for each filename in the filelist.'''
 
         for filename in self.filelist:
-            item = FilenameItem(filename, **kwargs)
+            item = FilenameInfo.from_filename(filename, **kwargs)
             self.file_items[filename] = item
 
     def parse_filenames(self, **kwargs):
@@ -197,14 +142,14 @@ class GroupingService:
             kwargs['keywords'] = keywords
 
         for item in self.file_items.values():
-            item._parse_filename(**kwargs)
+            item.parse(**kwargs)
 
     def _group_by_keyword(self, keyword):
         '''Tries to return a dictionary of files grouped by the keyword, if the keyword is present in the filename and itentified by the grouping service.'''
 
         grouping_dict = {}
 
-        for filename, fileitem in self.file_items.values():
+        for filename, fileitem in self.file_items.items():
             key_value = getattr(fileitem, keyword, None)
             if key_value is None:
                 continue
@@ -225,7 +170,7 @@ class GroupingService:
                 continue
   
 
-    def simple_grouping(self, delimiter='_', keywords=['type', 'series', 'temp']):
+    def simple_grouping(self, delimiter='_', keywords=None):
         '''Groups data by slicing the filename. Expects filename to contain data outlined in keywords, and does not (yet) logically check those parameters.
         
         currently: keywords: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
@@ -234,7 +179,10 @@ class GroupingService:
         # TODO: Pair references based on filename inclusive of delimiters after type, not just temperature.
         '''
 
-        self._build_fileitems(delimiter=delimiter, keywords=keywords, merge_extra=True)
+        selected_keywords = keywords if keywords is not None else self.keywords
+
+        self._build_fileitems(delimiter=delimiter, keywords=selected_keywords, merge_extra=True)
+        self.keywords = selected_keywords
         self.parse_filenames()
         self._identify_global_references()
         print("Completed simple grouping of filenames.")

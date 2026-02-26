@@ -173,8 +173,8 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-29_hero-scan'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\Chris'
-    file_dir = r'C:\Users\Samuel\Data\dispersion tests'
-    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
+    # file_dir = r'C:\Users\Samuel\Data\dispersion tests'
+    # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
@@ -186,6 +186,20 @@ if __name__ == "__main__":
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
     print(data_set.data)
+
+    data_ref = data_set.data['Ref_RT.txt']
+    data_samp = data_set.data['Si_RT.txt']
+
+    new_module = r'C:\Users\Samuel\matchbook\tds-test'
+    import sys
+    sys.path.insert(0, new_module)
+    from thz_core.preprocess import align_time
+
+
+    result = align_time(data_ref.data[:, 0], data_ref.data[:, 1], data_samp.data[:, 0], data_samp.data[:, 1], {})
+
+
+    breakpoint()
 
     data_set.data.info
     # breakpoint()
@@ -221,7 +235,6 @@ if __name__ == "__main__":
     # monitor_analysis(data_set)
     # compare_noise_jan() # Compare the noise levels before/after modifications
     data_set.group_files(keywords=['type', 'series'])
-    import sys
 
     dirtest = os.path.dirname(__file__)
     breakpoint()

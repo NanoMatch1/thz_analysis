@@ -236,6 +236,11 @@ class THzData:
     #     '''Consults the grouping service to get the reference THzData object if available. Returns the THzData object or None.'''
 
     @property
+    def type(self) -> str:
+        '''Returns the data type (e.g. 'acc', 'dat', etc.) if available.'''
+        return self.__class__, self.data_type
+
+    @property
     def time_const(self) -> float | None:
         '''Returns the time constant metadata if available. Tries to parse if not, else None.'''
         time_const = self._meta_data.get('time_constant', None)

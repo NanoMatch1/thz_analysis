@@ -112,6 +112,12 @@ class DataService:
         '''Simple grouping based on sample and reference keys provided during initialization.'''
         self.grouping.simple_grouping(**kwargs)
 
+        for filename, filename_info in self.grouping.file_items.items():
+            data_obj = self._data_dict.get(filename, None)
+            if data_obj is None:
+                continue
+            data_obj.filename_info = filename_info
+
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
 
@@ -178,6 +184,8 @@ class DataSet:
         self.file_metadata = dict(kwargs.get('file_metadata', {}) or {})
         self.database_service = kwargs.get('database_service', DatabaseService())
         # self.grouping = GroupingService()
+
+        self.history = {}
 
     def set_dataset_metadata_tag(self, tag_name: str, tag_value):
         self.metadata[tag_name] = tag_value
