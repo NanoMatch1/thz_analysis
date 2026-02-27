@@ -48,12 +48,13 @@ def fft_err_simple(timedata):
     return dff
 
 
-def fft_err(timedata): #asks for data in pandas dataframe created in dataimport.py
+def fft_err(timedata: np.ndarray): 
+    '''perform FFT with error propagation on a time-domain trace with 2D np.array columns [time, mean, std error]'''
 
     #take first column of dataframe as time , 2nd as average and 3rd as error
-    time = timedata.loc[:,'Time (ps)']
-    y_mean = timedata.loc[:,'Mean']
-    y_err =  timedata.loc[:,'std error']
+    time = timedata[:, 0]
+    y_mean = timedata[:, 1]
+    y_err =  timedata[:, 2]
 
     t0 = time.iloc[np.argmax(np.abs(y_mean))]
     print("fft_err: t0 (this trace) =", t0, "ps")

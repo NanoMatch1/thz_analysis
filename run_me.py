@@ -176,6 +176,7 @@ if __name__ == "__main__":
     file_dir = r'C:\Users\Samuel\Data\dispersion tests'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-25_MINTS'
+    file_dir = r'C:\Users\Samuel\Data\2026-02-26\test'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
@@ -226,12 +227,42 @@ if __name__ == "__main__":
     #         plt.show()
             
 
-    new_data = data_set.modify_acquisitions()
+    # new_data = data_set.modify_acquisitions()
     # breakpoint()
 
     # inspect_acquisitions(data_set)
 
-    data_set.plot_current()
+    def normalise(dataY):
+        return (dataY - min(dataY)) / (np.max(np.abs(dataY)-min(dataY)))
+
+    # data_set.plot_current()
+    result = data_set.fft_all()
+
+    fig, ax = plt.subplots(2, 1)
+    for filename, fft_result in result.items():
+        time_data = data_set.data[filename]
+        time_dataX = time_data.data[:, 0]
+        time_dataY = time_data.data[:, 1]
+
+        ax[0].plot(time_dataX, time_dataY, label=filename)
+
+        freqs = fft_result[2:, 0]
+        data = fft_result[2:, 1]
+
+        freqs = normalise(freqs)
+        data = normalise(data)
+        ax[1].plot(freqs, data, label=filename)
+
+    ax[0].set_title('Time-domain Data')
+    ax[0].set_xlabel('Time (ps)')
+    ax[0].set_ylabel('Signal Amplitude')
+    ax[0].legend()
+    ax[1].set_title('Frequency-domain Data (FFT)')
+    ax[1].set_xlabel('Frequency (THz)')
+    ax[1].set_ylabel('Amplitude')
+    ax[1].legend()
+    plt.show()
+        # breakpoint()
 
     # monitor_analysis(data_set)
     # compare_noise_jan() # Compare the noise levels before/after modifications
@@ -270,7 +301,7 @@ if __name__ == "__main__":
 
     # data_set.centerpad_legacy()
     # data_set.prepare_for_fft_all(pad_length_factor=2.5, window_alpha=0.6, baseline_points=10, show_graph=True)
-    data_set.fft_set()
+    # data_set.fft_set()
     # data_set.plot_fft_current(series='fft_raw')
     #TODO: Make export funct
     # breakpoint()

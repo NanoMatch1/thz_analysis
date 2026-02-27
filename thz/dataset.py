@@ -2,7 +2,7 @@ import os
 import numpy as np
 # import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.widgets import SpanSelector, Slider, CheckButtons, Button
+from matplotlib.widgets import SpanSelector
 
 
 import thz.io.loaders   # <-- imports package, which auto-imports all loader modules
@@ -13,6 +13,7 @@ from thz.services.database import DatabaseService
 from thz.services.provenance import record_provenance
 from collections.abc import Mapping
 from thz.data_structures.helpers import df_to_dict, smooth_trace_savgol, interpolate_data
+from thz.data_processing.acquisition_editor import edit_acquisitions_interactive
 from pathlib import Path
 from thz.io import get_loader_for_extension
 import pandas as pd
@@ -671,6 +672,16 @@ class DataSet:
             thz_data.fft_centerpad()
             thz_data.fft_edge_windowed()
 
+    def fft_all(self):
+        '''Runs FFT across different preprocessing methods for all THzData objects in the dataset.'''
+        result_dict = {}
+        for data_object in self.data.values():
+            result = data_object.fft()
+            result_dict[data_object.filename] = result
+        
+        return result_dict
+
+
     # def interpolate_dataset(self, series_key=None):
     #     '''Interpolates all datasets in the processing_dict to a common spacing. Important'''
 
@@ -1095,447 +1106,33 @@ class DataSet:
 
         plt.show()
 
-    def modify_acquisitions(self, page_size: int = 25):
+    def modify_acquisitions(self, page_size: int = 25, in_place: bool = False):
+        """Launch the standalone interactive acquisition editor.
+
+        Parameters
+        ----------
+        page_size : int
+            Items shown per page in Included/Excluded lists.
+        in_place : bool
+            If True, applies saved edits back onto each `THzData.raw_data`.
+            If False (default), leaves `THzData` objects untouched.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Mapping of filename to edited raw_data arrays.
         """
-        Interactive inspector per file:
-
-        Plot:
-          - Slider selects the 'current' acquisition (highlighted green).
-          - Included acquisitions are shown in grey (alpha=0.5).
-          - Excluded acquisitions are hidden.
-          - Toggle button switches the selected acquisition between included/excluded.
-
-        Lists (instead of checkboxes):
-          - Two clickable lists: Included and Excluded.
-          - Clicking an item toggles its state (moves between lists).
-          - Each list is paginated with its own page slider (for long lists).
-
-        MODIFIES IN PLACE:
-          - On close, self.data[filename].raw_data becomes [time | included acquisitions].
-
-        Returns:
-          dict[str, np.ndarray] mapping filename -> modified raw_data array
-        """
-        modified_raw_data_by_file: dict[str, np.ndarray] = {}
-
-        for filename, thzdata in self.data.items():
-            raw = thzdata.raw_data
-            if raw is None or raw.size == 0 or raw.shape[1] < 2:
-                modified_raw_data_by_file[filename] = raw
-                continue
-
-            work_raw = np.array(raw, copy=True)
-
-            time = raw[:, 0]
-            acq_indices = list(range(1, raw.shape[1]))  # acquisitions: columns 1..end
-
-            # --- State ---
-            active = {idx: True for idx in acq_indices}   # included
-            selected_idx = acq_indices[0]
-
-            # --- Figure / axes layout ---
-            fig = plt.figure(figsize=(12.5, 6.5))
-            ax = fig.add_axes([0.07, 0.40, 0.60, 0.53])      # main plot
-            ax_std = fig.add_axes([0.07, 0.18, 0.60, 0.18])  # std-dev subplot (~1/3 of main height)
-            ax_sel = fig.add_axes([0.07, 0.08, 0.60, 0.04])  # acquisition selector slider
-
-            ax_incl = fig.add_axes([0.70, 0.55, 0.28, 0.38])  # included list
-            ax_excl = fig.add_axes([0.70, 0.10, 0.28, 0.38])  # excluded list
-
-            ax_incl_page = fig.add_axes([0.70, 0.50, 0.28, 0.03])
-            ax_excl_page = fig.add_axes([0.70, 0.05, 0.28, 0.03])
-
-            ax_btn = fig.add_axes([0.70, 0.92, 0.28, 0.05])  # toggle selected
-            ax_patch_btn = fig.add_axes([0.70, 0.86, 0.28, 0.05])  # patch/restore selected point
-
-            fig.suptitle(f"Acquisition Comparison: {filename}", y=0.99)
-
-            # --- Plot lines ---
-            lines = {}
-            for idx in acq_indices:
-                (ln,) = ax.plot(time, work_raw[:, idx], alpha=0.5)
-                lines[idx] = ln
-
-            # Marker for manually selected point on the active acquisition trace
-            (selected_point_marker,) = ax.plot(
-                [np.nan], [np.nan],
-                marker="o",
-                linestyle="None",
-                markersize=7,
-                markeredgecolor="black",
-                markerfacecolor="gold",
-                zorder=6,
-            )
-
-            # Live aggregate overlays (updated on every include/exclude)
-            (mean_line,) = ax.plot(time, np.full_like(time, np.nan, dtype=float), color="tab:red", linewidth=2.0, zorder=4, label="Mean (included)")
-            (std_line,) = ax_std.plot(time, np.full_like(time, np.nan, dtype=float), color="tab:purple", linewidth=1.6, label="Std (included)")
-
-            ax.set_ylabel("Signal Amplitude")
-            ax.grid(alpha=0.25)
-
-            ax_std.set_xlabel("Time")
-            ax_std.set_ylabel("Std dev")
-            ax_std.grid(alpha=0.25)
-            ax_std.set_yscale("log")
-            ax_std.set_xlim(ax.get_xlim()) #workaround for log scale which also resets x-limits, not sure why
-
-            # --- Slider to select acquisition ---
-            sel_slider = Slider(
-                ax=ax_sel,
-                label="Selected",
-                valmin=0,
-                valmax=max(0, len(acq_indices) - 1),
-                valinit=0,
-                valstep=1 if len(acq_indices) > 1 else None,
-            )
-
-            # --- Page sliders for Included / Excluded lists ---
-            incl_page_slider = Slider(
-                ax=ax_incl_page,
-                label="Included page",
-                valmin=0,
-                valmax=0,
-                valinit=0,
-                valstep=1,
-            )
-            excl_page_slider = Slider(
-                ax=ax_excl_page,
-                label="Excluded page",
-                valmin=0,
-                valmax=0,
-                valinit=0,
-                valstep=1,
-            )
-
-            # --- Toggle button ---
-            btn_toggle = Button(ax_btn, "Toggle selected (include/exclude)")
-            btn_patch_point = Button(ax_patch_btn, "Toggle point patch")
-            ax.text(
-                0.01,
-                0.99,
-                "Keys: x = include/exclude selected acquisition, p = patch/restore selected point",
-                transform=ax.transAxes,
-                va="top",
-                ha="left",
-                fontsize=8,
-                bbox=dict(boxstyle="round,pad=0.2", alpha=0.15),
-            )
-
-            selected_point_idx = None
-            point_patch_state = {}
-
-            # --- List rendering helpers ---
-            # We store currently drawn text artists so we can replace them cleanly.
-            incl_text_artists = []
-            excl_text_artists = []
-
-            def get_included():
-                return [i for i in acq_indices if active.get(i, False)]
-
-            def get_excluded():
-                return [i for i in acq_indices if not active.get(i, False)]
-
-            def _clear_list(ax_list, artists):
-                for t in artists:
-                    try:
-                        t.remove()
-                    except Exception:
-                        pass
-                artists.clear()
-                ax_list.cla()
-                ax_list.set_xticks([])
-                ax_list.set_yticks([])
-                for spine in ax_list.spines.values():
-                    spine.set_visible(True)
-
-            def _render_list(ax_list, title, items, page, artists, pick_prefix: str):
-                """
-                Draws a simple clickable list. Each item is a Text artist with a gid encoding
-                which acquisition it corresponds to.
-                """
-                _clear_list(ax_list, artists)
-                ax_list.set_title(title, fontsize=10, pad=6)
-
-                start = page * page_size
-                end = min(len(items), start + page_size)
-                view = items[start:end]
-
-                if not view:
-                    t = ax_list.text(
-                        0.02, 0.95, "(none on this page)",
-                        transform=ax_list.transAxes, va="top", fontsize=9, alpha=0.7
-                    )
-                    artists.append(t)
-                    return
-
-                # Evenly space lines vertically
-                n = len(view)
-                top = 0.95
-                bottom = 0.05
-                step = (top - bottom) / max(1, n)
-
-                for k, idx in enumerate(view):
-                    y = top - k * step
-                    t = ax_list.text(
-                        0.02, y, f"Acq {idx}",
-                        transform=ax_list.transAxes,
-                        va="top",
-                        fontsize=9,
-                        picker=True,  # enables pick_event
-                    )
-                    # Encode identity for click handler
-                    t.set_gid(f"{pick_prefix}:{idx}")
-                    artists.append(t)
-
-            def _update_page_sliders():
-                incl = get_included()
-                excl = get_excluded()
-
-                incl_pages = max(1, int(np.ceil(len(incl) / page_size)))
-                excl_pages = max(1, int(np.ceil(len(excl) / page_size)))
-
-                # update max ranges
-                incl_page_slider.valmax = incl_pages - 1
-                excl_page_slider.valmax = excl_pages - 1
-
-                # clamp current values if needed
-                if incl_page_slider.val > incl_page_slider.valmax:
-                    incl_page_slider.set_val(incl_page_slider.valmax)
-                if excl_page_slider.val > excl_page_slider.valmax:
-                    excl_page_slider.set_val(excl_page_slider.valmax)
-
-                # force slider to redraw its bounds
-                incl_page_slider.ax.set_xlim(incl_page_slider.valmin, incl_page_slider.valmax)
-                excl_page_slider.ax.set_xlim(excl_page_slider.valmin, excl_page_slider.valmax)
-
-            def _selected_point_key():
-                if selected_point_idx is None:
-                    return None
-                return (selected_idx, selected_point_idx)
-
-            def _update_patch_button_label():
-                key = _selected_point_key()
-                if key is None:
-                    btn_patch_point.label.set_text("Toggle point patch (no point)")
-                    return
-
-                state = point_patch_state.get(key, None)
-                if state and state.get("patched", False):
-                    btn_patch_point.label.set_text(f"Restore point: Acq {selected_idx}, idx {selected_point_idx}")
-                else:
-                    btn_patch_point.label.set_text(f"Patch point: Acq {selected_idx}, idx {selected_point_idx}")
-
-            def _update_selected_point_marker():
-                if selected_point_idx is None:
-                    selected_point_marker.set_data([np.nan], [np.nan])
-                    return
-
-                y_value = work_raw[selected_point_idx, selected_idx]
-                selected_point_marker.set_data([time[selected_point_idx]], [y_value])
-
-            def apply_styling():
-                nonlocal selected_idx
-
-                for idx, ln in lines.items():
-                    is_on = active.get(idx, False)
-                    ln.set_visible(is_on)
-
-                    if not is_on:
-                        continue
-
-                    if idx == selected_idx:
-                        ln.set_color("tab:green")
-                        ln.set_alpha(1.0)
-                        ln.set_linewidth(2.2)
-                        ln.set_zorder(3)
-                    else:
-                        ln.set_color("0.5")
-                        ln.set_alpha(0.5)
-                        ln.set_linewidth(1.0)
-                        ln.set_zorder(2)
-
-                    ln.set_ydata(work_raw[:, idx])
-
-                included = get_included()
-                if included:
-                    included_stack = np.column_stack([work_raw[:, idx] for idx in included])
-                    mean_trace = np.mean(included_stack, axis=1)
-                    std_trace = np.std(included_stack, axis=1, ddof=1 if len(included) > 1 else 0)
-                else:
-                    mean_trace = np.full_like(time, np.nan, dtype=float)
-                    std_trace = np.full_like(time, np.nan, dtype=float)
-
-                if ax_std.get_yscale() == "log":
-                    std_trace = np.where(std_trace > 0, std_trace, np.nan)
-
-                mean_line.set_data(time, mean_trace)
-                std_line.set_data(time, std_trace)
-                _update_selected_point_marker()
-                _update_patch_button_label()
-
-                # Keep both y-axes responsive as exclusions change
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
-                ax_std.relim()
-                ax_std.autoscale_view(scalex=False, scaley=True)
-
-                sel_slider.label.set_text(f"Selected (Acq {selected_idx})")
-
-                # Update lists + page sliders
-                _update_page_sliders()
-
-                incl_page = int(incl_page_slider.val)
-                excl_page = int(excl_page_slider.val)
-
-                _render_list(ax_incl, "Included", get_included(), incl_page, incl_text_artists, "incl")
-                _render_list(ax_excl, "Excluded", get_excluded(), excl_page, excl_text_artists, "excl")
-
-                fig.canvas.draw_idle()
-
-            def toggle_idx(idx: int):
-                # Toggle include/exclude
-                active[idx] = not active.get(idx, True)
-                apply_styling()
-
-            # --- Widget callbacks ---
-            def on_sel_slider(_val):
-                nonlocal selected_idx
-                nonlocal selected_point_idx
-                pos = int(sel_slider.val)
-                pos = max(0, min(pos, len(acq_indices) - 1))
-                selected_idx = acq_indices[pos]
-                selected_point_idx = None
-                apply_styling()
-
-            sel_slider.on_changed(on_sel_slider)
-
-            def on_incl_page(_val):
-                apply_styling()
-
-            def on_excl_page(_val):
-                apply_styling()
-
-            incl_page_slider.on_changed(on_incl_page)
-            excl_page_slider.on_changed(on_excl_page)
-
-            def on_toggle_selected(_event):
-                toggle_idx(selected_idx)
-
-            btn_toggle.on_clicked(on_toggle_selected)
-
-            def _patched_neighbor_value(column_index: int, point_index: int) -> float:
-                col = work_raw[:, column_index]
-                if point_index <= 0:
-                    return float(col[1]) if col.size > 1 else float(col[0])
-                if point_index >= col.size - 1:
-                    return float(col[-2]) if col.size > 1 else float(col[-1])
-                return float(0.5 * (col[point_index - 1] + col[point_index + 1]))
-
-            def on_toggle_patch_point(_event):
-                key = _selected_point_key()
-                if key is None:
-                    print("Select a point in the top plot first (active acquisition only).")
-                    return
-
-                column_index, point_index = key
-                if not active.get(column_index, False):
-                    print("Selected acquisition is currently excluded; include it before patching points.")
-                    return
-
-                state = point_patch_state.get(key, None)
-                if state is None:
-                    original_value = float(work_raw[point_index, column_index])
-                    state = {
-                        "original": original_value,
-                        "patched": False,
-                    }
-                    point_patch_state[key] = state
-
-                if state["patched"]:
-                    work_raw[point_index, column_index] = state["original"]
-                    state["patched"] = False
-                else:
-                    work_raw[point_index, column_index] = _patched_neighbor_value(column_index, point_index)
-                    state["patched"] = True
-
-                apply_styling()
-
-            btn_patch_point.on_clicked(on_toggle_patch_point)
-
-            def on_main_click(event):
-                nonlocal selected_point_idx
-
-                if event.inaxes is not ax:
-                    return
-                if event.xdata is None:
-                    return
-                if not active.get(selected_idx, False):
-                    print("Active acquisition is excluded; include it to select/edit a point.")
-                    return
-
-                point_index = int(np.argmin(np.abs(time - event.xdata)))
-                selected_point_idx = point_index
-                apply_styling()
-
-            def on_key_press(event):
-                if event.key is None:
-                    return
-
-                key = str(event.key).lower()
-                if key == "x":
-                    on_toggle_selected(None)
-                elif key == "p":
-                    on_toggle_patch_point(None)
-
-            fig.canvas.mpl_connect("button_press_event", on_main_click)
-            fig.canvas.mpl_connect("key_press_event", on_key_press)
-
-            # Clickable list items via pick_event
-            def on_pick(event):
-                artist = event.artist
-                gid = getattr(artist, "get_gid", lambda: None)()
-                if not gid or ":" not in gid:
-                    return
-                _, idx_str = gid.split(":", 1)
-                try:
-                    idx = int(idx_str)
-                except ValueError:
-                    return
-
-                # Also move selection to what you clicked
-                nonlocal selected_idx
-                selected_idx = idx
-                # Update selection slider position accordingly
-                try:
-                    sel_pos = acq_indices.index(idx)
-                    sel_slider.set_val(sel_pos)
-                except ValueError:
-                    pass
-
-                toggle_idx(idx)
-
-            fig.canvas.mpl_connect("pick_event", on_pick)
-
-            # Initial paint
-            apply_styling()
-
-            # --- Commit edits on close ---
-            def commit():
-                kept = [idx for idx in acq_indices if active.get(idx, False)]
-                cols = [time] + [work_raw[:, idx] for idx in kept]
-                new_raw = np.column_stack(cols) if cols else work_raw[:, [0]]
-
-                thzdata.raw_data = new_raw  # MODIFY IN PLACE
-                modified_raw_data_by_file[filename] = new_raw
-
-            fig.canvas.mpl_connect("close_event", lambda _evt: commit())
-
-            print(f"File: {filename}")
-            plt.show()
-
-            # Safety fallback if close_event doesn't fire
-            if filename not in modified_raw_data_by_file:
-                commit()
-
-        return modified_raw_data_by_file
+        raw_by_file = {
+            filename: np.asarray(thz_obj.raw_data)
+            for filename, thz_obj in self.data.items()
+        }
+
+        edited = edit_acquisitions_interactive(raw_by_file, page_size=page_size, in_place=False)
+
+        if in_place:
+            for filename, new_raw in edited.items():
+                thz_obj = self.data.get(filename)
+                if thz_obj is not None:
+                    thz_obj.raw_data = np.asarray(new_raw)
+
+        return edited

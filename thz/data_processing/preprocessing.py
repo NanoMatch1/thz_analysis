@@ -25,7 +25,7 @@ def baseline_subtract(dataY: np.array, n_points: int = 10, **kwargs) -> np.array
     return data_baselined
 
 # ---------- 2. Windowing ----------
-def edge_window(data: np.array, alpha=0.2, **kwargs) -> pd.DataFrame:
+def edge_window(data: np.array, alpha=0.2, **kwargs) -> np.array:
     """
     Apply a Tukey window with edge tapering to the THz time-domain data.
 
@@ -39,7 +39,7 @@ def edge_window(data: np.array, alpha=0.2, **kwargs) -> pd.DataFrame:
     Returns
     -------
     data_windowed : np.array
-        Copy of data with windowed 'Mean' and 'std error'.
+        Copy of 2D array data with windowed 'Mean' and 'std error'.
     """
     dataX = data[:, 0]
     dataY = data[:, 1]

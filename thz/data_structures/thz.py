@@ -930,6 +930,26 @@ class THzData:
         data = np.column_stack((self._data[:, 0], dataY_baselined, self._data[:, 2])) 
         self.processing_dict['baseline_subtracted'] = data
 
+    def edge_window(self, alpha=0.2, **kwargs):
+        data_windowed = edge_window(self._data, alpha=alpha, **kwargs)
+        data = np.column_stack((data_windowed[:, :2], self._data[:, 2])) 
+        self.processing_dict['edge_windowed'] = data
+
+    def fft(self, **kwargs):
+        '''Runs the full fft processing pipeline on the current data and returns the spectrum as a numpy array.'''
+        from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
+        time_axis = self._data[:, 0]
+        dataY = self._data[:, 1]
+        data_y_error = self._data[:, 2]
+
+        freq = rfftfreq(len(time_axis), time_axis[1]-time_axis[0])
+        amplitude = rfft(dataY, norm='ortho')
+        fft_error = rfft(data_y_error, norm='ortho')
+
+        fft_result = np.column_stack((freq, np.abs(amplitude), np.abs(fft_error)))
+        self.processing_dict['fft'] = fft_result
+
+        return fft_result
     
     def prepare_for_fft(self, 
                         baseline_points=10, 
