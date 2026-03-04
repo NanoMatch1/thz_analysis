@@ -681,6 +681,10 @@ class DataSet:
         
         return result_dict
 
+    def transfer_function_all(self, ref_type='substrate'):
+        for filename, data_object in self.data.items():
+            data_object.transfer_function()
+
 
     # def interpolate_dataset(self, series_key=None):
     #     '''Interpolates all datasets in the processing_dict to a common spacing. Important'''

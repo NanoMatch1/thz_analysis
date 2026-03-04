@@ -950,6 +950,14 @@ class THzData:
         self.processing_dict['fft'] = fft_result
 
         return fft_result
+
+    def transfer_function(self):
+        from thz.data_processing.transfer import transfer_function
+        if self.reference_filename is None:
+            print("No reference data available for transfer function calculation.")
+            return None
+        breakpoint()
+        reference_data = self._get_reference_data() # implement this method to retrieve reference data by filename
     
     def prepare_for_fft(self, 
                         baseline_points=10, 

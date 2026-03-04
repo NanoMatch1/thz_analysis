@@ -160,6 +160,21 @@ def power_series_test(data_set: DataSet):
 if __name__ == "__main__":
     import numpy as np
 
+    
+    def normalise(data, region=None):
+        dataX = data[:, 0]
+        dataY = data[:, 1]
+
+        if region is None:
+            min_val = 0
+            max_val = len(dataY)
+        else:
+            min_val = np.searchsorted(dataX, region[0])
+            max_val = np.searchsorted(dataX, region[1])
+
+        return (dataY - min(dataY)) / (np.max(np.abs(dataY[min_val:max_val])-min(dataY)))
+
+
     constants = Constants(
         thickness = 4e-4,
         eps_inf = 1, # glass 3.42, Si 11.6
@@ -172,11 +187,11 @@ if __name__ == "__main__":
     # file_dir = r'C:\Users\Samuel\Data\THz\Dani\2026-01-29_germanium'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-01-29_hero-scan'
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
-    file_dir = r'C:\Users\Samuel\Data\Chris'
     file_dir = r'C:\Users\Samuel\Data\dispersion tests'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-25_MINTS'
     file_dir = r'C:\Users\Samuel\Data\2026-02-26\test'
+    file_dir = r'C:\Users\Samuel\Data\Chris'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
@@ -231,42 +246,38 @@ if __name__ == "__main__":
     # breakpoint()
 
     # inspect_acquisitions(data_set)
-
-    def normalise(dataY):
-        return (dataY - min(dataY)) / (np.max(np.abs(dataY)-min(dataY)))
-
+    
+    def view_dft(data_set: DataSet):
     # data_set.plot_current()
-    result = data_set.fft_all()
+        result = data_set.fft_all()
 
-    fig, ax = plt.subplots(2, 1)
-    for filename, fft_result in result.items():
-        time_data = data_set.data[filename]
-        time_dataX = time_data.data[:, 0]
-        time_dataY = time_data.data[:, 1]
+        fig, ax = plt.subplots(2, 1)
+        for filename, fft_result in result.items():
+            time_data = data_set.data[filename]
+            time_dataX = time_data.data[:, 0]
+            time_dataY = time_data.data[:, 1]
 
-        ax[0].plot(time_dataX, time_dataY, label=filename)
+            ax[0].plot(time_dataX, time_dataY, label=filename)
 
-        freqs = fft_result[2:, 0]
-        data = fft_result[2:, 1]
+            freqs = fft_result[2:, 0] 
+            data = fft_result[2:, 1]
 
-        freqs = normalise(freqs)
-        data = normalise(data)
-        ax[1].plot(freqs, data, label=filename)
+            data = normalise(np.column_stack((freqs, data)), region=(1.5, 2.5))
+            ax[1].plot(freqs, data, label=filename)
 
-    ax[0].set_title('Time-domain Data')
-    ax[0].set_xlabel('Time (ps)')
-    ax[0].set_ylabel('Signal Amplitude')
-    ax[0].legend()
-    ax[1].set_title('Frequency-domain Data (FFT)')
-    ax[1].set_xlabel('Frequency (THz)')
-    ax[1].set_ylabel('Amplitude')
-    ax[1].legend()
-    plt.show()
-        # breakpoint()
+        ax[0].set_title('Time-domain Data')
+        ax[0].set_xlabel('Time (ps)')
+        ax[0].set_ylabel('Signal Amplitude')
+        ax[0].legend()
+        ax[1].set_title('Frequency-domain Data (FFT)')
+        ax[1].set_xlabel('Frequency (THz)')
+        ax[1].set_ylabel('Amplitude')
+        ax[1].legend()
+        plt.show()
+            # breakpoint()
 
     # monitor_analysis(data_set)
     # compare_noise_jan() # Compare the noise levels before/after modifications
-    data_set.group_files(keywords=['type', 'series'])
     # references = data_set.data.references
     # samples = data_set.data.samples
 
@@ -291,11 +302,12 @@ if __name__ == "__main__":
     # ax[1].set_title('Samples')
     # ax[1].legend()
     # plt.show()
-    data_set.align_on_peak()
-    # data_set.align_on_peak(auto_range=(47, 53))
-    data_set.baseline_all(baseline_points=10)
-    data_set.edge_window_all(alpha=0.2, show_graph=True)
-    data_set.plot_current(index_axis=True)
+    data_set.group_files(keywords=['type', 'series'])
+    # data_set.align_on_peak()
+    data_set.align_on_peak(auto_range=(47, 53))
+    data_set.baseline_all(baseline_points=10, show_graph=True)
+    data_set.edge_window_all(alpha=0.2, show_graph=False)
+    # data_set.plot_current(index_axis=True)
     # data_set.plot_current(index_axis=True)
 
 
@@ -307,7 +319,11 @@ if __name__ == "__main__":
     # breakpoint()
     # data_set.plot_fft_current(series='fft_edge_windowed')
     # data_set.plot_fft_current(series='fft_centered_padded')
-    transfer, phase = data_set.fft_compare()
+    # transfer, phase = data_set.fft_compare()
+    result = data_set.fft_all()
+    transfer = data_set.transfer_function_all()
+
+    breakpoint()
     # breakpoint()
 
 
