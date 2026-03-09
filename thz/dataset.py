@@ -111,13 +111,16 @@ class DataService:
 
     def group_simple(self, **kwargs):
         '''Simple grouping based on sample and reference keys provided during initialization.'''
-        self.grouping.simple_grouping(**kwargs)
+        result = self.grouping.simple_grouping(**kwargs)
 
         for filename, filename_info in self.grouping.file_items.items():
             data_obj = self._data_dict.get(filename, None)
             if data_obj is None:
                 continue
             data_obj.filename_info = filename_info
+        
+        return result
+
 
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
@@ -640,7 +643,23 @@ class DataSet:
 
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
-        self.data.group_simple(**kwargs)
+        return self.data.group_simple(**kwargs)
+
+    def assign_references(self, reference_type='substrate'):
+        '''Workaround for convenience. Checks the filename_info from grouping and assigns the reference_filename attribute for each THzData object in the dataset.'''
+        for filename, data_object in self.data.items():
+            filename_info = data_object.filename_info
+            if filename_info is not None:
+                reference_filename = filename_info.substrate_reference
+                if reference_filename is None and 'reference' in filename:
+                    continue
+                data_object.reference_filename = reference_filename
+                # reference_data = self.data.get(reference_filename)
+                # if reference_data is None:
+                #     print(f"Warning: Reference file '{reference_filename}' for '{filename}' not found in dataset.")
+                # data_object.reference_data = reference_data.data
+
+        
 
     def get_file_item(self, filename):
         '''Access the grouping information for a specific filename.'''
@@ -682,8 +701,30 @@ class DataSet:
         return result_dict
 
     def transfer_function_all(self, ref_type='substrate'):
+        from thz.data_processing.transfer import transfer_function
+        transfer_dict = {}
         for filename, data_object in self.data.items():
-            data_object.transfer_function()
+            if data_object.filename_info.data_type == 'reference':
+                continue
+            reference_filename = data_object.reference_filename
+            reference_data = self.data[reference_filename].data
+            sample_data = data_object.data
+            freq_axis = sample_data[:, 0] # assuming first column is time/frequency axis
+            sample_axis = sample_data[:, 1] # assuming second column is amplitude axis
+            reference_axis = reference_data[:, 1] # assuming second column is amplitude axis
+            transfer_result = transfer_function(freq_axis, sample_axis, reference_axis, {})
+
+            transfer_dict[filename] = transfer_result
+            data_object.processing_dict['transfer_function'] = transfer_result
+            transfer_data = transfer_result[0]
+            data_object._data = np.column_stack((freq_axis, transfer_data))
+
+        return transfer_dict
+
+
+
+
+            # reference_data = self.data[]
 
 
     # def interpolate_dataset(self, series_key=None):
@@ -1059,7 +1100,10 @@ class DataSet:
         plt.show()
         return fig, ax, state
 
-    
+    def pad_time_domain_all(self, length_factor: int = 5, show_graph=False, **kwargs) -> None:
+        '''Pads the time-domain data for all THzData objects in the dataset to prepare for FFT.'''
+        for thz_data in self.data.values():
+            thz_data.pad_time_domain(length_factor=length_factor, show_graph=show_graph)
 
     def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, **kwargs) -> None:
         '''Prepares all THzData objects for FFT by subtracting DC offset, centering pulse, and padding time-domain data.'''

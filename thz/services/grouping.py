@@ -189,6 +189,8 @@ class GroupingService:
 
         self.integrity_check()
         self._pair_references()
+        
+        return self.file_items
 
     def integrity_check(self):
         '''Performs an integrity check on the grouped filenames to ensure each group has the expected components required for analysis.'''
@@ -221,7 +223,7 @@ class GroupingService:
         for filename, fileitem in samples.items():
             keywords = fileitem.report_list.copy()
             keywords.remove('data_type')  # remove type to match on other keywords
-            keywords.remove('series')  # remove series to match on other keywords 
+            # keywords.remove('series')  # remove series to match on other keywords 
             match_criteria = {key: getattr(fileitem, key, None) for key in keywords}
 
             if match_criteria == {}:

@@ -181,6 +181,8 @@ class THzData:
     Currently implements a storage-bomb strategy where each item holds the processed data, including time-trace, fourier transformed spectrum, and referenced data. 
     Future versions will implement a more memory-efficient storage strategy with rewind features.
 
+    #TODO: put data into dictionary for time, freq, reference, etc.
+
     '''
 
     # df compatibility mapping
@@ -205,6 +207,8 @@ class THzData:
         self._time_data_headers = ["Time (ps)", "Mean", "std error"]
         self._freq_data = None
         self._freq_data_headers = None
+
+        self.reference_data = None
 
         # self._identify_time_constant()
 
@@ -938,26 +942,83 @@ class THzData:
     def fft(self, **kwargs):
         '''Runs the full fft processing pipeline on the current data and returns the spectrum as a numpy array.'''
         from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
+        from math import e
         time_axis = self._data[:, 0]
         dataY = self._data[:, 1]
         data_y_error = self._data[:, 2]
 
         freq = rfftfreq(len(time_axis), time_axis[1]-time_axis[0])
-        amplitude = rfft(dataY, norm='ortho')
+        dataY_amplitude = rfft(dataY, norm='ortho')
         fft_error = rfft(data_y_error, norm='ortho')
 
-        fft_result = np.column_stack((freq, np.abs(amplitude), np.abs(fft_error)))
+        fft_result = np.column_stack((freq, np.abs(dataY_amplitude), np.abs(fft_error)))
         self.processing_dict['fft'] = fft_result
 
-        return fft_result
+        dataY_amplitude = abs(dataY_amplitude)
 
-    def transfer_function(self):
-        from thz.data_processing.transfer import transfer_function
-        if self.reference_filename is None:
-            print("No reference data available for transfer function calculation.")
-            return None
-        breakpoint()
-        reference_data = self._get_reference_data() # implement this method to retrieve reference data by filename
+        ft_variance = rfft(data_y_error**2,  norm='ortho')
+        sr = np.sqrt(abs(ft_variance.real))
+        si = np.sqrt(abs(ft_variance.imag))
+    
+        # informed phase unwrapping (see header for details)
+        t0 = time_axis[np.argmax(abs(dataY))]       #find maximum time domain
+        phase0 = 2*np.pi*t0*freq                #phase of the maximum
+        dataY_amplitude = dataY_amplitude*e**(-1j*phase0)   #reduced phase
+        phase = np.angle(dataY_amplitude)
+        
+        phase = -np.unwrap(phase) #either this minus sign or complex conjugated fft (sign convention)
+        phase = phase+phase0
+        
+        
+        #error propagation from cartesian to polar coordinates 
+        err_amplitude = np.sqrt((sr*dataY_amplitude.real)**2+(si*dataY_amplitude.imag)**2)/dataY_amplitude
+        err_phase =     np.sqrt((si/dataY_amplitude.real)**2+
+                                (dataY_amplitude.imag*sr/dataY_amplitude.real**2)**2)/(1+(dataY_amplitude.imag/dataY_amplitude.real)**2)
+
+        err_phase = err_phase*phase #to account for unwrapped phase
+
+        self._data = fft_result
+        self.dataX = freq
+        self.dataY = dataY_amplitude
+
+        phase_data = np.column_stack((freq, phase, err_phase))
+
+        # fft_result = np.column_stack((fft_result, phase, err_phase))
+        fft_dict = {'data': fft_result, 'phase': phase_data}
+
+        return fft_dict
+
+    def pad_time_domain(self, length_factor: int = 5, **kwargs) -> pd.DataFrame:
+        """
+        Symmetrically pads the dataset with zeros to extend its length by a specified factor. Perform after windowing.
+
+        Parameters
+        ----------
+        df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+        length_factor : int
+            Final length will be length_factor * original length.
+        """
+
+        time = self._data[:, 0]
+        y_mean = self._data[:, 1]
+        std_err = self._data[:, 2]
+        N_array = len(time)
+
+        dt = time[1] - time[0]
+
+        pad_width = ((length_factor * N_array) - N_array) // 2
+        end_value_left = time[0] - (pad_width * dt)
+        end_value_right = time[-1] + (pad_width * dt)
+
+        new_time = np.pad(time, (pad_width, pad_width), mode='linear_ramp', end_values=(end_value_left, end_value_right))
+        new_y_mean =  np.pad(y_mean, (pad_width, pad_width), mode='constant', constant_values=(0,0))
+        new_std_err = np.pad(std_err, (pad_width, pad_width), mode='constant', constant_values=(0,0))
+
+        self._data = np.column_stack((new_time, new_y_mean, new_std_err))
+        self.dataX = new_time
+        self.dataY = new_y_mean
+
+        return self._data
     
     def prepare_for_fft(self, 
                         baseline_points=10, 

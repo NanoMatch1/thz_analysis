@@ -190,8 +190,8 @@ if __name__ == "__main__":
     file_dir = r'C:\Users\Samuel\Data\dispersion tests'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-25_MINTS'
-    file_dir = r'C:\Users\Samuel\Data\2026-02-26\test'
-    file_dir = r'C:\Users\Samuel\Data\Chris'
+    # file_dir = r'C:\Users\Samuel\Data\2026-02-26\test'
+    # file_dir = r'C:\Users\Samuel\Data\Chris'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_noise_tests_FR\power_series'
     # file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-09\test'
@@ -230,7 +230,7 @@ if __name__ == "__main__":
     #             if index == 0:
     #                 continue
     #             column_data = thzdata.raw_data[:, index]
-    #             acquisition_dict[index] = column_data
+    #             acquisition_dict[index] = column_data'
 
     #         time = thzdata.raw_data[:, 0]
     #         for index, column_data in acquisition_dict.items():
@@ -242,7 +242,7 @@ if __name__ == "__main__":
     #         plt.show()
             
 
-    # new_data = data_set.modify_acquisitions()
+    new_data = data_set.modify_acquisitions()
     # breakpoint()
 
     # inspect_acquisitions(data_set)
@@ -302,12 +302,16 @@ if __name__ == "__main__":
     # ax[1].set_title('Samples')
     # ax[1].legend()
     # plt.show()
-    data_set.group_files(keywords=['type', 'series'])
+    group_summary = data_set.group_files(keywords=['type', 'series'])
+    data_set.assign_references()
+    print(group_summary)
     # data_set.align_on_peak()
+
     data_set.align_on_peak(auto_range=(47, 53))
     data_set.baseline_all(baseline_points=10, show_graph=True)
     data_set.edge_window_all(alpha=0.2, show_graph=False)
-    # data_set.plot_current(index_axis=True)
+
+    # data_set.plot_current(index_axis=True) 
     # data_set.plot_current(index_axis=True)
 
 
@@ -320,12 +324,29 @@ if __name__ == "__main__":
     # data_set.plot_fft_current(series='fft_edge_windowed')
     # data_set.plot_fft_current(series='fft_centered_padded')
     # transfer, phase = data_set.fft_compare()
+    data_set.pad_time_domain_all(length_factor=5)
     result = data_set.fft_all()
-    transfer = data_set.transfer_function_all()
-
     breakpoint()
+    # transfer = data_set.transfer_function_all()
+
+
     # breakpoint()
 
+    fig, ax = plt.subplots(2, 1)
+    for filename, fft_result in result.items():
+        data = fft_result['data']
+        phase = fft_result['phase']
+        freqs = data[:, 0]
+        amplitude = data[:, 1]
+        phase_freqs = phase[:, 0]
+        phase_values = phase[:, 1]
+
+        ax[0].plot(freqs, amplitude, label='{}: Amplitude'.format(filename))
+        ax[1].plot(phase_freqs, phase_values, label='{}: Phase'.format(filename))
+        ax[0].legend()
+        ax[1].legend()
+
+    plt.show()
 
 
 
