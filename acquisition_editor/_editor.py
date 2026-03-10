@@ -43,22 +43,25 @@ def _edit_single_array(
     active = {idx: True for idx in acq_indices}
     selected_idx = acq_indices[0]
 
-    fig = plt.figure(figsize=(12.5, 6.5))
-    ax = fig.add_axes([0.07, 0.40, 0.60, 0.53])
-    ax_std = fig.add_axes([0.07, 0.18, 0.60, 0.18])
-    ax_sel = fig.add_axes([0.07, 0.08, 0.60, 0.04])
+    fig = plt.figure(figsize=(14, 8))
 
-    ax_incl = fig.add_axes([0.70, 0.55, 0.28, 0.31])
-    ax_excl = fig.add_axes([0.70, 0.18, 0.28, 0.31])
+    # ── Left column: main plot, std-dev plot, acquisition slider ──
+    L, PW = 0.08, 0.56
+    ax     = fig.add_axes([L, 0.44, PW, 0.50])                # main plot
+    ax_std = fig.add_axes([L, 0.26, PW, 0.14])                # std dev plot
+    ax_sel = fig.add_axes([L + 0.11, 0.15, PW - 0.11, 0.03])  # slider
 
-    ax_incl_page = fig.add_axes([0.70, 0.50, 0.28, 0.03])
-    ax_excl_page = fig.add_axes([0.70, 0.13, 0.28, 0.03])
+    # ── Right column: buttons, list panels, page sliders, save ──
+    R, RW = 0.70, 0.25
+    ax_btn       = fig.add_axes([R, 0.91, RW, 0.05])    # toggle button
+    ax_patch_btn = fig.add_axes([R, 0.85, RW, 0.05])    # patch button
+    ax_incl      = fig.add_axes([R, 0.57, RW, 0.26])    # included list
+    ax_incl_page = fig.add_axes([R, 0.53, RW, 0.03])    # page slider
+    ax_excl      = fig.add_axes([R, 0.21, RW, 0.26])    # excluded list
+    ax_excl_page = fig.add_axes([R, 0.17, RW, 0.03])    # page slider
+    ax_save_btn  = fig.add_axes([R, 0.06, RW, 0.05])    # save button
 
-    ax_btn = fig.add_axes([0.70, 0.92, 0.28, 0.05])
-    ax_patch_btn = fig.add_axes([0.70, 0.86, 0.28, 0.05])
-    ax_save_btn = fig.add_axes([0.70, 0.05, 0.28, 0.05])
-
-    fig.suptitle(f"Acquisition Comparison: {filename}", y=0.99)
+    fig.suptitle(f"Acquisition Comparison: {filename}", y=0.97, fontsize=13)
 
     lines = {}
     for idx in acq_indices:
@@ -99,6 +102,7 @@ def _edit_single_array(
     ax_std.set_ylabel("Std dev")
     ax_std.grid(alpha=0.25)
     ax_std.set_yscale("log")
+    ax_std.yaxis.set_minor_formatter(plt.NullFormatter())
     ax_std.set_xlim(ax.get_xlim())
 
     sel_slider = Slider(
@@ -112,7 +116,7 @@ def _edit_single_array(
 
     incl_page_slider = Slider(
         ax=ax_incl_page,
-        label="Included page",
+        label="",
         valmin=0,
         valmax=0,
         valinit=0,
@@ -120,7 +124,7 @@ def _edit_single_array(
     )
     excl_page_slider = Slider(
         ax=ax_excl_page,
-        label="Excluded page",
+        label="",
         valmin=0,
         valmax=0,
         valinit=0,
@@ -173,7 +177,15 @@ def _edit_single_array(
 
     def _render_list(ax_list, title, items, page, artists, pick_prefix: str):
         _clear_list(ax_list, artists)
-        ax_list.set_title(title, fontsize=10, pad=6)
+
+        # Title rendered inside the axes so it never overlaps neighbours.
+        t_title = ax_list.text(
+            0.50, 0.97, title,
+            transform=ax_list.transAxes,
+            ha="center", va="top",
+            fontsize=10, fontweight="bold",
+        )
+        artists.append(t_title)
 
         start = page * page_size
         end = min(len(items), start + page_size)
@@ -182,7 +194,7 @@ def _edit_single_array(
         if not view:
             t = ax_list.text(
                 0.02,
-                0.95,
+                0.85,
                 "(none on this page)",
                 transform=ax_list.transAxes,
                 va="top",
@@ -193,8 +205,8 @@ def _edit_single_array(
             return
 
         n = len(view)
-        top = 0.95
-        bottom = 0.05
+        top = 0.88
+        bottom = 0.03
         step = (top - bottom) / max(1, n)
 
         for k, idx in enumerate(view):
@@ -309,6 +321,12 @@ def _edit_single_array(
         ax.autoscale_view(scalex=False, scaley=True)
         ax_std.relim()
         ax_std.autoscale_view(scalex=False, scaley=True)
+
+        # Constrain log-scale y-limits to the actual data range so tick
+        # labels don't extend far outside the axes.
+        valid_std = std_trace[np.isfinite(std_trace) & (std_trace > 0)]
+        if valid_std.size > 0:
+            ax_std.set_ylim(valid_std.min() * 0.3, valid_std.max() * 3.0)
 
         sel_slider.label.set_text(f"Selected (Acq {selected_idx})")
 
