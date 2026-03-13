@@ -189,7 +189,7 @@ if __name__ == "__main__":
     file_dir = r'C:\Users\Samuel\Data\THz\noisetest\2026-02-03\comparison'
     file_dir = r'C:\Users\Samuel\Data\dispersion tests'
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS'
-    file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-25_MINTS'
+    file_dir = r'C:\Users\Samuel\Data\THz\Dani\13032026'
     # file_dir = r'C:\Users\Samuel\Data\2026-02-26\test'
     # file_dir = r'C:\Users\Samuel\Data\Chris'
     # file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-02-06_MINTS'
@@ -199,10 +199,14 @@ if __name__ == "__main__":
 
     # compare_noise_jan() # Compare the noise levels before/after modifications
     # compare_noise_jan(scale='log') # Compare the noise levels before/after modifications
+    
 
     data_set = DataSet(file_dir=file_dir, sample_keys=['sample'], reference_keys=['reference'])
     data_set.load_all_data()
     print(data_set.data)
+
+    data_set.plot_current(line_alpha=1, normalise=True, normalise_region=(510,515), show_graph=True)
+    new_data = data_set.modify_acquisitions()
 
     # data_ref = data_set.data['Ref_RT.txt']
     # data_samp = data_set.data['Si_RT.txt']
@@ -242,7 +246,6 @@ if __name__ == "__main__":
     #         plt.show()
             
 
-    new_data = data_set.modify_acquisitions()
     # breakpoint()
 
     # inspect_acquisitions(data_set)
@@ -418,7 +421,6 @@ if __name__ == "__main__":
     #     if 'sample' in filename.lower():
     #         test = data_set.grouper(filename)
     #         breakpoint()
-    # data = data_set.grabone()
     # datadict = data_set.compute_all_constants(constants)
     breakpoint()
     data_set.plot_current()

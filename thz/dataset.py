@@ -471,7 +471,7 @@ class DataSet:
         for thz_data in self.data.values():
             thz_data.constants = constants
         
-    def grabone(self) -> THzData:
+    def grabonedata(self) -> THzData:
         '''Returns one THzData object from the data_dict for quick access.'''
         if self.data:
             first_data = next(iter(self.data.values()))

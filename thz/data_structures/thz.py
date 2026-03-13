@@ -195,7 +195,7 @@ class THzData:
     def __init__(self, data: list, header: list, **kwargs) -> None:
         self.data_list = data  # list of BaseTHz objects for each scan
         self.raw_data = self._compile_data_array()  # np.array of compiled data from all scans
-        self.headers = header if header is not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
+        self.headers = header if header is not None else self._grabonedata().headers  # retain headers from first scan # Dictionary of header information
         self.data_type = kwargs.get('data_type', None) # e.g. 'acc', 'dat', etc.
         self.filename = kwargs.get('filename', 'unknown_file')
         self.reference_filename = None
@@ -320,7 +320,7 @@ class THzData:
                 compiled_data = np.column_stack((compiled_data, obj.raw_data[:, 1]))
         return compiled_data
     
-    def _grabone(self, index=0) -> BaseTHzData:
+    def _grabonedata(self, index=0) -> BaseTHzData:
         '''Returns a single BaseTHzData object from the data_list by index.'''
         return self.data_list[index]
     
