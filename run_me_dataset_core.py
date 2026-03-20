@@ -22,13 +22,15 @@ if __name__ == "__main__":
     # dataset.load_state()
 
     # --- THz-TDS processing pipeline ---
-    thz.align_on_peak(dataset, show_graph=True, auto_range=(50, 60))
-    thz.window_time(dataset, config={"type": "tukey", "alpha": 0.25}, show_graph=True)
+    thz.subtract_baseline(dataset)
+    thz.align_on_peak(dataset, show_graph=True, auto_range=None)
+    thz.window_time(dataset, config={"type": "tukey", "alpha": 0.25})
     thz.zero_pad(dataset, config={"extend_factor": 2.0})
     thz.fft_spectrum(dataset)
     thz.transfer_function(dataset)
-    # thz.invert_nk(dataset, thickness_m=1e-3)
-    # thz.derive_eps_sigma(dataset)
+    dataset.save_state()
+    thz.invert_nk(dataset, thickness_m=1e-3)
+    thz.derive_eps_sigma(dataset)
 
     dataset.save_state()
 

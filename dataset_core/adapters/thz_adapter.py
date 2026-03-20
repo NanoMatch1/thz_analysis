@@ -30,6 +30,20 @@ def _build_data_dict(dataset: DataSet) -> dict:
 # pipeline steps
 # ---------------------------------------------------------------------------
 
+def subtract_baseline(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Subtract DC baseline from each trace (removes detector/digitiser offset)."""
+    config = config or {}
+
+    data_dict = _build_data_dict(dataset)
+    corrected, metrics = core.subtract_baseline(data_dict, config)
+
+    for filename, data_obj in dataset.data.items():
+        data_obj.data = corrected[filename]
+        data_obj.processing_dict['baseline_metrics'] = metrics
+
+    return dataset
+
+
 def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple = None) -> DataSet:
     """Aligns all acquisitions in the dataset on their main peak."""
 
