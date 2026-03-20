@@ -25,8 +25,8 @@ if __name__ == "__main__":
         thz.align_on_peak(dataset, show_graph=True, auto_range=None)
         dataset.save_state()
 
-    preprocess(dataset)
-    # dataset.load_state()
+    # preprocess(dataset)
+    dataset.load_state()
     thz.window_time(dataset, config={"type": "tukey", "alpha": 0.25})
     # thz.zero_pad(dataset, config={"extend_factor": 2.0})
     thz.fft_spectrum(dataset)

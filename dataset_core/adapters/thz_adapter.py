@@ -395,7 +395,7 @@ class ResultViewer:
 
     def __init__(self, dataset: DataSet):
         import matplotlib.pyplot as plt
-        from matplotlib.widgets import RadioButtons, CheckButtons
+        from matplotlib.widgets import RadioButtons, CheckButtons, TextBox
 
         self._plt = plt
         self._dataset = dataset
@@ -418,6 +418,8 @@ class ResultViewer:
             self._colours[fn] = (0.5, 0.5, 0.5, 0.6)
 
         self._current_plot = self.PLOT_TYPES[0]
+        self._freq_min = None   # persistent x-axis limits (None = auto)
+        self._freq_max = None
 
         # --- layout ---
         self._fig = plt.figure(figsize=(14, 8))
@@ -441,6 +443,15 @@ class ResultViewer:
         check_ax.set_frame_on(False)
         self._check = CheckButtons(check_ax, short_names, initial_vis)
         self._check.on_clicked(self._on_check_toggled)
+
+        # Frequency range textboxes
+        self._fig.text(0.72, 0.48, 'Freq range (THz):', fontsize=8)
+        fmin_ax = self._fig.add_axes([0.72, 0.44, 0.10, 0.035])
+        fmax_ax = self._fig.add_axes([0.85, 0.44, 0.10, 0.035])
+        self._tb_fmin = TextBox(fmin_ax, '', initial='', textalignment='center')
+        self._tb_fmax = TextBox(fmax_ax, '', initial='', textalignment='center')
+        self._tb_fmin.on_submit(self._on_freq_min_changed)
+        self._tb_fmax.on_submit(self._on_freq_max_changed)
 
         # Coordinate readout text
         self._coord_text = self._fig.text(
@@ -470,6 +481,16 @@ class ResultViewer:
             if self._short(fn) == label:
                 self._visible[fn] = not self._visible[fn]
                 break
+        self._draw_current()
+
+    def _on_freq_min_changed(self, text: str):
+        text = text.strip()
+        self._freq_min = float(text) if text else None
+        self._draw_current()
+
+    def _on_freq_max_changed(self, text: str):
+        text = text.strip()
+        self._freq_max = float(text) if text else None
         self._draw_current()
 
     def _on_mouse_move(self, event):
@@ -506,6 +527,7 @@ class ResultViewer:
         }[plot_type]
 
         draw_fn()
+        self._apply_freq_limits()
         self._fig.canvas.draw_idle()
 
     def _set_single_panel(self):
@@ -518,6 +540,14 @@ class ResultViewer:
         self._ax_bot.set_position([0.07, 0.08, 0.60, 0.40])
         self._ax_bot.set_visible(True)
         self._single_panel_mode = False
+
+    def _apply_freq_limits(self):
+        if self._freq_min is not None or self._freq_max is not None:
+            lo = self._freq_min if self._freq_min is not None else None
+            hi = self._freq_max if self._freq_max is not None else None
+            self._ax_top.set_xlim(left=lo, right=hi)
+            if self._ax_bot.get_visible():
+                self._ax_bot.set_xlim(left=lo, right=hi)
 
     def _visible_samples(self):
         for fn in self._sample_names:

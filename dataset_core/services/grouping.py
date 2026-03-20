@@ -93,6 +93,8 @@ class GroupingService:
             "keywords": self.keywords,
             "delimiter": self.delimiter,
             "global_reference": self.global_reference,
+            "filelist": list(self.filelist),
+            "current_data_list": list(self._current_data_list),
         }
         return state
     
@@ -102,6 +104,8 @@ class GroupingService:
         self.keywords = state.get("keywords", self.keywords)
         self.delimiter = state.get("delimiter", self.delimiter)
         self.global_reference = state.get("global_reference", self.global_reference)
+        self.filelist = state.get("filelist", list(self.file_items.keys()))
+        self._current_data_list = state.get("current_data_list", self.filelist)
 
     def set_grouping_keywords(self, new_keywords):
         self.keywords = new_keywords
