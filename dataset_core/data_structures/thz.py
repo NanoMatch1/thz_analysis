@@ -203,6 +203,7 @@ class THzData:
         self.reference_data = None
 
         self._data = self._time_data  # Current working data (time or frequency domain)
+        self.current_state = 'time_domain'  # tracks whether current data is time or frequency domain, etc.
 
     def __getitem__(self, key):
         """
@@ -243,6 +244,18 @@ class THzData:
     def data(self) -> np.array:
         '''Returns the current working data array (time or frequency domain).'''
         return self._data
+
+    @data.setter
+    def data(self, new_data: np.array):
+        '''Setter for current working data array.'''
+        if self.current_state == 'time_domain':
+            self._data = new_data
+            self._time_data = new_data
+        elif self.current_state == 'frequency_domain':
+            self._data = new_data
+            self._freq_data = new_data
+        else:
+            raise ValueError(f"Unknown current_state {self.current_state}. Cannot set data.")
 
     # df compatibility properties
     @property

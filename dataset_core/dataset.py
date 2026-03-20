@@ -7,6 +7,9 @@ from dataset_core.io import get_loader_for_extension
 from dataset_core.data_structures.thz import THzData, BaseTHzData
 from dataset_core.services.grouping import GroupingService
 from dataset_core.services.database import DatabaseService
+
+import thz_core as thz  
+
 from pathlib import Path
 
 
@@ -342,7 +345,7 @@ class DataSet:
     def group_files(self, **kwargs):
         '''Simple grouping based on sample and reference keys provided during initialization.'''
         self.grouping.simple_grouping(keywords=kwargs.get('keywords', None))
-            
+
     def add_item(self, filename, obj):
         self.data.add_item(filename, obj)
 
@@ -510,3 +513,33 @@ class DataSet:
                 save_dat(save_data, filepath)
 
         return edited_data
+    
+    def save_state(self):
+        import pickle
+        """Saves the current state of data service and grouping serivice for faster reloading later."""
+        pickle_path = os.path.join(self.file_dir, f"{self.seriesname}_state.pkl")
+        state = {
+            "data_dict": self.data.data_dict,
+            "grouping_state": self.grouping.get_state(),
+        }
+
+        with open(pickle_path, "wb") as f:
+            pickle.dump(state, f)
+        print(f"Saved dataset state to {pickle_path}.")
+
+    def load_state(self):
+        import pickle
+        """Loads the state of data service and grouping service from a previous save."""
+        pickle_path = os.path.join(self.file_dir, f"{self.seriesname}_state.pkl")
+        if not os.path.exists(pickle_path):
+            raise FileNotFoundError(f"No saved state found at {pickle_path}. Please save state first.")
+
+        with open(pickle_path, "rb") as f:
+            state = pickle.load(f)
+
+        self.data._data_dict = state.get("data_dict", {})
+        grouping_state = state.get("grouping_state", None)
+        if grouping_state is not None:
+            self.grouping.restore_state(grouping_state)
+
+        print(f"Loaded dataset state from {pickle_path}.")

@@ -86,6 +86,23 @@ class GroupingService:
                 print(f"  > Substrate Ref: {substrate_ref}")
                 print(f"  > Air Ref: {air_ref}")
 
+    def get_state(self):
+        '''Returns a dictionary representing the current state of the grouping service, including file items and grouping keywords.'''
+        state = {
+            "file_items": self.file_items,
+            "keywords": self.keywords,
+            "delimiter": self.delimiter,
+            "global_reference": self.global_reference,
+        }
+        return state
+    
+    def restore_state(self, state):
+        '''Restores the grouping service state from a provided dictionary.'''
+        self.file_items = state.get("file_items", {})
+        self.keywords = state.get("keywords", self.keywords)
+        self.delimiter = state.get("delimiter", self.delimiter)
+        self.global_reference = state.get("global_reference", self.global_reference)
+
     def set_grouping_keywords(self, new_keywords):
         self.keywords = new_keywords
 
