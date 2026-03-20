@@ -44,16 +44,17 @@ def register_loader(cls: Type[BaseLoader]) -> Type[BaseLoader]:
     return cls
 
 
-def get_loader_for_extension(ext: str) -> Type[BaseLoader]:
+def get_loader_for_extension(ext: str) -> Optional[Type[BaseLoader]]:
     key = ext.lower()
-    try:
-        return _REGISTRY[key]
-    except KeyError:
+    loader = _REGISTRY.get(key)
+    if loader is None:
+        import warnings
         available = list(_REGISTRY.keys())
-        raise LoaderError(
+        warnings.warn(
             f"No loader registered for extension '{ext}'. "
-            f"Available loaders: {available}"
+            f"Available loaders: {available}. Skipping file."
         )
+    return loader
 
 
 def registered_extensions() -> Dict[str, Type[BaseLoader]]:

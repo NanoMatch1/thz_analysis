@@ -371,6 +371,8 @@ class DataSet:
     def load_any(self, path: str):
         ext = Path(path).suffix  # includes the dot
         Loader = get_loader_for_extension(ext)
+        if Loader is None:
+            return None
         return Loader(path).load()
 
     def load_all_data(self, prefer_acc=True, file_lister=None) -> DataService:
@@ -400,6 +402,8 @@ class DataSet:
             if os.path.isdir(filepath):
                 continue  # skip folders
             data_object = self.load_any(filepath)
+            if data_object is None:
+                continue  # no loader for this extension
             self.data.add_item(filename, data_object)
             filelist.append(filename)
 
