@@ -36,6 +36,17 @@ class GroupingService:
 
         self._current_data_list = []
 
+    def help(self):
+        help_text = """
+        grouping_service = GroupingService(keywords=['type', 'series', 'temp'], delimiter='_')
+        grouping_service.update(filelist)
+        grouping_service.simple_grouping()
+        reference_file = grouping_service.get_reference_filename(sample_filename, ref_type='substrate')
+        grouping_service.is_reference(filename)
+        grouping_service.is_sample(filename)
+        """
+        print(help_text)
+
     def is_reference(self, filename):
         item = self.file_items.get(filename, None)
         if item is None:
@@ -52,18 +63,28 @@ class GroupingService:
     def info(self) -> str:
         '''Returns a summary string describing the GroupingService state.'''
         lines = [
-            f"GroupingService with {len(self.filelist)} files.",
-            f"Current grouping keywords: {self.keywords}",
-            f"Current delimiter: '{self.delimiter}'",
-            f"Number of filename groups: {len(self.filename_groups)}",
+            f"GroupingService with {len(self.filelist)} files.\n",
+            f"Current grouping keywords: {self.keywords}\n",
+            f"Current delimiter: '{self.delimiter}'\n",
+            f"Number of filename groups: {len(self.filename_groups)}\n",
         ]
-        return "\n".join(lines)
+        return lines
 
     @property
     def elaborate(self) -> str:
         '''Returns a detailed string representation of all file items.'''
-        lines = [item.__repr__() for filename, item in self.file_items.items()]
-        return "\n".join(lines)
+        lines = [item.__repr__() for item in self.file_items.values()]
+        return lines
+    
+    def show_pairs(self):
+        """Shows the current sample-reference pairs based on the grouping. Prints the filename of each sample along with its assigned substrate and air reference filenames."""
+        for filename, item in self.file_items.items():
+            if item.data_type == 'sample':
+                substrate_ref = item.substrate_reference if hasattr(item, 'substrate_reference') else 'None'
+                air_ref = item.air_reference if hasattr(item, 'air_reference') else 'None'
+                print(f"Sample: {filename}")
+                print(f"  > Substrate Ref: {substrate_ref}")
+                print(f"  > Air Ref: {air_ref}")
 
     def set_grouping_keywords(self, new_keywords):
         self.keywords = new_keywords
@@ -169,7 +190,7 @@ class GroupingService:
                 continue
   
 
-    def simple_grouping(self, delimiter='_', keywords=None):
+    def simple_grouping(self, delimiter: str = '_', keywords: list | None = None):
         '''Groups data by slicing the filename. Expects filename to contain data outlined in keywords, and does not (yet) logically check those parameters.
         
         currently: keywords: list of strings defining the order of components in the filename. E.g. ['type', 'series', 'temp']
@@ -219,6 +240,7 @@ class GroupingService:
         references = {filename: item for filename, item in self.file_items.items() if item.data_type == 'reference'}
         samples = {filename: item for filename, item in self.file_items.items() if item.data_type == 'sample'}
         
+        # for each sample, establish match criteria and find reference
         for filename, fileitem in samples.items():
             keywords = fileitem.report_list.copy()
             keywords.remove('data_type')  # remove type to match on other keywords

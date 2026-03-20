@@ -97,7 +97,7 @@ class DataService:
     def update_filelist(self, filelist):
         self.grouping.update(filelist=filelist)
 
-    def group_simple(self, **kwargs):
+    def group_files(self, **kwargs):
         '''Simple grouping based on sample and reference keys provided during initialization.'''
         result = self.grouping.simple_grouping(**kwargs)
 
@@ -339,10 +339,10 @@ class DataSet:
         """
         return self.data.current_data_dict()
     
-    def group_simple(self, **kwargs):
+    def group_files(self, **kwargs):
         '''Simple grouping based on sample and reference keys provided during initialization.'''
-        self.grouping.simple_grouping(sample_keys=self.sample_keys, reference_keys=self.reference_keys)
-    
+        self.grouping.simple_grouping(keywords=kwargs.get('keywords', None))
+            
     def add_item(self, filename, obj):
         self.data.add_item(filename, obj)
 
@@ -426,10 +426,6 @@ class DataSet:
             data_object.plot_current(figure_obj=figure_obj, **kwargs)
         
         plt.show()
-
-    def group_files(self, **kwargs):
-        '''Groups files based on provided sample and reference keys.'''
-        return self.data.group_simple(**kwargs)
 
     def assign_references(self, reference_type='substrate'):
         '''Workaround for convenience. Checks the filename_info from grouping and assigns the reference_filename attribute for each THzData object in the dataset.'''

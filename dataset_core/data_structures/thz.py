@@ -263,16 +263,6 @@ class THzData:
         self._time_data = self._average_data()
         self._time_data_headers = ["Time (ps)", "Mean", "std error"]
         self._data = self._time_data
-
-    def find_time_zero(self) -> tuple:
-        '''Finds the index and time value of the main pulse peak in the averaged time-domain data.'''
-        if self._time_data is None:
-            return None, None
-        mean = self._time_data[:, 1]
-        time = self._time_data[:, 0]
-        peak_index = int(np.argmax(np.abs(mean)))
-        time_zero = time[peak_index]
-        return peak_index, time_zero
     
     def _identify_time_constant(self, time_unit='ms') -> None:
         '''Work around function to pull time constant from filename, if available.'''

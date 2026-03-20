@@ -297,10 +297,10 @@ def process_directory(
         save_acc(edited, acc_path)
         print(f"  Saved .acc → {acc_path}")
 
-        # Export .dat (average)
-        dat_path = export_dir / (filepath.stem + ".dat")
-        save_dat(edited, dat_path)
-        print(f"  Saved .dat → {dat_path}")
+        # # Export .dat (average)
+        # dat_path = export_dir / (filepath.stem + ".dat")
+        # save_dat(edited, dat_path)
+        # print(f"  Saved .dat → {dat_path}")
 
         results.append(edited)
 
