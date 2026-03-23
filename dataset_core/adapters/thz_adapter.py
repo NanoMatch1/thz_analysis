@@ -53,7 +53,7 @@ def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple 
     if show_graph:
         import matplotlib.pyplot as plt
         for filename, data in aligned.items():
-            plt.plot(data[:, 0], data[:, 1], label=filename)
+            plt.plot(data[:, 1], label=filename)
         plt.legend()
         plt.show()
 
@@ -63,10 +63,11 @@ def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple 
     return dataset
 
 
-def window_time(dataset: DataSet, config: dict | None = None) -> DataSet:
+def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
     """Apply a time-domain window to each trace in the dataset."""
     config = config or {}
 
+    import matplotlib.pyplot as plt
     for filename, data_obj in dataset.data.items():
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
@@ -78,6 +79,12 @@ def window_time(dataset: DataSet, config: dict | None = None) -> DataSet:
 
         data_obj.data = new_data
         data_obj.processing_dict['window_metrics'] = metrics
+
+        if show_graph:
+            plt.plot(y, label=f'{filename} original')
+            plt.plot(windowed_y, label=f'{filename} windowed')
+    plt.legend()
+    plt.show()
 
     return dataset
 
@@ -209,6 +216,64 @@ def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:
         ))
 
     return dataset
+
+
+# ---------------------------------------------------------------------------
+# export
+# ---------------------------------------------------------------------------
+
+def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]:
+    """Export per-sample CSV files containing all computed arrays.
+
+    One file per sample. Each file has columns:
+    freq_THz, fft_mag, n, k, eps_real, eps_imag, sigma_real, sigma_imag.
+
+    Returns list of written file paths.
+    """
+    import os
+
+    if export_dir is None:
+        export_dir = os.path.join(dataset.file_dir, 'results')
+    os.makedirs(export_dir, exist_ok=True)
+
+    written = []
+    for fn, data_obj in _sample_items(dataset):
+        proc = data_obj.processing_dict
+        freq = proc.get('fft_freq')
+        if freq is None:
+            print(f"Skipping '{fn}': no FFT data.")
+            continue
+
+        nan_col = np.full_like(freq, np.nan)
+
+        def _safe(arr):
+            return arr if arr is not None else nan_col
+
+        spec = proc.get('fft_spectrum')
+        eps = proc.get('eps')
+        sigma = proc.get('sigma')
+
+        columns = [
+            freq,
+            np.abs(spec) if spec is not None else nan_col,
+            _safe(proc.get('n')),
+            _safe(proc.get('k')),
+            eps.real if eps is not None else nan_col,
+            eps.imag if eps is not None else nan_col,
+            sigma.real if sigma is not None else nan_col,
+            sigma.imag if sigma is not None else nan_col,
+        ]
+
+        headers = 'freq_THz,fft_mag,n,k,eps_real,eps_imag,sigma_real,sigma_imag'
+        data = np.column_stack(columns)
+
+        stem = os.path.splitext(fn)[0]
+        filepath = os.path.join(export_dir, f"{stem}_results.csv")
+        np.savetxt(filepath, data, delimiter=',', header=headers, comments='')
+        written.append(filepath)
+
+    print(f"Exported {len(written)} file(s) to {export_dir}")
+    return written
 
 
 # ---------------------------------------------------------------------------
