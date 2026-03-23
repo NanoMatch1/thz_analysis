@@ -35,6 +35,9 @@ if __name__ == "__main__":
     thz.fft_spectrum(dataset)
     thz.transfer_function(dataset)
     # dataset.save_state()
+    thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 6,
+                                                 "tail_fraction": 0.25,
+                                                 "min_contiguous_bins": 3}})
     thz.invert_nk(dataset, thickness_m=315e-6)
     thz.derive_eps_sigma(dataset)
 

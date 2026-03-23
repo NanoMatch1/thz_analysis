@@ -3,19 +3,35 @@ import thz_core as core
 from dataset_core.dataset import DataSet, DataService
 """Used to bridge the DataSet manager and the thz analysis library.
 
+Unit convention
+~~~~~~~~~~~~~~~
+THzData stores time in **picoseconds** (header "Time (ps)").
+thz_core expects time in **seconds**.  The adapter converts
+ps → s before every core call and converts frequencies from
+Hz back to THz only for display and export.
+
 Minimal adapter layer: each function extracts arrays from THzData objects,
 calls the corresponding thz_core routine, and writes results back onto
 the dataset (in-place). All functions return the dataset for chaining.
 """
 
 
+_PS_TO_S = 1e-12
+_HZ_TO_THZ = 1e-12
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
 def _time_amplitude_array(data_obj) -> np.ndarray:
-    """Extract (N, 2) [time, mean_amplitude] from a THzData object."""
-    return data_obj.data[:, :2].copy()
+    """Extract (N, 2) [time_s, mean_amplitude] from a THzData object.
+
+    Time is converted from the stored picoseconds to seconds so that
+    thz_core receives SI units.
+    """
+    arr = data_obj.data[:, :2].copy()
+    arr[:, 0] *= _PS_TO_S
+    return arr
 
 
 def _build_data_dict(dataset: DataSet) -> dict:
@@ -38,7 +54,9 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None) -> DataSet:
     corrected, metrics = core.subtract_baseline(data_dict, config)
 
     for filename, data_obj in dataset.data.items():
-        data_obj.data = corrected[filename]
+        result = corrected[filename]
+        result[:, 0] /= _PS_TO_S          # convert time back to ps
+        data_obj.data = result
         data_obj.processing_dict['baseline_metrics'] = metrics
 
     return dataset
@@ -58,7 +76,9 @@ def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple 
         plt.show()
 
     for filename, data_obj in dataset.data.items():
-        data_obj.data = aligned[filename]
+        result = aligned[filename]
+        result[:, 0] /= _PS_TO_S          # convert time back to ps
+        data_obj.data = result
 
     return dataset
 
@@ -67,24 +87,24 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
     """Apply a time-domain window to each trace in the dataset."""
     config = config or {}
 
-    import matplotlib.pyplot as plt
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0]
+        t = data_obj.data[:, 0] * _PS_TO_S   # ps → s for core
         y = data_obj.data[:, 1]
         windowed_y, metrics = core.window_time(t, y, config)
 
-        new_data = np.column_stack((t, windowed_y))
+        new_data = np.column_stack((data_obj.data[:, 0], windowed_y))
         if data_obj.data.shape[1] > 2:
             new_data = np.column_stack((new_data, data_obj.data[:, 2:]))
 
         data_obj.data = new_data
         data_obj.processing_dict['window_metrics'] = metrics
 
-        if show_graph:
-            plt.plot(y, label=f'{filename} original')
-            plt.plot(windowed_y, label=f'{filename} windowed')
-    plt.legend()
-    plt.show()
+    if show_graph:
+        import matplotlib.pyplot as plt
+        for filename, data_obj in dataset.data.items():
+            plt.plot(data_obj.data[:, 1], label=filename)
+        plt.legend()
+        plt.show()
 
     return dataset
 
@@ -94,11 +114,12 @@ def zero_pad(dataset: DataSet, config: dict | None = None) -> DataSet:
     config = config or {}
 
     data_dict = _build_data_dict(dataset)
-    t_common, padded_dict, metrics = core.zero_pad(data_dict, config)
+    t_common_s, padded_dict, metrics = core.zero_pad(data_dict, config)
+    t_common_ps = t_common_s / _PS_TO_S   # convert time back to ps
 
     for filename, data_obj in dataset.data.items():
         padded_y = padded_dict[filename]
-        new_data = np.column_stack((t_common, padded_y))
+        new_data = np.column_stack((t_common_ps, padded_y))
         data_obj.data = new_data
         data_obj.processing_dict['pad_metrics'] = metrics
 
@@ -110,7 +131,7 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     config = config or {}
 
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0]
+        t = data_obj.data[:, 0] * _PS_TO_S   # ps → s for core
         y = data_obj.data[:, 1]
         freq, spectrum, metrics = core.fft_spectrum(t, y, config)
 
@@ -158,6 +179,38 @@ def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
             np.abs(H),
             np.angle(H),
         ))
+
+    return dataset
+
+
+def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Compute SNR-based trusted-band mask for each sample-reference pair.
+
+    Must be called after transfer_function and before invert_nk.
+    Replaces the finite-only 'transfer_mask' with a tighter SNR-filtered mask.
+    """
+    config = config or {}
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+
+        H = data_obj.processing_dict.get('transfer_H')
+        if H is None:
+            continue
+
+        ref_obj = dataset.get_reference(filename, ref_type='substrate')
+        if ref_obj is None:
+            continue
+
+        freq = data_obj.processing_dict['fft_freq']
+        Y_samp = data_obj.processing_dict['fft_spectrum']
+        Y_ref = ref_obj.processing_dict['fft_spectrum']
+
+        mask, metrics = core.trusted_band_mask(freq, Y_ref, Y_samp, H, config)
+
+        data_obj.processing_dict['transfer_mask'] = mask
+        data_obj.processing_dict['mask_metrics'] = metrics
 
     return dataset
 
@@ -254,7 +307,7 @@ def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]
         sigma = proc.get('sigma')
 
         columns = [
-            freq,
+            freq * _HZ_TO_THZ,
             np.abs(spec) if spec is not None else nan_col,
             _safe(proc.get('n')),
             _safe(proc.get('k')),
@@ -297,7 +350,7 @@ def plot_fft(dataset: DataSet, freq_range: tuple | None = None) -> None:
         spectrum = data_obj.processing_dict.get('fft_spectrum')
         if freq is None or spectrum is None:
             continue
-        ax.semilogy(freq, np.abs(spectrum), label=filename)
+        ax.semilogy(freq * _HZ_TO_THZ, np.abs(spectrum), label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -319,7 +372,7 @@ def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) ->
         freq = data_obj.processing_dict.get('fft_freq')
         if H is None or freq is None:
             continue
-        ax.plot(freq, np.abs(H), label=filename)
+        ax.plot(freq * _HZ_TO_THZ, np.abs(H), label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -342,7 +395,7 @@ def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> No
         if H is None or freq is None:
             continue
         phase = np.unwrap(np.angle(H))
-        ax.plot(freq, phase, label=filename)
+        ax.plot(freq * _HZ_TO_THZ, phase, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -365,8 +418,8 @@ def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
         k = data_obj.processing_dict.get('k')
         if freq is None or n is None or k is None:
             continue
-        ax_n.plot(freq, n, label=filename)
-        ax_k.plot(freq, k, label=filename)
+        ax_n.plot(freq * _HZ_TO_THZ, n, label=filename)
+        ax_k.plot(freq * _HZ_TO_THZ, k, label=filename)
 
     if freq_range is not None:
         ax_n.set_xlim(freq_range)
@@ -391,8 +444,8 @@ def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None
         eps = data_obj.processing_dict.get('eps')
         if freq is None or eps is None:
             continue
-        ax_r.plot(freq, eps.real, label=filename)
-        ax_i.plot(freq, eps.imag, label=filename)
+        ax_r.plot(freq * _HZ_TO_THZ, eps.real, label=filename)
+        ax_i.plot(freq * _HZ_TO_THZ, eps.imag, label=filename)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -417,8 +470,8 @@ def plot_conductivity(dataset: DataSet, freq_range: tuple | None = None) -> None
         sigma = data_obj.processing_dict.get('sigma')
         if freq is None or sigma is None:
             continue
-        ax_r.plot(freq, sigma.real, label=filename)
-        ax_i.plot(freq, sigma.imag, label=filename)
+        ax_r.plot(freq * _HZ_TO_THZ, sigma.real, label=filename)
+        ax_i.plot(freq * _HZ_TO_THZ, sigma.imag, label=filename)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -630,7 +683,7 @@ class ResultViewer:
             is_sample = fn in self._sample_names
             if is_sample and not self._visible.get(fn, False):
                 continue
-            ax.semilogy(freq, np.abs(spec), color=self._colours[fn],
+            ax.semilogy(freq * _HZ_TO_THZ, np.abs(spec), color=self._colours[fn],
                         label=self._short(fn), alpha=0.9 if is_sample else 0.4)
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|FFT|')
@@ -644,7 +697,7 @@ class ResultViewer:
             freq = self._get(fn, 'fft_freq')
             if H is None or freq is None:
                 continue
-            ax.plot(freq, np.abs(H), color=self._colours[fn], label=self._short(fn))
+            ax.plot(freq * _HZ_TO_THZ, np.abs(H), color=self._colours[fn], label=self._short(fn))
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|H(f)|')
         ax.set_title('Transfer Function Magnitude')
@@ -658,7 +711,7 @@ class ResultViewer:
             if H is None or freq is None:
                 continue
             phase = np.unwrap(np.angle(H))
-            ax.plot(freq, phase, color=self._colours[fn], label=self._short(fn))
+            ax.plot(freq * _HZ_TO_THZ, phase, color=self._colours[fn], label=self._short(fn))
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('Phase (rad)')
         ax.set_title('Transfer Function Phase (unwrapped)')
@@ -672,8 +725,8 @@ class ResultViewer:
             k = self._get(fn, 'k')
             if freq is None or n is None or k is None:
                 continue
-            ax_n.plot(freq, n, color=self._colours[fn], label=self._short(fn))
-            ax_k.plot(freq, k, color=self._colours[fn], label=self._short(fn))
+            ax_n.plot(freq * _HZ_TO_THZ, n, color=self._colours[fn], label=self._short(fn))
+            ax_k.plot(freq * _HZ_TO_THZ, k, color=self._colours[fn], label=self._short(fn))
         ax_n.set_ylabel('n')
         ax_n.set_title('Refractive Index')
         ax_n.legend(fontsize=7, loc='upper right')
@@ -689,8 +742,8 @@ class ResultViewer:
             eps = self._get(fn, 'eps')
             if freq is None or eps is None:
                 continue
-            ax_r.plot(freq, eps.real, color=self._colours[fn], label=self._short(fn))
-            ax_i.plot(freq, eps.imag, color=self._colours[fn], label=self._short(fn))
+            ax_r.plot(freq * _HZ_TO_THZ, eps.real, color=self._colours[fn], label=self._short(fn))
+            ax_i.plot(freq * _HZ_TO_THZ, eps.imag, color=self._colours[fn], label=self._short(fn))
         ax_r.set_ylabel(r'$\varepsilon_r$')
         ax_r.set_title(r'Permittivity — Real ($n^2 - k^2$)')
         ax_r.legend(fontsize=7, loc='upper right')
@@ -706,8 +759,8 @@ class ResultViewer:
             sigma = self._get(fn, 'sigma')
             if freq is None or sigma is None:
                 continue
-            ax_r.plot(freq, sigma.real, color=self._colours[fn], label=self._short(fn))
-            ax_i.plot(freq, sigma.imag, color=self._colours[fn], label=self._short(fn))
+            ax_r.plot(freq * _HZ_TO_THZ, sigma.real, color=self._colours[fn], label=self._short(fn))
+            ax_i.plot(freq * _HZ_TO_THZ, sigma.imag, color=self._colours[fn], label=self._short(fn))
         ax_r.set_ylabel(r'$\sigma_r$ (S/m)')
         ax_r.set_title('Optical Conductivity — Real')
         ax_r.legend(fontsize=7, loc='upper right')
