@@ -3,6 +3,7 @@ import os
 import acquisition_editor
 from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import analysis_tools as tools
 
 
 if __name__ == "__main__":
@@ -34,10 +35,15 @@ if __name__ == "__main__":
 
     # preprocess(dataset)
     dataset.load_state()
-    # thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.3}}, show_graph=False)
+    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.3}}, show_graph=False)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 4.0}})
     thz.fft_spectrum(dataset)
+
+    phase_before = tools.inspect_phase(dataset, title="Phase Before Unwrapping")
+
     thz.transfer_function(dataset)
+    phase_after = tools.inspect_phase(dataset, title="Phase After Transfer Function")
+
     # dataset.save_state()
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 6,
                                                  "tail_fraction": 0.25,
