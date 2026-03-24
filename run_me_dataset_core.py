@@ -1,13 +1,15 @@
 import os
 
+import acquisition_editor
 from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
 
 
 if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\matchbook\thz\dataset_core\example_data"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-02-25_MINTS"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO\export"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -27,12 +29,12 @@ if __name__ == "__main__":
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
         thz.subtract_baseline(dataset)
-        thz.align_on_peak(dataset, show_graph=False)#, auto_range=(40,60))
+        thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
     # preprocess(dataset)
     dataset.load_state()
-    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.3}}, show_graph=False)
+    # thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.3}}, show_graph=False)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 4.0}})
     thz.fft_spectrum(dataset)
     thz.transfer_function(dataset)
@@ -40,12 +42,12 @@ if __name__ == "__main__":
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 6,
                                                  "tail_fraction": 0.25,
                                                  "min_contiguous_bins": 3}})
-    thz.invert_nk(dataset, thickness_m=315e-6)
+    thz.invert_nk(dataset, thickness_m=1e-3)
     thz.derive_eps_sigma(dataset)
 
 
     # breakpoint()
-    # thz.export_results(dataset)
+    thz.export_results(dataset)
     # from matplotlib import pyplot as plt
 
     # for filename, data in dataset.data.items():

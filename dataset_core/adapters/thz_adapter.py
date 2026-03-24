@@ -121,6 +121,10 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     for filename, data_obj in dataset.data.items():
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
+
+        # Snapshot the pre-FFT time trace so export_results can write it later
+        data_obj.processing_dict['time_domain_prefft'] = np.column_stack((t, y))
+
         freq, spectrum, metrics = core.fft_spectrum(t, y, config)
 
         data_obj.processing_dict['fft_freq'] = freq
@@ -266,8 +270,14 @@ def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:
 def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]:
     """Export per-sample CSV files containing all computed arrays.
 
-    One file per sample. Each file has columns:
-    freq_THz, fft_mag, n, k, eps_real, eps_imag, sigma_real, sigma_imag.
+    Three files per sample:
+      {stem}_results.csv       – freq-domain: freq_THz, fft_mag, n, k,
+                                 eps_real, eps_imag, sigma_real, sigma_imag
+      {stem}_time_raw.csv      – original averaged time trace (before any
+                                 processing): time_ps, amplitude, stderr
+      {stem}_time_prefft.csv   – preprocessed time trace just before FFT
+                                 (after baseline / align / window / pad):
+                                 time_ps, amplitude
 
     Returns list of written file paths.
     """
@@ -280,9 +290,36 @@ def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]
     written = []
     for fn, data_obj in _sample_items(dataset):
         proc = data_obj.processing_dict
+        stem = os.path.splitext(fn)[0]
+
+        # --- raw time trace ---
+        td_raw = proc.get('time_domain')
+        if td_raw is not None:
+            raw_path = os.path.join(export_dir, f"{stem}_time_raw.csv")
+            raw_out = td_raw.copy()
+            raw_out[:, 0] *= _S_TO_PS          # s → ps
+            np.savetxt(raw_path, raw_out,
+                       delimiter=',',
+                       header='time_ps,amplitude,stderr',
+                       comments='')
+            written.append(raw_path)
+
+        # --- pre-FFT time trace ---
+        td_prefft = proc.get('time_domain_prefft')
+        if td_prefft is not None:
+            prefft_path = os.path.join(export_dir, f"{stem}_time_prefft.csv")
+            prefft_out = td_prefft.copy()
+            prefft_out[:, 0] *= _S_TO_PS       # s → ps
+            np.savetxt(prefft_path, prefft_out,
+                       delimiter=',',
+                       header='time_ps,amplitude',
+                       comments='')
+            written.append(prefft_path)
+
+        # --- frequency-domain results ---
         freq = proc.get('fft_freq')
         if freq is None:
-            print(f"Skipping '{fn}': no FFT data.")
+            print(f"Skipping freq-domain for '{fn}': no FFT data.")
             continue
 
         nan_col = np.full_like(freq, np.nan)
@@ -308,7 +345,6 @@ def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]
         headers = 'freq_THz,fft_mag,n,k,eps_real,eps_imag,sigma_real,sigma_imag'
         data = np.column_stack(columns)
 
-        stem = os.path.splitext(fn)[0]
         filepath = os.path.join(export_dir, f"{stem}_results.csv")
         np.savetxt(filepath, data, delimiter=',', header=headers, comments='')
         written.append(filepath)
@@ -491,6 +527,7 @@ class ResultViewer:
 
     PLOT_TYPES = [
         'FFT Magnitude',
+        'FFT Phase',
         'Transfer |H|',
         'Transfer Phase',
         'n  (refractive index)',
@@ -624,6 +661,7 @@ class ResultViewer:
 
         draw_fn = {
             'FFT Magnitude':          self._draw_fft,
+            'FFT Phase':              self._draw_fft_phase,
             'Transfer |H|':           self._draw_transfer_mag,
             'Transfer Phase':         self._draw_transfer_phase,
             'n  (refractive index)':  self._draw_nk,
@@ -676,6 +714,24 @@ class ResultViewer:
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|FFT|')
         ax.set_title('FFT Magnitude')
+        ax.legend(fontsize=7, loc='upper right')
+
+    def _draw_fft_phase(self):
+        ax = self._ax_top
+        for fn in self._all_names:
+            freq = self._get(fn, 'fft_freq')
+            spec = self._get(fn, 'fft_spectrum')
+            if freq is None or spec is None:
+                continue
+            is_sample = fn in self._sample_names
+            if is_sample and not self._visible.get(fn, False):
+                continue
+            phase = np.unwrap(np.angle(spec))
+            ax.plot(freq * _HZ_TO_THZ, phase, color=self._colours[fn],
+                    label=self._short(fn), alpha=0.9 if is_sample else 0.4)
+        ax.set_xlabel('Frequency (THz)')
+        ax.set_ylabel('Phase (rad)')
+        ax.set_title('FFT Phase (unwrapped)')
         ax.legend(fontsize=7, loc='upper right')
 
     def _draw_transfer_mag(self):
