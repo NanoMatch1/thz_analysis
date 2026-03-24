@@ -6,6 +6,7 @@ Future improvements:
 3. Add methods for advanced processing - waveform fitting, deconvolution, baseline correction, etc.
 4. Refactor noise methods into separate module.'''
 
+from __future__ import annotations
 import numpy as np
 import datetime
 import pandas as pd
@@ -13,6 +14,120 @@ import pandas as pd
 from thz.data_processing.preprocessing import preprocess_trace, edge_window, baseline_subtract, pad_to_window_range
 from thz.data_structures.helpers import df_to_dict, dict_to_df
 from thz.fft_err import fft_err #TODO: resolve circular imports later
+
+
+from dataclasses import dataclass
+from typing import Optional, Union
+import numpy as np
+
+
+@dataclass(frozen=True)
+class TimeDomainStats:
+    time: np.ndarray                 # (N_time,)
+    mean: np.ndarray                 # (N_time,)
+    std: np.ndarray                  # (N_time,)  scatter across repeats at each timepoint
+    stderr: np.ndarray               # (N_time,)  std / sqrt(N_repeats)
+    n_repeats: int                   # number of repeats used
+    baseline_sigma: Optional[float]  # single-number sigma from baseline window on mean (if requested)
+    snr_from_baseline: Optional[np.ndarray]  # (N_time,) |mean| / baseline_sigma (if requested)
+
+
+def _as_slice(idx: Union[slice, np.ndarray, list, tuple, None], n: int) -> Union[slice, np.ndarray]:
+    """
+    Accept slice or index array/list. Validates bounds for slice.
+    """
+    if idx is None:
+        return slice(None)
+
+    if isinstance(idx, slice):
+        # Basic bounds safety for slice
+        start = 0 if idx.start is None else idx.start
+        stop = n if idx.stop is None else idx.stop
+        if start < 0 or stop < 0 or start > n or stop > n or start >= stop:
+            raise ValueError(f"Invalid baseline_slice={idx} for length {n}.")
+        return idx
+
+    # Otherwise treat as array-like of indices / boolean mask
+    arr = np.asarray(idx)
+    if arr.dtype == bool and arr.shape != (n,):
+        raise ValueError(f"Boolean baseline mask must have shape {(n,)}, got {arr.shape}.")
+    return arr
+
+
+def calculate_time_domain_stats(
+    raw_data: np.ndarray,
+    *,
+    limit: Optional[int] = None,
+    ddof: int = 1,
+    baseline_slice: Union[slice, np.ndarray, list, tuple, None] = None,
+    compute_baseline_snr: bool = False,
+) -> TimeDomainStats:
+    """
+    raw_data expected shape: (N_time, 1 + N_repeats)
+      - column 0 = time axis
+      - columns 1: = repeated traces (same time grid)
+
+    Returns per-timepoint mean/std/stderr across repeats.
+    Optionally computes a single baseline sigma from a baseline time window on the MEAN trace,
+    and SNR(t) = |mean(t)| / baseline_sigma.
+    """
+
+    if raw_data is None or raw_data.size == 0:
+        # Return empty object with consistent fields
+        empty = np.array([])
+        return TimeDomainStats(
+            time=empty, mean=empty, std=empty, stderr=empty,
+            n_repeats=0, baseline_sigma=None, snr_from_baseline=None
+        )
+
+    if raw_data.ndim != 2 or raw_data.shape[1] < 2:
+        raise ValueError(f"raw_data must be 2D with at least 2 columns (time + >=1 repeat). Got {raw_data.shape}.")
+
+    time = raw_data[:, 0]
+    traces = raw_data[:, 1:]  # (N_time, N_repeats_total)
+
+    if limit is not None:
+        if limit <= 0:
+            raise ValueError("limit must be a positive integer.")
+        traces = traces[:, :limit]
+
+    n_time, n_repeats = traces.shape
+    if n_repeats < 1:
+        raise ValueError("No repeat traces available after slicing.")
+
+    mean = np.mean(traces, axis=1)
+
+    # If only one repeat, ddof=1 would give NaNs; fall back safely
+    ddof_eff = ddof if n_repeats > 1 else 0
+    std = np.std(traces, axis=1, ddof=ddof_eff)
+    stderr = std / np.sqrt(n_repeats)
+
+    baseline_sigma = None
+    snr = None
+
+    if compute_baseline_snr:
+        # baseline window is applied to the MEAN trace (classic approach)
+        bidx = _as_slice(baseline_slice, n_time)
+
+        # Again: if baseline region is too small, ddof=1 could be problematic
+        baseline_vals = mean[bidx]
+        if baseline_vals.size < 2:
+            raise ValueError("Baseline region must include at least 2 points to estimate sigma.")
+
+        baseline_sigma = float(np.std(baseline_vals, ddof=1))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            snr = np.where(baseline_sigma > 0, np.abs(mean) / baseline_sigma, 0.0)
+
+    return TimeDomainStats(
+        time=time,
+        mean=mean,
+        std=std,
+        stderr=stderr,
+        n_repeats=n_repeats,
+        baseline_sigma=baseline_sigma,
+        snr_from_baseline=snr,
+    )
+
 
 
 class BaseTHzData:
@@ -43,6 +158,7 @@ class BaseTHzData:
                 return title, scan_index
             else:
                 return 'unknown_file', None
+        return 'unknown_file', None # if header is empty
 
     def _resolve_timestamp(self) -> str:
         '''Extracts timestamp from headers if available.'''
@@ -65,6 +181,8 @@ class THzData:
     Currently implements a storage-bomb strategy where each item holds the processed data, including time-trace, fourier transformed spectrum, and referenced data. 
     Future versions will implement a more memory-efficient storage strategy with rewind features.
 
+    #TODO: put data into dictionary for time, freq, reference, etc.
+
     '''
 
     # df compatibility mapping
@@ -77,9 +195,10 @@ class THzData:
     def __init__(self, data: list, header: list, **kwargs) -> None:
         self.data_list = data  # list of BaseTHz objects for each scan
         self.raw_data = self._compile_data_array()  # np.array of compiled data from all scans
-        self.headers = header if header is not None else self._grabone().headers  # retain headers from first scan # Dictionary of header information
+        self.headers = header if header is not None else self._grabonedata().headers  # retain headers from first scan # Dictionary of header information
         self.data_type = kwargs.get('data_type', None) # e.g. 'acc', 'dat', etc.
         self.filename = kwargs.get('filename', 'unknown_file')
+        self.reference_filename = None
 
         self._meta_data = {} # stores statistical data like noise estimates, phase offset, etc. to be recalled in future processing steps
         self.processing_dict = {}  # stores processed data at various steps for rewind capability and inspection
@@ -89,9 +208,12 @@ class THzData:
         self._freq_data = None
         self._freq_data_headers = None
 
+        self.reference_data = None
+
         # self._identify_time_constant()
 
         self._data = self._time_data  # Current working data (time or frequency domain)
+        self.current_state = 'time_domain'  # tracks whether current data is time or frequency domain, etc.
 
     def __getitem__(self, key):
         """
@@ -119,6 +241,11 @@ class THzData:
     #     '''Consults the grouping service to get the reference THzData object if available. Returns the THzData object or None.'''
 
     @property
+    def type(self) -> str:
+        '''Returns the data type (e.g. 'acc', 'dat', etc.) if available.'''
+        return self.__class__, self.data_type
+
+    @property
     def time_const(self) -> float | None:
         '''Returns the time constant metadata if available. Tries to parse if not, else None.'''
         time_const = self._meta_data.get('time_constant', None)
@@ -131,7 +258,19 @@ class THzData:
     def data(self) -> np.array:
         '''Returns the current working data array (time or frequency domain).'''
         return self._data
-    # df compatibility properties
+
+    @data.setter
+    def data(self, new_data: np.array):
+        '''Setter for current working data array.'''
+        if self.current_state == 'time_domain':
+            self._data = new_data
+            self._time_data = new_data
+        elif self.current_state == 'frequency_domain':
+            self._data = new_data
+            self._freq_data = new_data
+        else:
+            raise ValueError(f"Unknown current_state {self.current_state}. Cannot set data.")
+    
     @property
     def columns(self):
         """Backwards-compatible .columns attribute, like a DataFrame."""
@@ -143,6 +282,16 @@ class THzData:
 
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {len(self.data_list)}\n   -> Data type: {self.data_type}\n" 
+    
+    def find_time_zero(self) -> tuple:
+        '''Finds the index and time value of the main pulse peak in the averaged time-domain data.'''
+        if self._time_data is None:
+            return None, None
+        mean = self._time_data[:, 1]
+        time = self._time_data[:, 0]
+        peak_index = int(np.argmax(np.abs(mean)))
+        time_zero = time[peak_index]
+        return peak_index, time_zero
     
     def _identify_time_constant(self, time_unit='ms') -> None:
         '''Work around function to pull time constant from filename, if available.'''
@@ -184,7 +333,7 @@ class THzData:
                 compiled_data = np.column_stack((compiled_data, obj.raw_data[:, 1]))
         return compiled_data
     
-    def _grabone(self, index=0) -> BaseTHzData:
+    def _grabonedata(self, index=0) -> BaseTHzData:
         '''Returns a single BaseTHzData object from the data_list by index.'''
         return self.data_list[index]
     
@@ -208,14 +357,13 @@ class THzData:
          0: time (x-axis),
          1: averaged data across all scans (y-axis),
          2: Standard error as third column.'''
-
+        
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
         std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
         mean_data = np.mean(data_matrix, axis=0)
         time_axis = self.data_list[0].raw_data[:, 0]
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
-        self.processing_dict['time_domain'] = pd.DataFrame(averaged_data, columns=['Time (ps)', 'Mean', 'std error'])
-        # self.processing_dict['time_domain'] = {'data': averaged_data.copy(), 'headers': ['Time (ps)', 'Mean', 'std error']}
+        self.processing_dict['time_domain'] = averaged_data.copy()
         return averaged_data
     
     # def centerpad_window(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
@@ -331,8 +479,8 @@ class THzData:
         self._data[:, 1] -= baseline
         # std_error unaffected (we’re just shifting mean)
 
-    def calculate_SNR(self, limit=None) -> np.array:
-        '''Calculates the signal-to-noise ratio across the time domain.'''
+    def calculate_SNR(self, limit=None, baseline_points=10) -> np.array:
+        '''#current: Calculates the signal-to-noise ratio across the time domain.'''
         if self._data is None:
             return np.array([])
         
@@ -342,13 +490,27 @@ class THzData:
             array = self.raw_data[:, 1:limit+1]
         
         mean = np.mean(array, axis=1)
-        stderr = np.std(array, axis=1) / np.sqrt(array.shape[1])
+        std = np.std(array, axis=1)#, ddof=1)
+        baseline = np.median(np.abs(std[:baseline_points]))
+        peak = np.max(np.abs(mean))
+
 
         # Avoid division by zero
         with np.errstate(divide='ignore', invalid='ignore'):
-            snr = np.where(stderr != 0, np.abs(mean) / stderr, 0.0)
+            stderr = np.where(std != 0, std / np.sqrt(array.shape[1]), 0.0)
+            snr = np.where(std != 0, np.abs(mean) / std, 0.0)
 
-        return snr
+        report = {
+            'mean': mean,
+            'std': std,
+            'snr': snr,
+            'stderr': stderr,
+            'baseline_std': baseline,
+            'peak_amplitude': peak,
+
+        }
+
+        return report
 
     def _estimate_noise_sigma(
         self,
@@ -617,24 +779,36 @@ class THzData:
 
 
 
-    def plot_current(self, **kwargs) -> None:
-        '''Plots the current averaged data with error bars as a shaded region.'''
+    def plot_current(self, *, figure_obj=None, **kwargs) -> None:
+        """Plot the current averaged data.
+
+        Accepts an optional `figure_obj` (the dataset's FigureObject). If it is
+        provided the method will draw onto `figure_obj.ax` and will not call
+        `plt.show()`; otherwise a new figure is created and shown.
+        """
         import matplotlib.pyplot as plt
 
         error_bars = kwargs.get('error_bars', True)
         normalise = kwargs.get('normalise', False)
+        index_axis = kwargs.get('index_axis', False)
 
         if self._data is None:
             print("No averaged data to plot.")
             return
-        
-        if isinstance(self._data, pd.DataFrame):
-            self._headers = self._data.columns.tolist()
-            self._data = self._data.to_numpy()
 
-        time = self._data[:, 0]
-        mean_amplitude = self._data[:, 1]
-        std_error = self._data[:, 2]
+        # do not mutate self._data in-place; operate on a local view
+        if isinstance(self._data, pd.DataFrame):
+            data_view = self._data.to_numpy()
+        else:
+            data_view = self._data
+
+        if index_axis:
+            time = np.arange(data_view.shape[0])
+        else:
+            time = data_view[:, 0]
+
+        mean_amplitude = data_view[:, 1]
+        std_error = data_view[:, 2]
 
         if normalise:
             max_amp = np.max(np.abs(mean_amplitude))
@@ -642,20 +816,31 @@ class THzData:
                 mean_amplitude = mean_amplitude / max_amp
                 std_error = std_error / max_amp
 
-        if 'figure_obj' in kwargs:
-            figure_obj = kwargs.get('figure_obj')
-            ax = figure_obj.ax
-            show_plot = False
-        else:
+        # Acquire axis: prefer provided FigureObject, otherwise create a temporary
+        show_plot = False
+        if figure_obj is None:
             fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
             show_plot = True
+        else:
+            ax = getattr(figure_obj, 'ax', None)
+            if ax is None:
+                # fallback to creating a new figure if the object is malformed
+                fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+                show_plot = True
+
         line_alpha = kwargs.get('line_alpha', 1.0)
         ax.plot(time, mean_amplitude, '-', label=self.filename, alpha=line_alpha)
         if error_bars:
-            ax.fill_between(time, mean_amplitude - std_error, mean_amplitude + std_error, 
-                 alpha=kwargs.get('alpha', 0.3), color='tab:red')
+            ax.fill_between(
+                time,
+                mean_amplitude - std_error,
+                mean_amplitude + std_error,
+                alpha=kwargs.get('alpha', 0.3),
+                color=kwargs.get('error_color', 'tab:red'),
+            )
+
         ax.set_title(kwargs.get('title', 'Averaged THz Data'))
-        ax.set_xlabel(kwargs.get('xlabel', 'Time (ps)'))
+        ax.set_xlabel(kwargs.get('xlabel', 'Index' if index_axis else 'Time (ps)'))
         ax.set_ylabel(kwargs.get('ylabel', 'Amplitude (a.u.)'))
         ax.legend()
         ax.grid(kwargs.get('show_grid', True))
@@ -763,6 +948,97 @@ class THzData:
         fft_result = fft_err(edge_windowed_data) # returns dictionary
         self.processing_dict['fft_edge_windowed'] = fft_result
         return fft_result
+    
+    def baseline_subtract(self, baseline_points=10, **kwargs):
+        dataY_baselined = baseline_subtract(self._data, n_points=baseline_points, **kwargs)
+        data = np.column_stack((self._data[:, 0], dataY_baselined, self._data[:, 2])) 
+        self.processing_dict['baseline_subtracted'] = data
+
+    def edge_window(self, alpha=0.2, **kwargs):
+        data_windowed = edge_window(self._data, alpha=alpha, **kwargs)
+        data = np.column_stack((data_windowed[:, :2], self._data[:, 2])) 
+        self.processing_dict['edge_windowed'] = data
+
+    def fft(self, **kwargs):
+        '''Runs the full fft processing pipeline on the current data and returns the spectrum as a numpy array.'''
+        from scipy.fft import rfft, rfftfreq #rfft returns only positive frequencies
+        from math import e
+        time_axis = self._data[:, 0]
+        dataY = self._data[:, 1]
+        data_y_error = self._data[:, 2]
+
+        freq = rfftfreq(len(time_axis), time_axis[1]-time_axis[0])
+        dataY_amplitude = rfft(dataY, norm='ortho')
+        fft_error = rfft(data_y_error, norm='ortho')
+
+        fft_result = np.column_stack((freq, np.abs(dataY_amplitude), np.abs(fft_error)))
+        self.processing_dict['fft'] = fft_result
+
+        dataY_amplitude = abs(dataY_amplitude)
+
+        ft_variance = rfft(data_y_error**2,  norm='ortho')
+        sr = np.sqrt(abs(ft_variance.real))
+        si = np.sqrt(abs(ft_variance.imag))
+    
+        # informed phase unwrapping (see header for details)
+        t0 = time_axis[np.argmax(abs(dataY))]       #find maximum time domain
+        phase0 = 2*np.pi*t0*freq                #phase of the maximum
+        dataY_amplitude = dataY_amplitude*e**(-1j*phase0)   #reduced phase
+        phase = np.angle(dataY_amplitude)
+        
+        phase = -np.unwrap(phase) #either this minus sign or complex conjugated fft (sign convention)
+        phase = phase+phase0
+        
+        
+        #error propagation from cartesian to polar coordinates 
+        err_amplitude = np.sqrt((sr*dataY_amplitude.real)**2+(si*dataY_amplitude.imag)**2)/dataY_amplitude
+        err_phase =     np.sqrt((si/dataY_amplitude.real)**2+
+                                (dataY_amplitude.imag*sr/dataY_amplitude.real**2)**2)/(1+(dataY_amplitude.imag/dataY_amplitude.real)**2)
+
+        err_phase = err_phase*phase #to account for unwrapped phase
+
+        self._data = fft_result
+        self.dataX = freq
+        self.dataY = dataY_amplitude
+
+        phase_data = np.column_stack((freq, phase, err_phase))
+
+        # fft_result = np.column_stack((fft_result, phase, err_phase))
+        fft_dict = {'data': fft_result, 'phase': phase_data}
+
+        return fft_dict
+
+    def pad_time_domain(self, length_factor: int = 5, **kwargs) -> pd.DataFrame:
+        """
+        Symmetrically pads the dataset with zeros to extend its length by a specified factor. Perform after windowing.
+
+        Parameters
+        ----------
+        df : DataFrame with ['Time (ps)', 'Mean', 'std error']
+        length_factor : int
+            Final length will be length_factor * original length.
+        """
+
+        time = self._data[:, 0]
+        y_mean = self._data[:, 1]
+        std_err = self._data[:, 2]
+        N_array = len(time)
+
+        dt = time[1] - time[0]
+
+        pad_width = ((length_factor * N_array) - N_array) // 2
+        end_value_left = time[0] - (pad_width * dt)
+        end_value_right = time[-1] + (pad_width * dt)
+
+        new_time = np.pad(time, (pad_width, pad_width), mode='linear_ramp', end_values=(end_value_left, end_value_right))
+        new_y_mean =  np.pad(y_mean, (pad_width, pad_width), mode='constant', constant_values=(0,0))
+        new_std_err = np.pad(std_err, (pad_width, pad_width), mode='constant', constant_values=(0,0))
+
+        self._data = np.column_stack((new_time, new_y_mean, new_std_err))
+        self.dataX = new_time
+        self.dataY = new_y_mean
+
+        return self._data
     
     def prepare_for_fft(self, 
                         baseline_points=10, 

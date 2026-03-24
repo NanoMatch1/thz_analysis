@@ -1,4 +1,4 @@
-# thz/io/__init__.py
+# dataset_core/io/__init__.py
 from __future__ import annotations
 
 import pkgutil

@@ -2,12 +2,22 @@ import os
 import numpy as np
 # import pandas as pd
 import matplotlib.pyplot as plt
-from thz.io.acc_loader import ACCLoader
-from thz.io.dat_loader import DATLoader
-from thz.data_structures.thz import THzData
+from matplotlib.widgets import SpanSelector
+
+
+import thz.io.loaders   # <-- imports package, which auto-imports all loader modules
+from thz.io import get_loader_for_extension
+from thz.data_structures.thz import THzData, BaseTHzData
 from thz.services.grouping import GroupingService
+from thz.services.database import DatabaseService
+from thz.services.provenance import record_provenance
 from collections.abc import Mapping
-from thz.data_structures.helpers import df_to_dict
+from thz.data_structures.helpers import df_to_dict, smooth_trace_savgol, interpolate_data
+from thz.data_processing.acquisition_editor import edit_acquisitions_interactive
+from pathlib import Path
+from thz.io import get_loader_for_extension
+import pandas as pd
+
 
 # TODO: Adding subplots to FigureObject for multi-axis plots
 
@@ -101,7 +111,16 @@ class DataService:
 
     def group_simple(self, **kwargs):
         '''Simple grouping based on sample and reference keys provided during initialization.'''
-        self.grouping.simple_grouping(**kwargs)
+        result = self.grouping.simple_grouping(**kwargs)
+
+        for filename, filename_info in self.grouping.file_items.items():
+            data_obj = self._data_dict.get(filename, None)
+            if data_obj is None:
+                continue
+            data_obj.filename_info = filename_info
+        
+        return result
+
 
 class FigureObject:
     """Class for managing matplotlib figure and axis objects for plotting."""
@@ -164,7 +183,143 @@ class DataSet:
         self.sample_keys = kwargs.get('sample_keys', [])
         self.reference_keys = kwargs.get('reference_keys', [])
         self.figure_objects = {}
+        self.seriesname = kwargs.get('seriesname', Path(file_dir).name)
+        self.metadata = dict(kwargs.get('metadata', {}) or {})
+        self.file_metadata = dict(kwargs.get('file_metadata', {}) or {})
+        self.database_service = kwargs.get('database_service', DatabaseService())
         # self.grouping = GroupingService()
+
+        self.history = {}
+
+    def set_dataset_metadata_tag(self, tag_name: str, tag_value):
+        self.metadata[tag_name] = tag_value
+
+    def remove_dataset_metadata_tag(self, tag_name: str):
+        self.metadata.pop(tag_name, None)
+
+    def set_file_metadata_tags(self, filename: str, **tags):
+        current_tags = self.file_metadata.get(filename, {})
+        current_tags.update(tags)
+        self.file_metadata[filename] = current_tags
+
+    def remove_file_metadata_tag(self, filename: str, tag_name: str):
+        current_tags = self.file_metadata.get(filename, None)
+        if not isinstance(current_tags, dict):
+            return
+        current_tags.pop(tag_name, None)
+
+    def export_h5(
+        self,
+        path: str | Path,
+        *,
+        dataset_metadata: dict | None = None,
+        per_file_metadata: dict[str, dict] | None = None,
+        compression: str | None = 'gzip',
+        compression_opts: int = 1,
+        store_acq_mask: bool = True,
+        registry_path: str | Path | None = None,
+        update_registry: bool = True,
+    ) -> Path:
+        """Export current dataset to one HDF5 file."""
+        file_data_map = {
+            filename: np.asarray(thz_data.raw_data)
+            for filename, thz_data in self.data.items()
+        }
+
+        merged_dataset_metadata = dict(self.metadata)
+        merged_dataset_metadata.update(dataset_metadata or {})
+
+        merged_per_file_metadata = {
+            filename: dict(tags)
+            for filename, tags in self.file_metadata.items()
+            if isinstance(tags, dict)
+        }
+        for filename, tags in (per_file_metadata or {}).items():
+            merged_per_file_metadata.setdefault(filename, {})
+            merged_per_file_metadata[filename].update(tags or {})
+
+        return self.database_service.export_h5(
+            path=path,
+            series_name=self.seriesname,
+            file_data_map=file_data_map,
+            dataset_metadata=merged_dataset_metadata,
+            per_file_metadata=merged_per_file_metadata,
+            compression=compression,
+            compression_opts=compression_opts,
+            store_acq_mask=store_acq_mask,
+            registry_path=registry_path,
+            update_registry=update_registry,
+        )
+
+    def import_h5(
+        self,
+        path: str | Path,
+        *,
+        strict_schema: bool = False,
+        registry_path: str | Path | None = None,
+        update_registry: bool = True,
+    ):
+        """Import dataset contents from one HDF5 file into this DataSet instance."""
+        loaded_payload = self.database_service.load_h5(path=path, strict_schema=strict_schema)
+
+        self.seriesname = loaded_payload.get('series_name', self.seriesname)
+        self.metadata = dict(loaded_payload.get('dataset_metadata', {}) or {})
+        self.file_metadata = {}
+
+        self.data = DataService()
+        self.grouping = self.data.grouping
+
+        for filename, file_payload in loaded_payload.get('files', {}).items():
+            raw_data = np.asarray(file_payload.get('raw_data'))
+            thz_data = self._build_thzdata_from_raw_array(raw_data=raw_data, filename=filename)
+            self.data.add_item(filename, thz_data)
+            self.file_metadata[filename] = dict(file_payload.get('file_metadata', {}) or {})
+
+        self.data.update_filelist(filelist=list(self.data.get_all_data().keys()))
+
+        if update_registry and self.seriesname:
+            self.database_service.update_registry(
+                series_name=self.seriesname,
+                registry_path=registry_path,
+                last_opened_path=str(Path(path).expanduser().resolve()),
+            )
+
+        return self
+
+    def _build_thzdata_from_raw_array(self, raw_data: np.ndarray, filename: str) -> THzData:
+        """Convert compiled raw array [time | acquisitions...] into THzData."""
+        if raw_data.ndim != 2 or raw_data.shape[1] < 2:
+            raise ValueError(
+                f"Invalid raw_data shape for '{filename}': expected (N, >=2), got {raw_data.shape}."
+            )
+
+        scan_list = []
+        time_axis = raw_data[:, 0]
+        for acquisition_column_index in range(1, raw_data.shape[1]):
+            scan_array = np.column_stack((time_axis, raw_data[:, acquisition_column_index]))
+            scan_list.append(BaseTHzData(data=scan_array, headers=[]))
+
+        return THzData(
+            data=scan_list,
+            header=[],
+            filename=filename,
+            data_type='h5',
+        )
+
+    def metadata_hook(self, filename: str, thzdata: THzData):
+        """
+        Hook you can implement later to pull rich metadata from your data service.
+
+        Contract:
+          - Return a JSON-serializable dict (or at least something json.dumps can handle with default=str).
+          - Keep it "dynamic": arbitrary keys are fine.
+
+        Example future implementations:
+          - Look up filename in a SQLite DB / REST API
+          - Pull instrument settings, operator, sample details, calibration refs, etc.
+        """
+        # DUMMY implementation: return empty dict by default
+        return {}
 
     @property
     def all_data(self) -> list:
@@ -238,51 +393,73 @@ class DataSet:
 
         return fig_obj
     
-    def load_data(self, filename: str) -> THzData:
-        '''Loads a specific acc file and returns a THzData object.'''
+    # def load_data(self, filename: str) -> THzData:
+    #     '''Loads a specific acc file and returns a THzData object.'''
 
-        filepath = os.path.join(self.file_dir, filename)
-        loader = ACCLoader(filepath)
-        thz_data = loader.load()
-        return thz_data
+    #     filepath = os.path.join(self.file_dir, filename)
+    #     loader = ACCLoader(filepath)
+    #     thz_data = loader.load()
+    #     return thz_data
     
-    def load_dat_data(self, filename: str) -> THzData:
-        '''Loads a specific dat file and returns a THzData object.'''
-        #TODO: refactor to use registry
+    # def load_dat_data(self, filename: str) -> THzData:
+    #     '''Loads a specific dat file and returns a THzData object.'''
+    #     #TODO: refactor to use registry
 
-        filepath = os.path.join(self.file_dir, filename)
-        loader = DATLoader(filepath)
-        thz_data = loader.load()
-        return thz_data
+    #     filepath = os.path.join(self.file_dir, filename)
+    #     loader = DATLoader(filepath)
+    #     thz_data = loader.load()
+    #     return thz_data
     
-    def load_all_dat_files(self) -> None:
-        '''Loads all dat files in the specified directory into the data_dict attribute.'''
-        #TODO: refactor to use registry
+    # def load_all_dat_files(self) -> None:
+    #     '''Loads all dat files in the specified directory into the data_dict attribute.'''
+    #     #TODO: refactor to use registry
 
-        filelist = []
-        for filename in os.listdir(self.file_dir):
-            if filename.endswith('.dat'):
-                thz_data = self.load_dat_data(filename)
-                self.data.add_item(filename, thz_data)
-                filelist.append(filename)
+    #     filelist = []
+    #     for filename in os.listdir(self.file_dir):
+    #         if filename.endswith('.dat'):
+    #             thz_data = self.load_dat_data(filename)
+    #             self.data.add_item(filename, thz_data)
+    #             filelist.append(filename)
 
-        self.data.update_filelist(filelist=filelist)
+    #     self.data.update_filelist(filelist=filelist)
 
         return self.data
-            
+    
+    # def load_data_txt(self, filename: str) -> THzData:
+    #     '''Loads a specific txt file and returns a THzData object.'''
+    #     filepath = os.path.join(self.file_dir, filename)
+    #     loader = TXTLoader(filepath)
+    #     thz_data = loader.load()
+    #     return thz_data
 
-    def load_all_data(self, extension='.acc') -> None:
-        '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.'''
+    def load_any(self, path: str):
+        ext = Path(path).suffix  # includes the dot
+        Loader = get_loader_for_extension(ext)
+        return Loader(path).load()
 
+    def load_all_data(self, prefer_acc=True) -> None:
+        '''Loads all files in the specified directory into the data_dict attribute. Uses ACCLoader by default, specified by the data_type kwarg.
+        prefer_acc bool specifies that if True, acc files of the same name are loaded instead of dat files, if both are present.'''
+
+        def gen_filelist():
+            files = os.listdir(self.file_dir)
+            if prefer_acc:
+                files = [f for f in files if not (f.endswith('.dat') and f[:-4] + '.acc' in files)] # filter out dat files if acc of same name exists
+            return files
 
         filelist = []
+        files = gen_filelist()
 
-        for filename in os.listdir(self.file_dir):
-            if filename.endswith('.acc'):
-                thz_data = self.load_data(filename)
-                self.data.add_item(filename, thz_data)
-                filelist.append(filename)
+        for filename in files:
+            if os.path.isdir(os.path.join(self.file_dir, filename)):
+                continue # skip folders
+            filepath = os.path.join(self.file_dir, filename)
+            thz_data = self.load_any(filepath)
+            self.data.add_item(filename, thz_data)
+            filelist.append(filename)
 
+        if filelist == []:
+            raise FileNotFoundError(f"No valid data files found in {self.file_dir}. Please check the directory and file formats.")
         # self.grouping.update(filelist=filelist)
         self.data.update_filelist(filelist=filelist)
 
@@ -294,7 +471,7 @@ class DataSet:
         for thz_data in self.data.values():
             thz_data.constants = constants
         
-    def grabone(self) -> THzData:
+    def grabonedata(self) -> THzData:
         '''Returns one THzData object from the data_dict for quick access.'''
         if self.data:
             first_data = next(iter(self.data.values()))
@@ -370,6 +547,10 @@ class DataSet:
 
     #     # self.interpolate_pulse_window()
 
+    def baseline_all(self, **kwargs):
+        for filename, data_obj in self.data.items():
+            data_obj.baseline_subtract(**kwargs)
+
     def center_pad_window_all(self, length_factor: int = 10, baseline_points: int = 10, window_alpha: float = 0.2) -> None:
         for thz_data in self.data.values():
             plt.plot(thz_data._data[:,0], thz_data._data[:,1], label='pre-process')
@@ -440,9 +621,9 @@ class DataSet:
 
     def plot_current(self, key: str = None, **kwargs) -> None:
         '''Plots the current data for all THzData objects in the dataset.'''
-        for name, thz_data in self.data.items():
+        for name, data_object in self.data.items():
             figure_obj = self._generate_figure_object('main')
-            thz_data.plot_current(figure_obj=figure_obj, **kwargs)
+            data_object.plot_current(figure_obj=figure_obj, **kwargs)
         
         plt.show()
 
@@ -462,7 +643,23 @@ class DataSet:
 
     def group_files(self, **kwargs):
         '''Groups files based on provided sample and reference keys.'''
-        self.data.group_simple(**kwargs)
+        return self.data.group_simple(**kwargs)
+
+    def assign_references(self, reference_type='substrate'):
+        '''Workaround for convenience. Checks the filename_info from grouping and assigns the reference_filename attribute for each THzData object in the dataset.'''
+        for filename, data_object in self.data.items():
+            filename_info = data_object.filename_info
+            if filename_info is not None:
+                reference_filename = filename_info.substrate_reference
+                if reference_filename is None and 'reference' in filename:
+                    continue
+                data_object.reference_filename = reference_filename
+                # reference_data = self.data.get(reference_filename)
+                # if reference_data is None:
+                #     print(f"Warning: Reference file '{reference_filename}' for '{filename}' not found in dataset.")
+                # data_object.reference_data = reference_data.data
+
+        
 
     def get_file_item(self, filename):
         '''Access the grouping information for a specific filename.'''
@@ -494,10 +691,49 @@ class DataSet:
             thz_data.fft_centerpad()
             thz_data.fft_edge_windowed()
 
+    def fft_all(self):
+        '''Runs FFT across different preprocessing methods for all THzData objects in the dataset.'''
+        result_dict = {}
+        for data_object in self.data.values():
+            result = data_object.fft()
+            result_dict[data_object.filename] = result
+        
+        return result_dict
+
+    def transfer_function_all(self, ref_type='substrate'):
+        from thz.data_processing.transfer import transfer_function
+        transfer_dict = {}
+        for filename, data_object in self.data.items():
+            if data_object.filename_info.data_type == 'reference':
+                continue
+            reference_filename = data_object.reference_filename
+            reference_data = self.data[reference_filename].data
+            sample_data = data_object.data
+            freq_axis = sample_data[:, 0] # assuming first column is time/frequency axis
+            sample_axis = sample_data[:, 1] # assuming second column is amplitude axis
+            reference_axis = reference_data[:, 1] # assuming second column is amplitude axis
+            transfer_result = transfer_function(freq_axis, sample_axis, reference_axis, {})
+
+            transfer_dict[filename] = transfer_result
+            data_object.processing_dict['transfer_function'] = transfer_result
+            transfer_data = transfer_result[0]
+            data_object._data = np.column_stack((freq_axis, transfer_data))
+
+        return transfer_dict
+
+
+
+
+            # reference_data = self.data[]
+
+
     # def interpolate_dataset(self, series_key=None):
     #     '''Interpolates all datasets in the processing_dict to a common spacing. Important'''
 
-
+    def edge_window_all(self, alpha=0.2, show_graph=False, **kwargs):
+        '''Applies edge windowing to all THzData objects in the dataset.'''
+        for thz_data in self.data.values():
+            thz_data.edge_window(alpha=alpha, show_graph=show_graph, **kwargs)
 
     def fft_compare(self, low_threshold = 4, up_threshold = 10, clip_data=None):
         # import thz.data_processing.phase_interpolation as phi
@@ -690,6 +926,184 @@ class DataSet:
 
         return (min_time, max_time)
     
+    def align_on_peak(self, auto_range=None, **kwargs):
+        '''Centers all THzData objects in the dataset on their main pulse peak. Operates explicitly on the time-domain data, and modifies the time-domain data in place.'''
+
+        peak_index_dict = {}
+
+        if auto_range is not None:
+            try:
+                float(auto_range[0])
+                float(auto_range[1])
+            
+            except (ValueError, TypeError):
+                print("Invalid mode tuple. Must be (float, float) representing time window around expected peak.")
+
+        for filename, thz_data in self.data.items():
+            figure_object = self._generate_figure_object('peak_alignment')
+            fig, ax, state = self.span_select_extremum(thz_data._time_data, mode='abs', title='Select main pulse region to center on', figure_object=figure_object, auto_range=auto_range, **kwargs)
+            peak_index_dict[filename] = state
+
+            
+        min_index = min([state['last_pick']['idx'] for state in peak_index_dict.values()])
+        max_index = 0
+
+        for filename, thz_data in self.data.items():
+            state = peak_index_dict[filename]
+            idx = state['last_pick']['idx']
+            cut = idx - min_index
+            thz_data._time_data = thz_data._time_data[cut:, :]
+            max_index = max(max_index, len(thz_data._time_data))
+        
+        for filename, thz_data in self.data.items():
+            # truncate to max length to ensure all are the same length after centering
+            thz_data._time_data = thz_data._time_data[:max_index]
+        
+
+    def span_select_extremum(self,
+        data,
+        mode: str = "abs",          # "abs" (default), "max", or "min"
+        axis_labels=("Time (ps)", "E(t) (arb.)"),
+        title=None,
+        marker_kwargs=None,
+        on_pick=None,               # optional callback: on_pick(idx, x, y)
+        figure_object=None,
+        auto_range=None # set a specific index range to select the data without using the span selector, for more automated processing
+    ):
+        """
+        Plot data[:,0] vs data[:,1] and attach a SpanSelector.
+        Drag to select an x-range; returns the index + x-value of the extremum in that region.
+
+        Parameters
+        ----------
+        data : array-like
+            Must be a 2D array with columns [x, y].
+        mode : str
+            "abs": pick the point with largest |y| in the span (robust for symmetric wavepackets)
+            "max": pick maximum y in the span
+            "min": pick minimum y in the span
+        on_pick : callable or None
+            If provided, called as on_pick(idx, x, y) after selection.
+
+        Returns
+        -------
+        fig, ax, state : (matplotlib Figure, Axes, dict)
+            state contains last_pick = {"idx":..., "x":..., "y":...}
+        """
+        data = np.asarray(data)
+        # data = interpolate_data(data, 0.01)
+        dataX = data[:, 0]
+
+        dataY = smooth_trace_savgol(data[:, 1], window_length=11, polyorder=3) # smooth data for more robust peak picking
+        if data.ndim != 2 or data.shape[1] < 2:
+            raise ValueError("data must be a 2D array with at least 2 columns [x, y].")
+
+
+        if figure_object is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = figure_object.figure
+            ax = figure_object.ax
+        ax.plot(dataX, dataY)
+        ax.set_xlim(dataX.min(), dataX.max())
+        ax.set_xlabel(axis_labels[0])
+        ax.set_ylabel(axis_labels[1])
+        ax.set_title(title or "THz trace")
+
+        marker_kwargs = marker_kwargs or {}
+        marker_kwargs.setdefault("marker", "o")
+        marker_kwargs.setdefault("ms", 8)
+        marker_kwargs.setdefault("mec", "k")
+        marker_kwargs.setdefault("mew", 1)
+        marker_kwargs.setdefault("zorder", 5)
+
+        # A marker we move around after each selection
+        pick_marker, = ax.plot([np.nan], [np.nan], **marker_kwargs)
+
+        state = {"last_pick": None}
+
+        def _pick_in_span(xmin, xmax):
+            # Ensure xmin <= xmax
+            if xmax < xmin:
+                xmin, xmax = xmax, xmin
+
+            # Find indices in span
+            in_span = (dataX >= xmin) & (dataX <= xmax)
+            idxs = np.flatnonzero(in_span)
+
+            if idxs.size == 0:
+                print("Span selection contains no points.")
+                return
+
+            ys = dataY[idxs]
+
+            if mode == "abs":
+                ex_index = int(np.argmax(np.abs(ys)))
+            elif mode == "max":
+                ex_index = int(np.argmax(ys))
+            elif mode == "min":
+                ex_index = int(np.argmin(ys))
+            else:
+                raise ValueError("mode must be one of: 'abs', 'max', 'min'")
+
+            idx = int(idxs[ex_index])
+            x0 = float(dataX[idx])
+            y0 = float(dataY[idx])
+
+            # Update marker
+            pick_marker.set_data([x0], [y0])
+            fig.canvas.draw_idle()
+
+            state["last_pick"] = {"idx": idx, "x": x0, "y": y0}
+            print(f"Picked {mode} extremum: idx={idx}, x={x0:.6g}, y={y0:.6g}")
+
+            if callable(on_pick):
+                on_pick(idx, x0, y0)
+
+        span = SpanSelector(
+            ax,
+            onselect=_pick_in_span,
+            direction="horizontal",
+            useblit=True,
+            interactive=True,
+            props=dict(alpha=0.2),
+            # You can also set minspan to prevent tiny accidental spans
+            minspan=0.0,
+        )
+
+        # Helpful instruction text
+        ax.text(
+            0.01, 0.99,
+            "Drag to select region → picks extremum inside\n"
+            f"Mode: {mode}  |  Press ESC to cancel selection",
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", alpha=0.2),
+        )
+
+        if auto_range is not None:
+            try:
+                int(auto_range[0])
+                int(auto_range[1])
+                xmin = dataX[auto_range[0]]
+                xmax = dataX[auto_range[1]]
+                print(f"Auto-selecting extremum in range: {xmin:.3f} to {xmax:.3f} (indices {auto_range[0]} to {auto_range[1]})")
+                _pick_in_span(xmin, xmax)
+                plt.close()
+                return fig, ax, state
+            except (ValueError, TypeError):
+                print("Invalid auto_range. Must be a tuple of (int, int) representing the x-range indicies to automatically select.")
+            
+
+        plt.show()
+        return fig, ax, state
+
+    def pad_time_domain_all(self, length_factor: int = 5, show_graph=False, **kwargs) -> None:
+        '''Pads the time-domain data for all THzData objects in the dataset to prepare for FFT.'''
+        for thz_data in self.data.values():
+            thz_data.pad_time_domain(length_factor=length_factor, show_graph=show_graph)
 
     def prepare_for_fft_all(self, pad_length_factor: int = 5, baseline_points: int = 10, window_alpha:float = 0.2, **kwargs) -> None:
         '''Prepares all THzData objects for FFT by subtracting DC offset, centering pulse, and padding time-domain data.'''
@@ -756,3 +1170,34 @@ class DataSet:
         ax[1].legend()
 
         plt.show()
+
+    def modify_acquisitions(self, page_size: int = 25, in_place: bool = False):
+        """Launch the standalone interactive acquisition editor.
+
+        Parameters
+        ----------
+        page_size : int
+            Items shown per page in Included/Excluded lists.
+        in_place : bool
+            If True, applies saved edits back onto each `THzData.raw_data`.
+            If False (default), leaves `THzData` objects untouched.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Mapping of filename to edited raw_data arrays.
+        """
+        raw_by_file = {
+            filename: np.asarray(thz_obj.raw_data)
+            for filename, thz_obj in self.data.items()
+        }
+
+        edited = edit_acquisitions_interactive(raw_by_file, page_size=page_size, in_place=False)
+
+        if in_place:
+            for filename, new_raw in edited.items():
+                thz_obj = self.data.get(filename)
+                if thz_obj is not None:
+                    thz_obj.raw_data = np.asarray(new_raw)
+
+        return edited

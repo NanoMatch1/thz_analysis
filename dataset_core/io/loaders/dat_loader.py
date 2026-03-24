@@ -1,11 +1,13 @@
 '''Module for loading dat files. Returns a dataclass placeholder object.
-acc files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, data begins after the last header line.'''
+dat files are text documents containing the full collected data, with all scans unaveraged. The headers are indicated by leading % symbols, data begins after the last header line.'''
 
 import numpy as np
-from thz.data_structures.thz import THzData, BaseTHzData
+from dataset_core.data_structures.thz import THzData, BaseTHzData
 from os import path
+from dataset_core.io.loaders.registry import BaseLoader, register_loader
 
-class DATLoader:
+@register_loader
+class DATLoader(BaseLoader):
 
     extension = '.dat'
     errors = []
@@ -67,5 +69,3 @@ class DATLoader:
             new_data.append(BaseTHzData(data=data, headers=value['header'])) # parse each scan into BaseTHzData object
         
         return THzData(data=new_data, header=None, filename=self.filename, data_type='dat')
-
-        

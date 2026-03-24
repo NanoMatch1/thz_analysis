@@ -3,7 +3,8 @@ import inspect
 from typing import Iterable, Any
 
 import numpy as np
-from thz.data_structures.helpers import interpolate_to_max_resolution_simple, _extract_data_and_headers
+import pandas as pd
+from dataset_core.data_structures.helpers import interpolate_to_max_resolution_simple, _extract_data_and_headers
 
 def align_to_max_resolution(
     axis_col_name: str,
@@ -12,11 +13,6 @@ def align_to_max_resolution(
     wrap_phase_output: bool = False,
     **kwargs
 ):
-    # print("Dummy align_to_max_resolution called, returning unchanged function.")
-
-    # def decorator(func):
-    #     return func
-    # return decorator
     """
     Decorator that aligns multiple data-like arguments before passing them
     to the wrapped function.
