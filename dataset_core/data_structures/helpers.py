@@ -159,8 +159,8 @@ def interpolate_to_max_resolution(
     """
     if axis_col_name is None:
         raise ValueError(
-            "axis_col_name must be provided (e.g., 'Time (ps)' or "
-            "'Frequency (THz)') to ensure header-safe alignment."
+            "axis_col_name must be provided (e.g., 'Time (s)' or "
+            "'Frequency (Hz)') to ensure header-safe alignment."
         )
 
     objs = list(args)
@@ -264,8 +264,8 @@ def interpolate_to_max_resolution_simple(
     """
     if axis_col_name is None:
         raise ValueError(
-            "axis_col_name must be provided (e.g., 'Time (ps)' or "
-            "'Frequency (THz)') to ensure header-safe alignment."
+            "axis_col_name must be provided (e.g., 'Time (s)' or "
+            "'Frequency (Hz)') to ensure header-safe alignment."
         )
 
     objs = list(args)

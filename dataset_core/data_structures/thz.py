@@ -4,6 +4,14 @@ Data container classes for THz time-domain spectroscopy datasets.
 BaseTHzData holds a single scan; THzData holds multiple scans and
 provides averaged data access, statistical helpers, and plotting.
 
+Unit convention
+~~~~~~~~~~~~~~~
+Raw scan data (``BaseTHzData.raw_data``) is stored in the original
+file units (typically picoseconds).  ``THzData`` converts to SI units
+(seconds, Hz) when building the averaged working dataset so that all
+downstream processing operates in a consistent unit system.  Display /
+plotting code converts back to human-readable units (ps, THz) as needed.
+
 Processing methods (FFT, baseline, windowing, padding, etc.) are
 intentionally excluded — they belong in separate analysis packages.
 '''
@@ -15,6 +23,10 @@ import pandas as pd
 
 from dataclasses import dataclass
 from typing import Optional, Union
+
+# Source data files store time in picoseconds; convert to SI seconds.
+_SOURCE_TIME_SCALE = 1e-12
+_S_TO_PS = 1e12
 
 
 @dataclass(frozen=True)
@@ -176,12 +188,12 @@ class THzData:
     basic statistical helpers, and a plotting method. Processing methods
     (FFT, baseline, windowing, padding, etc.) live in separate packages.
 
-    Old dataframe compatibility: allows access via thzdata['Mean'], thzdata['Time (ps)'], etc.
+    Old dataframe compatibility: allows access via thzdata['Mean'], thzdata['Time (s)'], etc.
     '''
 
     # df compatibility mapping
     _column_map = {
-        "Time (ps)": 0,
+        "Time (s)": 0,
         "Mean": 1,
         "std error": 2,
     }
@@ -198,7 +210,7 @@ class THzData:
         self.processing_dict = {}  # stores processed data at various steps
 
         self._time_data = self._average_data()  # Averaged dataset
-        self._time_data_headers = ["Time (ps)", "Mean", "std error"]
+        self._time_data_headers = ["Time (s)", "Mean", "std error"]
 
         self.reference_data = None
 
@@ -208,7 +220,7 @@ class THzData:
     def __getitem__(self, key):
         """
         Backwards-compatible dictionary-style access.
-        Allows: thz['Mean'], thz['Time (ps)'], etc.
+        Allows: thz['Mean'], thz['Time (s)'], etc.
         """
         if key not in self._column_map:
             raise KeyError(f"{key} not found in THzData columns {list(self._column_map)}")
@@ -274,7 +286,7 @@ class THzData:
         '''Takes a modified raw_data np.array and updates the internal state of the object, including re-averaging and recalculating stats. Used for instance after modifying the acquisitions.'''
         self.raw_data = new_data
         self._time_data = self._average_data()
-        self._time_data_headers = ["Time (ps)", "Mean", "std error"]
+        self._time_data_headers = ["Time (s)", "Mean", "std error"]
         self._data = self._time_data
     
     def _identify_time_constant(self, time_unit='ms') -> None:
@@ -327,25 +339,28 @@ class THzData:
             obj._compress_data()
 
     def average_data(self, limit=None) -> np.array:
-        '''Public method to average the data across number of chosen scans.'''
+        '''Public method to average the data across number of chosen scans.
+
+        Returns array with time in SI seconds.
+        '''
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list[:limit]])
         std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list[:limit]))
         mean_data = np.mean(data_matrix, axis=0)
-        time_axis = self.data_list[0].raw_data[:, 0]
+        time_axis = self.data_list[0].raw_data[:, 0] * _SOURCE_TIME_SCALE
         averaged_data = np.column_stack((time_axis, mean_data, std_error))
         return averaged_data
 
         
     def _average_data(self) -> np.array:
         '''returns array of:
-         0: time (x-axis),
+         0: time in seconds (converted from source file units),
          1: averaged data across all scans (y-axis),
          2: Standard error as third column.
          
          If there is only one scan in raw_data, returns the mean with zero error.'''
         
         if self.raw_data.shape[1] < 3:
-            time_axis = self.raw_data[:, 0]
+            time_axis = self.raw_data[:, 0] * _SOURCE_TIME_SCALE
             mean_data = self.raw_data[:, 1]
             std_error = np.zeros_like(mean_data)
             averaged_data = np.column_stack((time_axis, mean_data, std_error))
@@ -353,7 +368,7 @@ class THzData:
             data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
             std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
             mean_data = np.mean(data_matrix, axis=0)
-            time_axis = self.data_list[0].raw_data[:, 0]
+            time_axis = self.data_list[0].raw_data[:, 0] * _SOURCE_TIME_SCALE
             averaged_data = np.column_stack((time_axis, mean_data, std_error))
 
         self.processing_dict['time_domain'] = averaged_data.copy()
@@ -385,7 +400,7 @@ class THzData:
         Return a pandas DataFrame mimicking the original Marco-style timedata:
 
         Columns:
-        'Time (ps)':   time axis in ps
+        'Time (s)':    time axis in seconds
         'Mean':        averaged signal
         'std error':   standard error across scans
         """
@@ -394,7 +409,7 @@ class THzData:
 
         df = pd.DataFrame(
             self._data,
-            columns=["Time (ps)", "Mean", "std error"],
+            columns=["Time (s)", "Mean", "std error"],
         )
         return df
 
@@ -424,7 +439,8 @@ class THzData:
         if index_axis:
             time = np.arange(data_view.shape[0])
         else:
-            time = data_view[:, 0]
+            # Convert SI seconds to ps for display
+            time = data_view[:, 0] * _S_TO_PS
 
         mean_amplitude = data_view[:, 1]
         std_error = data_view[:, 2]

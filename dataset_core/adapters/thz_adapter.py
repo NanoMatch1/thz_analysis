@@ -5,10 +5,9 @@ from dataset_core.dataset import DataSet, DataService
 
 Unit convention
 ~~~~~~~~~~~~~~~
-THzData stores time in **picoseconds** (header "Time (ps)").
-thz_core expects time in **seconds**.  The adapter converts
-ps → s before every core call and converts frequencies from
-Hz back to THz only for display and export.
+THzData stores working data in SI units (seconds, Hz).  The adapter
+passes arrays straight through to thz_core without conversion.
+Display / export helpers convert Hz → THz and s → ps for readability.
 
 Minimal adapter layer: each function extracts arrays from THzData objects,
 calls the corresponding thz_core routine, and writes results back onto
@@ -16,22 +15,16 @@ the dataset (in-place). All functions return the dataset for chaining.
 """
 
 
-_PS_TO_S = 1e-12
 _HZ_TO_THZ = 1e-12
+_S_TO_PS = 1e12
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
 def _time_amplitude_array(data_obj) -> np.ndarray:
-    """Extract (N, 2) [time_s, mean_amplitude] from a THzData object.
-
-    Time is converted from the stored picoseconds to seconds so that
-    thz_core receives SI units.
-    """
-    arr = data_obj.data[:, :2].copy()
-    arr[:, 0] *= _PS_TO_S
-    return arr
+    """Extract (N, 2) [time_s, mean_amplitude] from a THzData object."""
+    return data_obj.data[:, :2].copy()
 
 
 def _build_data_dict(dataset: DataSet) -> dict:
@@ -54,9 +47,7 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None) -> DataSet:
     corrected, metrics = core.subtract_baseline(data_dict, config)
 
     for filename, data_obj in dataset.data.items():
-        result = corrected[filename]
-        result[:, 0] /= _PS_TO_S          # convert time back to ps
-        data_obj.data = result
+        data_obj.data = corrected[filename]
         data_obj.processing_dict['baseline_metrics'] = metrics
 
     return dataset
@@ -76,9 +67,7 @@ def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple 
         plt.show()
 
     for filename, data_obj in dataset.data.items():
-        result = aligned[filename]
-        result[:, 0] /= _PS_TO_S          # convert time back to ps
-        data_obj.data = result
+        data_obj.data = aligned[filename]
 
     return dataset
 
@@ -88,11 +77,11 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
     config = config or {}
 
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0] * _PS_TO_S   # ps → s for core
+        t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
         windowed_y, metrics = core.window_time(t, y, config)
 
-        new_data = np.column_stack((data_obj.data[:, 0], windowed_y))
+        new_data = np.column_stack((t, windowed_y))
         if data_obj.data.shape[1] > 2:
             new_data = np.column_stack((new_data, data_obj.data[:, 2:]))
 
@@ -114,12 +103,11 @@ def zero_pad(dataset: DataSet, config: dict | None = None) -> DataSet:
     config = config or {}
 
     data_dict = _build_data_dict(dataset)
-    t_common_s, padded_dict, metrics = core.zero_pad(data_dict, config)
-    t_common_ps = t_common_s / _PS_TO_S   # convert time back to ps
+    t_common, padded_dict, metrics = core.zero_pad(data_dict, config)
 
     for filename, data_obj in dataset.data.items():
         padded_y = padded_dict[filename]
-        new_data = np.column_stack((t_common_ps, padded_y))
+        new_data = np.column_stack((t_common, padded_y))
         data_obj.data = new_data
         data_obj.processing_dict['pad_metrics'] = metrics
 
@@ -131,7 +119,7 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     config = config or {}
 
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0] * _PS_TO_S   # ps → s for core
+        t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
         freq, spectrum, metrics = core.fft_spectrum(t, y, config)
 
@@ -773,3 +761,53 @@ class ResultViewer:
 def result_viewer(dataset: DataSet) -> ResultViewer:
     """Launch the interactive result viewer GUI."""
     return ResultViewer(dataset)
+
+def validate_thz(dataset: DataSet, verbose=True, label: str = "Validation") -> dict:
+    """Check if dataset has the required structure for THz processing."""
+    if not dataset.data:
+        print("Dataset is empty.")
+        return False
+    
+    validation = core.validate_thz_dict({filename: _time_amplitude_array(data_obj) for filename, data_obj in dataset.data.items()})
+    print(validation)
+
+    if verbose:
+        print_metrics(label or "Input Validation", validation)
+
+    if any(validation.get('flags', {}).values()):
+        print("WARNING: Validation failed with flags:")
+        for key, val in validation.get('flags', {}).items():
+            if val:
+                print(f"  - {key}")
+        raise ValueError("Dataset failed THz validation. See flags for details.")
+
+    return validation
+
+# ═══════════════════════════════════════════════════════
+#  PRINTING / SUMMARY HELPERS
+# ═══════════════════════════════════════════════════════
+
+def print_metrics(label: str, metrics: dict) -> None:
+    """Print stage metrics to console."""
+    print(f"\n{'=' * 54}")
+    print(f"  {label}")
+    print(f"{'=' * 54}")
+    vals = metrics.get("values", {})
+    for key, val in vals.items():
+        if isinstance(val, np.ndarray):
+            print(
+                f"  {key:30s} : array({val.shape})"
+            )
+        elif isinstance(val, dict):
+            print(f"  {key:30s} :")
+            for sub_key, sub_val in val.items():
+                print(
+                    f"    {sub_key:28s} : {sub_val}"
+                )
+        else:
+            print(f"  {key:30s} : {val}")
+    flags = metrics.get("flags", {})
+    if flags:
+        for key, val in flags.items():
+            flag_str = "!! FLAGGED" if val else "   ok"
+            print(f"  {key:30s} : {flag_str}")
