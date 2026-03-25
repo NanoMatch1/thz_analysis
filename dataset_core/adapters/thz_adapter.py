@@ -76,7 +76,7 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
     """Apply a time-domain window to each trace in the dataset."""
     config = config or {}
 
-    for filename, data_obj in dataset.data.items():
+    for filename, data_obj in dataset.data.items():       
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
         windowed_y, metrics = core.window_time(t, y, config)
@@ -87,15 +87,35 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
 
         data_obj.data = new_data
         data_obj.processing_dict['window_metrics'] = metrics
+        data_obj.processing_dict['pre-window'] = np.column_stack((t, y))
 
     if show_graph:
         import matplotlib.pyplot as plt
         for filename, data_obj in dataset.data.items():
-            plt.plot(data_obj.data[:, 1], label=filename)
+            data_pre = data_obj.processing_dict.get('pre-window')
+            plt.plot(data_pre[:, 0], data_pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=3, alpha=0.5)
+            plt.plot(data_obj.data[:, 0], data_obj.data[:, 1], label='{} (windowed)'.format(filename))
         plt.legend()
         plt.show()
 
     return dataset
+
+def plot_current(dataset: DataSet) -> None:
+    """Plot the current time-domain traces for all files in the dataset."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for filename, data_obj in dataset.data.items():
+        t = data_obj.data[:, 0]
+        y = data_obj.data[:, 1]
+        ax.plot(t * _S_TO_PS, y, label=filename)
+
+    ax.set_xlabel('Time (ps)')
+    ax.set_ylabel('Amplitude')
+    ax.set_title('Current Time-Domain Traces')
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
 
 
 def zero_pad(dataset: DataSet, config: dict | None = None) -> DataSet:

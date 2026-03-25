@@ -11,6 +11,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO\export"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-03-24_MINTS-4\export"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -22,7 +23,7 @@ if __name__ == "__main__":
     def preprocess(dataset):
         dataset.load_all_data()
         # edited = dataset.modify_acquisitions(in_place=True, export=True)
-        validation = thz.validate_thz(dataset, verbose=True, label="Input Validation")
+        # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
         # thz.print_metrics(validation)
         dataset.group_files(keywords=['type', 'series'])
         dataset.grouping.show_pairs()
@@ -35,14 +36,17 @@ if __name__ == "__main__":
 
     # preprocess(dataset)
     dataset.load_state()
-    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.3}}, show_graph=False)
+    thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=False)
+
+    # thz.plot_current(dataset)
+    
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 4.0}})
     thz.fft_spectrum(dataset)
 
-    phase_before = tools.inspect_phase(dataset, title="Phase Before Unwrapping")
+    # phase_before = tools.inspect_phase(dataset, title="Phase Before Unwrapping")
 
     thz.transfer_function(dataset)
-    phase_after = tools.inspect_phase(dataset, title="Phase After Transfer Function")
+    # phase_after = tools.inspect_phase(dataset, title="Phase After Transfer Function")
 
     # dataset.save_state()
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 6,
