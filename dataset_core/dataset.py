@@ -44,8 +44,28 @@ class DataService:
         '''Returns a summary string describing the DataService contents.'''
         lines = [f"DataService with {len(self._data_dict)} items."]
         for filename, item in self._data_dict.items():
-            lines.append(str(item))
-        return "\n".join(lines)
+            print(f"  - {filename}: {type(item).__name__}")
+            metadata = getattr(item, 'metadata', None)
+            if metadata is not None:
+                lines.append(f"    - Metadata: {metadata}")
+        return lines
+    
+    @property
+    def help(self):
+        '''Prints available methods and properties of the DataService.'''
+        print("DataService Methods and Properties:")
+        print("-" * 40)
+        print("data_dict: dict - Full master data dictionary.")
+        print("grouping: GroupingService - Service for managing file groupings and references.")
+        print("references: list - List of filenames identified as references.")
+        print("samples: list - List of filenames identified as samples.")
+        print("is_reference(filename): bool - Check if a filename is a reference.")
+        print("is_sample(filename): bool - Check if a filename is a sample.")
+        print("info: str - Summary string describing the DataService contents.")
+        print("add_item(filename, obj) - Add an item to the data dictionary.")
+        print("remove_item(filename) - Remove an item from the data dictionary.")
+        print("add_items(mapping) - Add multiple items to the data dictionary from a mapping.")
+        print("current_data_dict() -> dict - Get a dict of current data items based on grouping service's current file list.")
 
     def __repr__(self):
         return f"DataService with {len(self._data_dict)} items."
@@ -199,6 +219,23 @@ class DataSet:
         self.database_service = database_service if database_service is not None else DatabaseService()
 
         self.history = {}
+
+    @property
+    def help(self):
+        '''Prints available methods and properties of the DataSet.'''
+        print("DataSet Methods and Properties:")
+        print("-" * 40)
+        print("file_dir: str - Directory path where data files are located.")
+        print("data: DataService - Service for managing loaded data objects.")
+        print("grouping: GroupingService - Service for managing file groupings and references.")
+        print("sample_keys: list - List of keywords used to identify sample files.")
+        print("reference_keys: list - List of keywords used to identify reference files.")
+        print("figure_objects: dict - Dictionary of FigureObjects for plotting.")
+        print("seriesname: str - Name of the dataset series (default is directory name).")
+        print("metadata: dict - Dictionary for storing dataset-level metadata.")
+        print("file_metadata: dict - Dictionary for storing per-file metadata.")
+        print("database_service: DatabaseService - Service for handling database interactions.")
+        print("history: dict - Dictionary for tracking processing history and metrics.")
 
     def set_dataset_metadata_tag(self, tag_name: str, tag_value):
         self.metadata[tag_name] = tag_value

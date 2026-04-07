@@ -24,18 +24,18 @@ if __name__ == "__main__":
         dataset.load_all_data()
         # edited = dataset.modify_acquisitions(in_place=True, export=True)
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
+        breakpoint()
         # thz.print_metrics(validation)
         dataset.group_files(keywords=['type', 'series'])
         dataset.grouping.show_pairs()
-
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
         thz.subtract_baseline(dataset)
         thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    # preprocess(dataset)
-    dataset.load_state()
+    preprocess(dataset)
+    # dataset.load_state()
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=False)
 
     # thz.plot_current(dataset)
