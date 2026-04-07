@@ -123,11 +123,14 @@ def zero_pad(dataset: DataSet, config: dict | None = None) -> DataSet:
     config = config or {}
 
     data_dict = _build_data_dict(dataset)
-    t_common, padded_dict, metrics = core.zero_pad(data_dict, config)
+    extend_factor = config.get('pad', {}).get('extend_factor', 1.0)
+
+    t_common, padded_dict, metrics = core.pad_to_common_grid(data_dict)
+    t_extended, extended_dict, metrics = core.extend_grid(t_common, padded_dict, extend_factor)
 
     for filename, data_obj in dataset.data.items():
-        padded_y = padded_dict[filename]
-        new_data = np.column_stack((t_common, padded_y))
+        padded_y = extended_dict[filename]
+        new_data = np.column_stack((t_extended, padded_y))
         data_obj.data = new_data
         data_obj.processing_dict['pad_metrics'] = metrics
 
@@ -528,6 +531,163 @@ def plot_conductivity(dataset: DataSet, freq_range: tuple | None = None) -> None
     ax_i.legend()
     plt.tight_layout()
     plt.show()
+
+
+# ---------------------------------------------------------------------------
+# phase correction demo
+# ---------------------------------------------------------------------------
+
+def phase_correction(dataset: DataSet, source: str = 'transfer') -> DataSet:
+    """Interactive demo: fit a line to a selected phase region, subtract the
+    y-intercept (timing-offset correction), then re-wrap.
+
+    Parameters
+    ----------
+    dataset : DataSet
+        Must already have FFT data (and transfer function if *source='transfer'*).
+    source : str
+        Which complex spectrum to operate on:
+        - ``'transfer'`` – unwrapped phase of H(f)  (default)
+        - ``'fft'``      – unwrapped phase of the raw FFT spectrum
+
+    Workflow (per trace, blocking):
+        1. Show unwrapped phase vs frequency (THz).
+        2. User drags a span to select a "trusted" linear region.
+        3. Linear regression is fitted; y-intercept = assumed timing error.
+        4. Corrected phase is shown overlaid; a second figure shows wrapped
+           comparison (before / after).
+        5. The corrected complex spectrum is written back into the dataset.
+
+    Returns the dataset (modified in-place) for chaining.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.widgets import SpanSelector
+
+    filenames = list(dataset.data.keys())
+
+    for filename in filenames:
+        data_obj = dataset.data[filename]
+        proc = data_obj.processing_dict
+
+        freq = proc.get('fft_freq')
+        if freq is None:
+            print(f"Skipping '{filename}': no FFT data.")
+            continue
+
+        if source == 'transfer':
+            spectrum = proc.get('transfer_H')
+            label = 'H(f)'
+            if spectrum is None:
+                print(f"Skipping '{filename}': no transfer function.")
+                continue
+        else:
+            spectrum = proc.get('fft_spectrum')
+            label = 'FFT'
+            if spectrum is None:
+                print(f"Skipping '{filename}': no FFT spectrum.")
+                continue
+
+        freq_thz = freq * _HZ_TO_THZ
+        unwrapped = np.unwrap(np.angle(spectrum))
+
+        # --- interactive selection figure ---
+        fig, ax = plt.subplots(figsize=(11, 5))
+        ax.plot(freq_thz, unwrapped, color='steelblue', label='unwrapped phase')
+        ax.set_xlabel('Frequency (THz)')
+        ax.set_ylabel('Phase (rad)')
+        ax.set_title(f'{label} phase — {filename}\n'
+                      'Drag to select linear region, then close window')
+        ax.legend(loc='upper right')
+
+        selection = {}
+
+        def on_select(xmin, xmax):
+            selection['xmin'] = xmin
+            selection['xmax'] = xmax
+
+            mask = (freq_thz >= xmin) & (freq_thz <= xmax)
+            if mask.sum() < 2:
+                return
+
+            coeffs = np.polyfit(freq_thz[mask], unwrapped[mask], 1)
+            fit_line = np.polyval(coeffs, freq_thz)
+
+            # Clear previous fit overlay (keep original trace)
+            while len(ax.lines) > 1:
+                ax.lines[-1].remove()
+            ax.axvspan(xmin, xmax, alpha=0.15, color='orange', label='selected')
+            ax.plot(freq_thz, fit_line, '--', color='crimson', lw=1.5,
+                    label=f'fit: slope={coeffs[0]:.3f}, intercept={coeffs[1]:.3f}')
+            ax.legend(loc='upper right', fontsize=8)
+            fig.canvas.draw_idle()
+
+            selection['coeffs'] = coeffs
+
+        span = SpanSelector(ax, on_select, 'horizontal',
+                            useblit=True, interactive=True,
+                            props=dict(alpha=0.25, facecolor='orange'))
+        plt.tight_layout()
+        plt.show()  # blocks until window closed
+
+        if 'coeffs' not in selection:
+            print(f"  No region selected for '{filename}', skipping correction.")
+            continue
+
+        slope, intercept = selection['coeffs']
+        print(f"  {filename}: slope={slope:.4f} rad/THz, intercept={intercept:.4f} rad")
+
+        # --- apply correction ---
+        # The linear phase φ(f) = slope·f + intercept.
+        # intercept is the timing-error offset; subtract the full linear trend
+        # so that the residual phase is only dispersion.
+        correction = np.polyval(selection['coeffs'], freq_thz)
+        corrected_unwrapped = unwrapped - correction
+
+        # Rebuild corrected complex spectrum (preserve magnitude)
+        corrected_wrapped = np.angle(np.exp(1j * corrected_unwrapped))
+        magnitude = np.abs(spectrum)
+        corrected_spectrum = magnitude * np.exp(1j * corrected_unwrapped)
+
+        # --- before/after comparison ---
+        fig2, (ax_uw, ax_w) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+
+        ax_uw.plot(freq_thz, unwrapped, 'steelblue', alpha=0.5, label='original')
+        ax_uw.plot(freq_thz, corrected_unwrapped, 'darkorange', label='corrected')
+        ax_uw.set_ylabel('Unwrapped phase (rad)')
+        ax_uw.set_title(f'{filename} — unwrapped phase before/after')
+        ax_uw.legend(fontsize=8)
+
+        original_wrapped = np.angle(spectrum)
+        ax_w.plot(freq_thz, original_wrapped, 'steelblue', alpha=0.5, label='original')
+        ax_w.plot(freq_thz, corrected_wrapped, 'darkorange', label='corrected')
+        ax_w.set_xlabel('Frequency (THz)')
+        ax_w.set_ylabel('Wrapped phase (rad)')
+        ax_w.set_title(f'{filename} — wrapped phase before/after')
+        ax_w.legend(fontsize=8)
+
+        plt.tight_layout()
+        plt.show()
+
+        # --- write back ---
+        if source == 'transfer':
+            proc['transfer_H'] = corrected_spectrum
+            data_obj.data = np.column_stack((
+                freq, magnitude, np.angle(corrected_spectrum),
+            ))
+        else:
+            proc['fft_spectrum'] = corrected_spectrum
+            data_obj.data = np.column_stack((
+                freq, magnitude, np.angle(corrected_spectrum),
+            ))
+
+        proc['phase_correction'] = {
+            'slope_rad_per_THz': slope,
+            'intercept_rad': intercept,
+            'source': source,
+        }
+        print(f"  → phase corrected and written back for '{filename}'.")
+
+    return dataset
 
 
 # ---------------------------------------------------------------------------

@@ -282,6 +282,15 @@ class THzData:
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {len(self.data_list)}\n   -> Data type: {self.data_type}\n" 
     
+    def copy(self) -> THzData:
+        '''Creates a deep copy of the THzData object, including all scans and metadata.'''
+        copied_scans = [BaseTHzData(data=obj.raw_data.copy(), headers=obj.headers.copy() if obj.headers else None) for obj in self.data_list]
+        copied_headers = self.headers.copy() if self.headers else None
+        new_obj = THzData(data=copied_scans, header=copied_headers, data_type=self.data_type, filename=self.filename)
+        new_obj._meta_data = self._meta_data.copy()
+        new_obj.processing_dict = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in self.processing_dict.items()}
+        return new_obj
+    
     def update_data(self, new_data: np.ndarray) -> None:
         '''Takes a modified raw_data np.array and updates the internal state of the object, including re-averaging and recalculating stats. Used for instance after modifying the acquisitions.'''
         self.raw_data = new_data

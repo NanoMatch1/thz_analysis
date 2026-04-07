@@ -40,13 +40,68 @@ if __name__ == "__main__":
 
     # thz.plot_current(dataset)
     
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 4.0}})
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}})
+    # thz.extend_grid
     thz.fft_spectrum(dataset)
 
     # phase_before = tools.inspect_phase(dataset, title="Phase Before Unwrapping")
 
+    offset_dict = {}
+    phase_range = (0, 5)
+            # offset_phase = tools.phase_offset(phase_data, offset=index)
+            # n, k, metrics = invert_nk(freq, H, thickness_m, mask)
+
+
     thz.transfer_function(dataset)
-    # phase_after = tools.inspect_phase(dataset, title="Phase After Transfer Function")
+    from thz_core import invert_nk
+    from matplotlib import pyplot as plt
+    import numpy as np
+    # for filename, data in dataset.data.items():
+    #     phase_data = data.data
+    #     # for index in range(*phase_range):
+    #     plt.plot(data.data[:, 0], np.unwrap(data.data[:, 2]), label="Original Phase {}".format(filename))
+    # plt.legend()
+    # plt.show()
+    # # phase_after = tools.inspect_phase(dataset, title="Phase After Transfer Function")
+    # # new_dataset = 
+
+    # phase_dict = {}
+    # for filename, data in dataset.data.items():
+    #     phase_dict[filename] = data.data
+    #     # plt.plot(data.data[:, 0], data.data[:, 1], label="Amplitude {}".format(filename))
+
+
+    # offset_dict = {}
+    # for filename, phase_data in phase_dict.items():
+    #     if 'reference' in filename.lower():
+    #         continue
+    #     for offset in range(5):
+    #         offset_phase = tools.phase_offset(phase_data, offset=offset)
+    #         # plt.plot(phase_data[:, 0], offset_phase, label="Offset Phase {} Offset {}".format(filename, offset))
+    #         if filename not in offset_dict:
+    #             offset_dict[filename] = {}
+    #         offset_dict[filename][offset] = np.column_stack((phase_data[:, 0], phase_data[:, 1], offset_phase))
+
+    # fig, ax = plt.subplots(3, 1)
+    # for filename, offsets in offset_dict.items():
+    #     for value, data in offsets.items():
+    #         mask = np.array([True if 0.3e12 < x < 3e12 else False for x in data[:, 0]])
+    #         data = data[mask]
+    #         n, k, metrics = invert_nk(data[:, 0], data[:, 1], thickness_m=1e-3, mask=[True for _ in range(data.shape[0])], config=None)
+    #         ax[0].plot(data[:, 0], n, label="n {} Offset {}".format(filename, value))
+    #         ax[1].plot(data[:, 0], k, label="k {} Offset {}".format(filename, value))
+    #         ax[2].plot(data[:, 0], data[:, 2], label="Phase {} Offset {}".format(filename, value))
+    #     ax[0].legend()
+    #     ax[1].legend()
+    #     ax[2].legend()
+    #     plt.show()
+    # breakpoint()
+    
+    # for filename, offsets in offset_dict.items():
+    # breakpoint()
+
+
+    # thz.phase_correction_demo(dataset, source='transfer')
 
     # dataset.save_state()
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 6,
