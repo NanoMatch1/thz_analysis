@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from typing import Any
-from scipy.signal import savgol_filter
 
 import numpy as np
 
@@ -330,49 +329,6 @@ def interpolate_to_max_resolution_simple(
             final_results.append({"data": data, "headers": headers})
 
     return final_results
-
-
-def smooth_trace_savgol(
-    y: np.ndarray,
-    window_length: int = 11,
-    polyorder: int = 3,
-    mode: str = "interp"
-) -> np.ndarray:
-    """
-    Smooth a 1D THz time trace using a Savitzky-Golay filter.
-
-    Parameters
-    ----------
-    y : np.ndarray
-        1D array of field values.
-    window_length : int
-        Length of the filter window (must be odd).
-        Typical THz values: 7–21 samples.
-    polyorder : int
-        Polynomial order (must be < window_length).
-        2–3 is typical.
-    mode : str
-        Boundary handling mode passed to savgol_filter.
-
-    Returns
-    -------
-    y_smooth : np.ndarray
-        Smoothed y-axis, same shape as input.
-    """
-    y = np.asarray(y)
-
-    if window_length % 2 == 0:
-        window_length += 1  # enforce odd window
-
-    if window_length >= y.size:
-        raise ValueError("window_length must be smaller than y.size")
-
-    return savgol_filter(
-        y,
-        window_length=window_length,
-        polyorder=polyorder,
-        mode=mode
-    )
 
 def interpolate_data(data, resolution, new_limits=None) -> np.ndarray:
     '''Interpolates data using np.interp.
