@@ -11,7 +11,8 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO\export"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-03-24_MINTS-4\export"
+    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-04-09_new-STE"
+    fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -31,25 +32,24 @@ if __name__ == "__main__":
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
         thz.subtract_baseline(dataset)
-        thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
+        # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    preprocess(dataset)
-    # dataset.load_state()
+    # preprocess(dataset)
+    dataset.load_state()
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=False)
 
     # thz.plot_current(dataset)
     
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}})
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}})
     # thz.extend_grid
     thz.fft_spectrum(dataset)
 
-    # phase_before = tools.inspect_phase(dataset, title="Phase Before Unwrapping")
+    # thz.plot_fft(dataset)
+    # thz.plot_fft(dataset)
 
-    offset_dict = {}
-    phase_range = (0, 5)
-            # offset_phase = tools.phase_offset(phase_data, offset=index)
-            # n, k, metrics = invert_nk(freq, H, thickness_m, mask)
+    # breakpoint()
+    
 
 
     thz.transfer_function(dataset)

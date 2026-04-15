@@ -397,7 +397,9 @@ def plot_fft(dataset: DataSet, freq_range: tuple | None = None) -> None:
         spectrum = data_obj.processing_dict.get('fft_spectrum')
         if freq is None or spectrum is None:
             continue
-        ax.semilogy(freq * _HZ_TO_THZ, np.abs(spectrum), label=filename)
+        # ax.semilogy(freq * _HZ_TO_THZ, np.abs(spectrum), label=filename)
+        norm = np.abs(spectrum).max()
+        ax.plot(freq * _HZ_TO_THZ, np.abs(spectrum) / norm, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
