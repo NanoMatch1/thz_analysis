@@ -16,6 +16,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS\analysis"
     fileDir = r"C:\Users\Samuel\Data\THz\Ni_HHTP_Tdep_TDS"
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_stage_adjustment_test\test airs"
+    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\Co_HHTP_Tdep_TDS"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -38,7 +39,7 @@ if __name__ == "__main__":
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
         # breakpoint()
         # thz.print_metrics(validation)
-        dataset.group_files(keywords=['type', 'temperature'])
+        dataset.group_files(keywords=['type', 'temp'])
         dataset.grouping.show_pairs()
         breakpoint()
         # --- THz-TDS processing pipeline ---

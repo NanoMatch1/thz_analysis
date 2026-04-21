@@ -52,7 +52,8 @@ class FilenameInfo:
         merge_extra: bool = False,
         **kwargs: Any,
     ) -> None:
-        """Parse this filename into fields based on delimiter + keyword ordering."""
+        """Parse this filename into fields based on delimiter + keyword ordering. Critical keywords such as "type" are mapped to specific fields, while other keywords are added as attributes."""
+
         active_keywords = keywords if keywords is not None else self.keywords
         self.keywords = list(active_keywords)
 
@@ -77,10 +78,10 @@ class FilenameInfo:
                     indices = [i for i, ch in enumerate(value) if ch == "."]
                     value = value[: indices[-1]]
                 self.series = value
-            elif key == "temp":
-                self.temperature = value
-                if "temperature" not in self.report_list:
-                    self.report_list.append("temperature")
+            # elif key == "temp":
+            #     self.temperature = value
+            #     if "temperature" not in self.report_list:
+            #         self.report_list.append("temperature")
             else:
                 self.__dict__[key] = value
                 if key not in self.report_list:

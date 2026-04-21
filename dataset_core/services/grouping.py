@@ -1,5 +1,7 @@
 '''Service for grouping of filenames based on strings, keywords and delimiters. Used to correlate reference and sample across variable datasets suhch as temperature series.'''
 
+#TODO - create dataset module import, others can import from dataset_core.dataset 
+
 from dataclasses import dataclass, field
 from typing import Optional
 from dataset_core.data_structures.filename_info import FilenameInfo
@@ -25,6 +27,9 @@ class GroupingService:
     '''Creates a nested dictionary structure to group filenames based on provided delimiters and keywords.
     
     Handles tracking of the current dataset through modifications to the _current_data_list attribute. DataSet can access and modify this attribute to control which files are being worked on.'''
+
+    reference_identifiers = ['reference', 'ref', 'substrate', 'air']
+    sample_identifiers = ['sample']
 
     def __init__(self, keywords=None, delimiter='_', filelist=None):
         self.filelist = filelist if filelist is not None else []
@@ -78,6 +83,7 @@ class GroupingService:
     
     def show_pairs(self):
         """Shows the current sample-reference pairs based on the grouping. Prints the filename of each sample along with its assigned substrate and air reference filenames."""
+        
         for filename, item in self.file_items.items():
             if item.data_type == 'sample':
                 substrate_ref = item.substrate_reference if hasattr(item, 'substrate_reference') else 'None'
@@ -95,6 +101,7 @@ class GroupingService:
             "global_reference": self.global_reference,
             "filelist": list(self.filelist),
             "current_data_list": list(self._current_data_list),
+            "get_state": self.get_state,  # include method for reference
         }
         return state
     
@@ -225,7 +232,7 @@ class GroupingService:
         self._build_fileitems(delimiter=delimiter, keywords=selected_keywords, merge_extra=True)
         self.keywords = selected_keywords
         self.parse_filenames()
-        self._identify_global_references()
+        # self._identify_global_references()
         print("Completed simple grouping of filenames.")
 
         self.integrity_check()
@@ -256,12 +263,13 @@ class GroupingService:
             print("Integrity check passed: All groups have required components.")
         
     def _pair_references(self):
-        '''Works through file_items to pair reference and samples based on the number of unique grouping keyword identifiers. Currently matches on all provided keywords except 'data_type' and 'series'. If no extra keywords are provided, matches all samples to global substrate reference.'''
+        '''Works through file_items to pair reference and samples based on the number of unique grouping keyword identifiers. Currently matches on all provided keywords except 'data_type' and 'series'. If no extra keywords are provided, matches all samples to global substrate reference.
+        If matches are found to a reference, adds attributes to the sample with that reference name - e.g. substrate_reference, air_reference... Constructed from the keyword, so any keyword can become a reference type internally.'''
 
-        references = {filename: item for filename, item in self.file_items.items() if item.data_type == 'reference'}
-        samples = {filename: item for filename, item in self.file_items.items() if item.data_type == 'sample'}
-        
-        # for each sample, establish match criteria and find reference
+        references = {filename: item for filename, item in self.file_items.items() if item.data_type in self.reference_identifiers}
+        samples = {filename: item for filename, item in self.file_items.items() if item.data_type in self.sample_identifiers}
+
+        # for each sample, establish match criteria and find references
         for filename, fileitem in samples.items():
             keywords = fileitem.report_list.copy()
             keywords.remove('data_type')  # remove type to match on other keywords
@@ -281,9 +289,9 @@ class GroupingService:
                         match = False
                         break
                 if match:
-                    if ref_item.data_type == 'reference':
-                        fileitem.substrate_reference = ref_filename
-                        fileitem.air_reference = self.global_reference.get('air', None)
+                    reftype = ref_item.data_type
+                    fileitem.__dict__[f"{reftype}_reference"] = ref_filename
+                    breakpoint()
 
     def _separate_by_delimiters(self, delimiter=None):
         '''Separates a filename into components based on provided delimiters.'''
