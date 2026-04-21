@@ -9,10 +9,13 @@ from dataset_core.adapters import analysis_tools as tools
 if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\matchbook\thz\dataset_core\example_data"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO\export"
-    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-04-09_new-STE"
-    fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO\export"
+    # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-04-09_new-STE"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS"
+    fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS\analysis"
+    fileDir = r"C:\Users\Samuel\Data\THz\Ni_HHTP_Tdep_TDS"
+    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_stage_adjustment_test\test airs"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -22,20 +25,29 @@ if __name__ == "__main__":
     dataset = DataSet(fileDir)
 
     def preprocess(dataset):
-        dataset.load_all_data()
+        dataset.load_all_data(case_insensitive=True)
+        # dataset.data_dict
+
+        for filename, data_obj in dataset.data_dict.items():
+            print(f"{filename}")
+            # breakpoint()
+        # thz.fft_spectrum(dataset)
+        # dataset.plot_current()
+        # thz.plot_fft(dataset)
         # edited = dataset.modify_acquisitions(in_place=True, export=True)
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
-        breakpoint()
+        # breakpoint()
         # thz.print_metrics(validation)
-        dataset.group_files(keywords=['type', 'series'])
+        dataset.group_files(keywords=['type', 'temperature'])
         dataset.grouping.show_pairs()
+        breakpoint()
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
         thz.subtract_baseline(dataset)
         # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    # preprocess(dataset)
+    preprocess(dataset)
     dataset.load_state()
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=False)
 
@@ -45,7 +57,7 @@ if __name__ == "__main__":
     # thz.extend_grid
     thz.fft_spectrum(dataset)
 
-    # thz.plot_fft(dataset)
+    thz.plot_fft(dataset)
     # thz.plot_fft(dataset)
 
     # breakpoint()

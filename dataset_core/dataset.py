@@ -237,6 +237,11 @@ class DataSet:
         print("database_service: DatabaseService - Service for handling database interactions.")
         print("history: dict - Dictionary for tracking processing history and metrics.")
 
+    @property
+    def data_dict(self):
+        '''Returns the full master data dictionary from the data service for convenience.'''
+        return self.data.data_dict
+
     def set_dataset_metadata_tag(self, tag_name: str, tag_value):
         self.metadata[tag_name] = tag_value
 
@@ -412,7 +417,7 @@ class DataSet:
             return None
         return Loader(path).load()
 
-    def load_all_data(self, prefer_acc=True, file_lister=None) -> DataService:
+    def load_all_data(self, prefer_acc=True, file_lister=None, case_insensitive=False) -> DataService:
         '''Loads all files in the specified directory into the data service.
 
         Parameters
@@ -422,6 +427,8 @@ class DataSet:
         file_lister : callable or None
             Optional function(directory_path) -> list[str] of filenames.
             Defaults to os.listdir. Inject a replacement for testing.
+        case_insensitive : bool
+            If True, file matching is done in a case-insensitive manner.
         '''
         if file_lister is None:
             file_lister = os.listdir
@@ -441,6 +448,8 @@ class DataSet:
             data_object = self.load_any(filepath)
             if data_object is None:
                 continue  # no loader for this extension
+            if case_insensitive is True:
+                filename = filename.lower()
             self.data.add_item(filename, data_object)
             filelist.append(filename)
 
