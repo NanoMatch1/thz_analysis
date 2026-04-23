@@ -1,5 +1,6 @@
 import numpy as np
 import thz_core as core
+import matplotlib.pyplot as plt
 from dataset_core.dataset import DataSet, DataService
 """Used to bridge the DataSet manager and the thz analysis library.
 
@@ -39,12 +40,25 @@ def _build_data_dict(dataset: DataSet) -> dict:
 # pipeline steps
 # ---------------------------------------------------------------------------
 
-def subtract_baseline(dataset: DataSet, config: dict | None = None) -> DataSet:
+def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
     """Subtract DC baseline from each trace (removes detector/digitiser offset)."""
     config = config or {}
 
     data_dict = _build_data_dict(dataset)
     corrected, metrics = core.subtract_baseline(data_dict, config)
+
+    if show_graph:
+        fig, ax = plt.subplots(2, 1, layout='constrained')
+        for filename, data in corrected.items():
+            ax[1].plot(data[:, 1], label='{} (corrected)'.format(filename))
+            pre = data_dict[filename]
+            ax[0].plot(pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
+        # ax[0].legend()
+        # ax[1].legend()
+        ax[1].set_title('Baseline-Corrected Traces')
+        ax[0].set_title('Original Traces')
+        ax[1].set_xlabel('Time Point Index')
+        plt.show()
 
     for filename, data_obj in dataset.data.items():
         data_obj.data = corrected[filename]
@@ -91,11 +105,16 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
 
     if show_graph:
         import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(2, 1, layout='constrained')
         for filename, data_obj in dataset.data.items():
             data_pre = data_obj.processing_dict.get('pre-window')
-            plt.plot(data_pre[:, 0], data_pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=3, alpha=0.5)
-            plt.plot(data_obj.data[:, 0], data_obj.data[:, 1], label='{} (windowed)'.format(filename))
-        plt.legend()
+            ax[0].plot(data_pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
+            ax[1].plot(data_obj.data[:, 1], label='{} (windowed)'.format(filename))
+        # ax[0].legend()
+        # ax[1].legend()
+        ax[0].set_title('Original Traces')
+        ax[1].set_title('Windowed Traces')
+        ax[1].set_xlabel('Time Point Index')    
         plt.show()
 
     return dataset
@@ -104,7 +123,7 @@ def plot_current(dataset: DataSet) -> None:
     """Plot the current time-domain traces for all files in the dataset."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(10, 5), layout='constrained')
     for filename, data_obj in dataset.data.items():
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
@@ -118,7 +137,7 @@ def plot_current(dataset: DataSet) -> None:
     plt.show()
 
 
-def zero_pad(dataset: DataSet, config: dict | None = None) -> DataSet:
+def zero_pad(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
     """Zero-pad all traces onto a common time grid."""
     config = config or {}
 
@@ -254,6 +273,135 @@ def invert_nk(dataset: DataSet, thickness_m: float, config: dict | None = None) 
         data_obj.data = np.column_stack((freq, n, k))
 
     return dataset
+
+
+def invert_nk_grid(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Extract n and k via brute-force 2D grid search for each sample.
+
+    Geometry is set via config["invert_grid"]["geometry"]:
+      - "free_standing"       : sample in air, uses pre-computed transfer_H
+      - "substrate_only"      : substrate vs air, computes H internally from FFT spectra
+      - "substrate_sandwich"  : sample on substrate, reads n_sub/k_sub from matched substrate file
+
+    For "substrate_sandwich", run "substrate_only" first so that substrate n,k are available.
+    """
+    config = config or {}
+    geometry = config.get("invert_grid", {}).get("geometry", "free_standing")
+
+    if geometry == "free_standing":
+        _grid_invert_free_standing(dataset, config)
+    elif geometry == "substrate_only":
+        _grid_invert_substrate_only(dataset, config)
+    elif geometry == "substrate_sandwich":
+        _grid_invert_substrate_sandwich(dataset, config)
+    else:
+        raise ValueError(
+            f"Unknown geometry '{geometry}'. Must be 'free_standing', 'substrate_only', or 'substrate_sandwich'."
+        )
+
+    return dataset
+
+
+def _get_transfer_data(data_obj, filename):
+    """Return (freq, H, mask) from processing_dict, or (None, None, None) with a warning."""
+    freq = data_obj.processing_dict.get('fft_freq')
+    H = data_obj.processing_dict.get('transfer_H')
+    mask = data_obj.processing_dict.get('transfer_mask')
+    if H is None or mask is None:
+        print(f"Warning: no transfer function for '{filename}', skipping inversion.")
+        return None, None, None
+    return freq, H, mask
+
+
+def _get_fft_data(data_obj, filename):
+    """Return (freq, spectrum) from processing_dict, or (None, None) with a warning."""
+    freq = data_obj.processing_dict.get('fft_freq')
+    spectrum = data_obj.processing_dict.get('fft_spectrum')
+    if freq is None or spectrum is None:
+        print(f"Warning: no FFT spectrum for '{filename}', skipping.")
+        return None, None
+    return freq, spectrum
+
+
+def _store_nk_grid(data_obj, freq, n, k, metrics):
+    """Write n, k, and grid-search metrics back into processing_dict."""
+    data_obj.processing_dict['n'] = n
+    data_obj.processing_dict['k'] = k
+    data_obj.processing_dict['invert_metrics'] = metrics
+    data_obj.data = np.column_stack((freq, n, k))
+
+
+def _grid_invert_free_standing(dataset, config):
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        freq, H, mask = _get_transfer_data(data_obj, filename)
+        if freq is None:
+            continue
+        n, k, metrics = core.invert_nk_grid(freq, H, mask, config)
+        _store_nk_grid(data_obj, freq, n, k, metrics)
+
+
+def _grid_invert_substrate_only(dataset, config):
+    for filename, data_obj in dataset.data.items():
+        file_item = dataset.grouping.file_items.get(filename)
+        if file_item is None or file_item.data_type != 'substrate':
+            continue
+
+        freq, Y_sub = _get_fft_data(data_obj, filename)
+        if freq is None:
+            continue
+
+        air_ref_filename = getattr(file_item, 'air_reference', None)
+        if air_ref_filename is None:
+            print(f"Warning: no air reference for substrate '{filename}', skipping.")
+            continue
+
+        air_obj = dataset.data.get(air_ref_filename)
+        if air_obj is None:
+            print(f"Warning: air reference '{air_ref_filename}' not loaded, skipping '{filename}'.")
+            continue
+
+        _, Y_air = _get_fft_data(air_obj, air_ref_filename)
+        if Y_air is None:
+            continue
+
+        H, _valid_mask, _tf_metrics = core.transfer_function(freq, Y_sub, Y_air, config)
+        mask, _mask_metrics = core.trusted_band_mask(freq, Y_air, Y_sub, H, config)
+
+        data_obj.processing_dict['transfer_H'] = H
+        data_obj.processing_dict['transfer_mask'] = mask
+
+        n, k, metrics = core.invert_nk_grid(freq, H, mask, config)
+        _store_nk_grid(data_obj, freq, n, k, metrics)
+
+
+def _grid_invert_substrate_sandwich(dataset, config):
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+
+        freq, H, mask = _get_transfer_data(data_obj, filename)
+        if freq is None:
+            continue
+
+        sub_ref_obj = dataset.get_reference(filename, ref_type='substrate')
+        if sub_ref_obj is None:
+            print(f"Warning: no substrate reference for '{filename}', skipping.")
+            continue
+
+        n_sub = sub_ref_obj.processing_dict.get('n')
+        k_sub = sub_ref_obj.processing_dict.get('k')
+        if n_sub is None or k_sub is None:
+            print(f"Warning: substrate reference for '{filename}' has no n,k — run substrate_only first, skipping.")
+            continue
+
+        sample_config = {
+            **config,
+            'invert_grid': {**config.get('invert_grid', {}), 'n_substrate': n_sub - 1j * k_sub},
+        }
+        n, k, metrics = core.invert_nk_grid(freq, H, mask, sample_config)
+        _store_nk_grid(data_obj, freq, n, k, metrics)
 
 
 def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:

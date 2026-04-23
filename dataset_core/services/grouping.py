@@ -81,16 +81,15 @@ class GroupingService:
         lines = [item.__repr__() for item in self.file_items.values()]
         return lines
     
-    def show_pairs(self):
+    def show_matches(self):
         """Shows the current sample-reference pairs based on the grouping. Prints the filename of each sample along with its assigned substrate and air reference filenames."""
         
         for filename, item in self.file_items.items():
             if item.data_type == 'sample':
-                substrate_ref = item.substrate_reference if hasattr(item, 'substrate_reference') else 'None'
-                air_ref = item.air_reference if hasattr(item, 'air_reference') else 'None'
+                reference_ids = [ref for ref in item.__dict__.keys() if ref.endswith('_reference')]
                 print(f"Sample: {filename}")
-                print(f"  > Substrate Ref: {substrate_ref}")
-                print(f"  > Air Ref: {air_ref}")
+                for ref_id in reference_ids:
+                    print(f"  > {ref_id.replace('_', ' ').title()}: {getattr(item, ref_id)}") # print the reference filename associated with this sample for each reference type (e.g. substrate_reference, air_reference)
 
     def get_state(self):
         '''Returns a dictionary representing the current state of the grouping service, including file items and grouping keywords.'''
@@ -236,7 +235,7 @@ class GroupingService:
         print("Completed simple grouping of filenames.")
 
         self.integrity_check()
-        self._pair_references()
+        self._match_references()
         
         return self.file_items
 
@@ -262,36 +261,46 @@ class GroupingService:
         else:
             print("Integrity check passed: All groups have required components.")
         
-    def _pair_references(self):
-        '''Works through file_items to pair reference and samples based on the number of unique grouping keyword identifiers. Currently matches on all provided keywords except 'data_type' and 'series'. If no extra keywords are provided, matches all samples to global substrate reference.
-        If matches are found to a reference, adds attributes to the sample with that reference name - e.g. substrate_reference, air_reference... Constructed from the keyword, so any keyword can become a reference type internally.'''
+    def _match_references(self):
+        '''Works through file_items to match references to samples (and substrates to air).
+
+        For each sample: sets substrate_reference and air_reference attributes by
+        matching on all non-type keywords (e.g. temperature, series).
+
+        For each substrate: additionally sets air_reference so that the
+        substrate_only grid-search inversion can compute H = Y_sub / Y_air
+        without the user having to wire up that lookup manually.
+        '''
 
         references = {filename: item for filename, item in self.file_items.items() if item.data_type in self.reference_identifiers}
         samples = {filename: item for filename, item in self.file_items.items() if item.data_type in self.sample_identifiers}
+        substrates = {filename: item for filename, item in self.file_items.items() if item.data_type == 'substrate'}
+        air_refs = {filename: item for filename, item in self.file_items.items() if item.data_type == 'air'}
 
-        # for each sample, establish match criteria and find references
+        def _assign_references(target_item, ref_pool):
+            keywords = target_item.report_list.copy()
+            keywords.remove('data_type')
+            match_criteria = {key: getattr(target_item, key, None) for key in keywords}
+            for ref_filename, ref_item in ref_pool.items():
+                if all(getattr(ref_item, key, None) == value for key, value in match_criteria.items()):
+                    reftype = ref_item.data_type
+                    target_item.__dict__[f"{reftype}_reference"] = ref_filename
+
+        # Match samples to all references (substrate and air)
         for filename, fileitem in samples.items():
             keywords = fileitem.report_list.copy()
-            keywords.remove('data_type')  # remove type to match on other keywords
-            # keywords.remove('series')  # remove series to match on other keywords 
+            keywords.remove('data_type')
             match_criteria = {key: getattr(fileitem, key, None) for key in keywords}
 
             if match_criteria == {}:
-                # if no extra keywords to match on, assign global substrate reference
                 fileitem.substrate_reference = self.global_reference.get('substrate', None)
                 continue
 
-            # Find matching reference
-            for ref_filename, ref_item in references.items():
-                match = True
-                for key, value in match_criteria.items():
-                    if getattr(ref_item, key, None) != value:
-                        match = False
-                        break
-                if match:
-                    reftype = ref_item.data_type
-                    fileitem.__dict__[f"{reftype}_reference"] = ref_filename
-                    breakpoint()
+            _assign_references(fileitem, references)
+
+        # Match substrates to their air references (needed for substrate_only inversion)
+        for filename, fileitem in substrates.items():
+            _assign_references(fileitem, air_refs)
 
     def _separate_by_delimiters(self, delimiter=None):
         '''Separates a filename into components based on provided delimiters.'''
