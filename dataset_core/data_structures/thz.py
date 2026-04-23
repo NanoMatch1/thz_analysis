@@ -201,6 +201,7 @@ class THzData:
     def __init__(self, data: list, header: list, **kwargs) -> None:
         self.data_list = data  # list of BaseTHz objects for each scan
         self.raw_data = self._compile_data_array()  # np.array of compiled data from all scans
+        self.std_dev = self._calculate_std()  # standard deviation across scans for each time point
         self.headers = header if header is not None else self._grabonedata().headers  # retain headers from first scan
         self.data_type = kwargs.get('data_type', None) # e.g. 'acc', 'dat', etc.
         self.filename = kwargs.get('filename', 'unknown_file')
@@ -291,6 +292,23 @@ class THzData:
         new_obj.processing_dict = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in self.processing_dict.items()}
         return new_obj
     
+    def assess_drift(self, index=None) -> None:
+        '''Assess drift across scans by comparing the mean amplitude at a chosen time point across scans. Stores result in metadata.'''
+        time_axis = self._time_data[:, 0]
+        mean_axis = self._time_data[:, 1]
+
+        # Choose a time point for drift assessment, e.g. the max amplitude point
+        if index is not None:
+            if index < 0 or index >= len(time_axis):
+                raise ValueError(f"Index {index} out of bounds for time axis of length {len(time_axis)}.")
+            max_idx = index
+        else:
+            max_idx = np.argmax(np.abs(mean_axis))
+        drift_values = [obj.raw_data[max_idx, 1] for obj in self.data_list]
+
+        self._meta_data['drift_values'] = drift_values
+        return drift_values
+    
     def update_data(self, new_data: np.ndarray) -> None:
         '''Takes a modified raw_data np.array and updates the internal state of the object, including re-averaging and recalculating stats. Used for instance after modifying the acquisitions.'''
         self.raw_data = new_data
@@ -325,6 +343,12 @@ class THzData:
         data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
         std_error = np.std(data_matrix, axis=0) / np.sqrt(len(self.data_list))
         return std_error
+    
+    def _calculate_std(self) -> np.array:
+        '''Calculates the standard deviation across all scans for each time point.'''
+        data_matrix = np.array([obj.raw_data[:, 1] for obj in self.data_list])
+        std = np.std(data_matrix, axis=0, ddof=1)
+        return std
 
     def _compile_data_array(self, limit=None) -> np.array:
         '''Takes the data from all scans and compiles it into a single numpy array.'''

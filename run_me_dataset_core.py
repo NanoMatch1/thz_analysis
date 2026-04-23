@@ -1,9 +1,42 @@
 import os
 
+import numpy as np
+import matplotlib.pyplot as plt
+
 import acquisition_editor
 from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
 from dataset_core.adapters import analysis_tools as tools
+
+
+def assess_drift(dataset):
+    '''Compiles the drift at max intensity across all scans and plots it to visualize any trends.'''
+    for filename, data_obj in dataset.data_dict.items():
+        drift = data_obj.assess_drift()
+        plt.plot(drift, label=filename)
+    plt.legend()
+    plt.title("Drift Assessment")
+    plt.xlabel("Acquisitions")
+    plt.ylabel("Amplitude at Max Intensity Point")
+    plt.show()
+
+
+
+def decompose_acc_file(filepath):
+    '''Loads a .acc file and decomposes it into its constituent parts: metadata, time grid, and acquisition data. Returns a dictionary with these components.'''
+    for filename, data_obj in dataset.data_dict.items():
+        print(f"{filename}")
+        dataX = data_obj.raw_data[:, 0]
+        breakpoint()
+        for index in range(data_obj.raw_data.shape[1]):
+            if index == 0:
+                continue                
+            new_filename = "air_LN2_filling_t-{}".format(index)
+            dataY = data_obj.raw_data[:, index]
+            new_dict[new_filename] = np.column_stack((dataX, dataY))
+
+    for filename, data in new_dict.items():
+        np.savetxt(os.path.join(fileDir, filename + ".acc"), data)
 
 
 if __name__ == "__main__":
@@ -16,7 +49,9 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS\analysis"
     fileDir = r"C:\Users\Samuel\Data\THz\Ni_HHTP_Tdep_TDS"
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_stage_adjustment_test\test airs"
-    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\Co_HHTP_Tdep_TDS"
+    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\filling_test"
+    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\Cu_HHTP_Tdep_TDS"
+    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -24,40 +59,41 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
     dataset = DataSet(fileDir)
-
+    show_graph = True
+    
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
-        # dataset.data_dict
 
-        for filename, data_obj in dataset.data_dict.items():
-            print(f"{filename}")
-            # breakpoint()
+        # assess_drift(dataset)
+
+
         # thz.fft_spectrum(dataset)
         # dataset.plot_current()
-        # thz.plot_fft(dataset)
+        
+        # thz.plot_fft(dataset, freq_range=(0.1, 3.5))
+
         # edited = dataset.modify_acquisitions(in_place=True, export=True)
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
         # breakpoint()
         # thz.print_metrics(validation)
         dataset.group_files(keywords=['type', 'temp'])
-        dataset.grouping.show_pairs()
-        breakpoint()
+        dataset.grouping.show_matches()
+        # breakpoint()
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
-        thz.subtract_baseline(dataset)
+        thz.subtract_baseline(dataset, show_graph=show_graph)
         # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
     preprocess(dataset)
     dataset.load_state()
-    thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=False)
+    thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
 
     # thz.plot_current(dataset)
     
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}})
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     # thz.extend_grid
     thz.fft_spectrum(dataset)
-
     thz.plot_fft(dataset)
     # thz.plot_fft(dataset)
 
@@ -117,9 +153,9 @@ if __name__ == "__main__":
     # thz.phase_correction_demo(dataset, source='transfer')
 
     # dataset.save_state()
-    thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 6,
-                                                 "tail_fraction": 0.25,
-                                                 "min_contiguous_bins": 3}})
+    # thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
+    #                                              "tail_fraction": 0.25,
+    #                                              "min_contiguous_bins": 3}})
     thz.invert_nk(dataset, thickness_m=1e-3)
     thz.derive_eps_sigma(dataset)
 
