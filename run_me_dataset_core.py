@@ -51,7 +51,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_stage_adjustment_test\test airs"
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\filling_test"
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\Cu_HHTP_Tdep_TDS"
-    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
+    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-04-30_realigned_ZnTe\2026-04-30_realign_tests\mask"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -67,10 +67,10 @@ if __name__ == "__main__":
         # assess_drift(dataset)
 
 
-        # thz.fft_spectrum(dataset)
-        # dataset.plot_current()
+        dataset.plot_current()
+        thz.fft_spectrum(dataset)
         
-        # thz.plot_fft(dataset, freq_range=(0.1, 3.5))
+        thz.plot_fft(dataset, freq_range=(0.1, 3.5), normalise=True)
 
         # edited = dataset.modify_acquisitions(in_place=True, export=True)
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])

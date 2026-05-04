@@ -535,7 +535,7 @@ def _sample_items(dataset: DataSet):
             yield filename, data_obj
 
 
-def plot_fft(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_fft(dataset: DataSet, freq_range: tuple | None = None, normalise: bool = False) -> None:
     """Plot FFT magnitude for every file (samples and references)."""
     import matplotlib.pyplot as plt
 
@@ -546,8 +546,9 @@ def plot_fft(dataset: DataSet, freq_range: tuple | None = None) -> None:
         if freq is None or spectrum is None:
             continue
         # ax.semilogy(freq * _HZ_TO_THZ, np.abs(spectrum), label=filename)
-        norm = np.abs(spectrum).max()
+        norm = np.abs(spectrum).max() if normalise else 1.0
         ax.plot(freq * _HZ_TO_THZ, np.abs(spectrum) / norm, label=filename)
+
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
