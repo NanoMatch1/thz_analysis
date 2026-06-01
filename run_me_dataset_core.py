@@ -46,12 +46,17 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-01-22_P6-AERO\export"
     # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-04-09_new-STE"
     # fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS"
-    fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS\analysis"
-    fileDir = r"C:\Users\Samuel\Data\THz\Ni_HHTP_Tdep_TDS"
-    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_stage_adjustment_test\test airs"
-    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\filling_test"
-    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\Cu_HHTP_Tdep_TDS"
-    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-04-30_realigned_ZnTe\2026-04-30_realign_tests\mask"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Co_HHTP_Tdep_TDS\analysis"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Ni_HHTP_Tdep_TDS"
+    # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_stage_adjustment_test\test airs"
+    # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\filling_test"
+    # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\Cu_HHTP_Tdep_TDS"
+    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-04_ZnTe-STE"
+    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-05_ste-test\test"
+    fileDir = r"C:\Users\Samuel\Data\THz\Reference Data"
+    fileDir = r"C:\Users\Samuel\Data\THz\CNTs\Sam\Sam\data\test"
+    # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-05_STE-tests_2\compare"
+    # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-08_noise"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -65,18 +70,24 @@ if __name__ == "__main__":
         dataset.load_all_data(case_insensitive=True)
 
         # assess_drift(dataset)
-
+        for filename, data_obj in dataset.data_dict.items():
+            # get standard deviation of the acquisition data
+            std_dev = np.std(data_obj.raw_data[:, 1:], axis=0)
+            print(f"{filename}: Standard Deviation of Acquisitions: {std_dev}")
+        
 
         dataset.plot_current()
-        thz.fft_spectrum(dataset)
+
+
+        # thz.fft_spectrum(dataset)
+        # thz.plot_fft(dataset, freq_range=(0.0, 15), normalise=False, scale='log')
         
-        thz.plot_fft(dataset, freq_range=(0.1, 3.5), normalise=True)
 
         # edited = dataset.modify_acquisitions(in_place=True, export=True)
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
         # breakpoint()
         # thz.print_metrics(validation)
-        dataset.group_files(keywords=['type', 'temp'])
+        dataset.group_files(keywords=['type'])
         dataset.grouping.show_matches()
         # breakpoint()
         # --- THz-TDS processing pipeline ---
@@ -87,6 +98,7 @@ if __name__ == "__main__":
 
     preprocess(dataset)
     dataset.load_state()
+    # dataset.plot_current()
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
 
     # thz.plot_current(dataset)
@@ -94,7 +106,7 @@ if __name__ == "__main__":
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     # thz.extend_grid
     thz.fft_spectrum(dataset)
-    thz.plot_fft(dataset)
+    thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
     # thz.plot_fft(dataset)
 
     # breakpoint()

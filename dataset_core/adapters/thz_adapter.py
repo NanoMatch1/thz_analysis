@@ -36,6 +36,74 @@ def _build_data_dict(dataset: DataSet) -> dict:
     }
 
 
+def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
+    """Store per-spectrum SNR masks and SNR arrays on sample and reference objects.
+
+    The reference's mask reflects only its own dynamic range (ref_snr_db >= thresh),
+    independent of the sample. The sample's mask is just the sample's own DR.
+    The intersection (combined + segment-cleaned) lives on the sample as
+    'transfer_mask' and is what downstream inversion consumes.
+    """
+    values = mask_metrics.get('values', {})
+    snr_thresh = values.get('snr_thresh_db')
+    samp_snr = values.get('samp_snr_db')
+    ref_snr = values.get('ref_snr_db')
+    if snr_thresh is None or samp_snr is None or ref_snr is None:
+        return
+
+    samp_snr_arr = np.asarray(samp_snr)
+    ref_snr_arr = np.asarray(ref_snr)
+
+    samp_obj.processing_dict['snr_db'] = samp_snr_arr
+    samp_obj.processing_dict['snr_mask'] = samp_snr_arr >= snr_thresh
+    if ref_obj is not None:
+        ref_obj.processing_dict['snr_db'] = ref_snr_arr
+        ref_obj.processing_dict['snr_mask'] = ref_snr_arr >= snr_thresh
+
+
+def _plot_with_snr_mask(
+    ax,
+    x: np.ndarray,
+    y: np.ndarray,
+    mask: np.ndarray | None,
+    *,
+    colour=None,
+    label: str | None = None,
+    full_alpha: float = 0.9,
+    masked_alpha: float = 0.2,
+    **plot_kwargs,
+):
+    """Plot a trace with the trusted region at full alpha and the rest dimmed.
+
+    Strategy: draw the full trace at ``masked_alpha`` (dimmed background), then
+    overlay the trusted portion at ``full_alpha``. The legend label attaches to
+    the overlay so only the trusted line shows up in the legend.
+
+    If ``mask`` is None or all True, plots a single line at ``full_alpha``.
+    If ``mask`` is all False, plots a single dimmed line tagged "(low SNR)".
+    """
+    if mask is None:
+        line, = ax.plot(x, y, color=colour, label=label, alpha=full_alpha, **plot_kwargs)
+        return line
+
+    mask_arr = np.asarray(mask, dtype=bool)
+    if mask_arr.all():
+        line, = ax.plot(x, y, color=colour, label=label, alpha=full_alpha, **plot_kwargs)
+        return line
+    if not mask_arr.any():
+        dim_label = f"{label} (low SNR)" if label else None
+        line, = ax.plot(x, y, color=colour, label=dim_label, alpha=masked_alpha, **plot_kwargs)
+        return line
+
+    full_line, = ax.plot(x, y, color=colour, alpha=masked_alpha, **plot_kwargs)
+    actual_colour = full_line.get_color()
+    y_trusted = np.where(mask_arr, y, np.nan)
+    trusted_line, = ax.plot(
+        x, y_trusted, color=actual_colour, label=label, alpha=full_alpha, **plot_kwargs,
+    )
+    return trusted_line
+
+
 # ---------------------------------------------------------------------------
 # pipeline steps
 # ---------------------------------------------------------------------------
@@ -119,15 +187,46 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
 
     return dataset
 
-def plot_current(dataset: DataSet) -> None:
-    """Plot the current time-domain traces for all files in the dataset."""
+def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
+    """Plot the current time-domain traces for all files in the dataset.
+
+    Parameters
+    ----------
+    error_style : {'shaded', 'bars', 'none'}
+        Visualisation of the per-acquisition std error (column 2 of ``data``):
+        - 'shaded' (default): translucent fill_between band of ±1 std error.
+        - 'bars': sparse errorbars (~50 across the axis to keep it readable).
+        - 'none': line only, no uncertainty shown.
+    """
     import matplotlib.pyplot as plt
+
+    if error_style not in ('shaded', 'bars', 'none'):
+        raise ValueError(
+            f"error_style must be 'shaded', 'bars', or 'none', got {error_style!r}."
+        )
 
     fig, ax = plt.subplots(figsize=(10, 5), layout='constrained')
     for filename, data_obj in dataset.data.items():
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
-        ax.plot(t * _S_TO_PS, y, label=filename)
+        t_ps = t * _S_TO_PS
+        has_err = data_obj.data.shape[1] > 2 and error_style != 'none'
+
+        if error_style == 'bars' and has_err:
+            err = data_obj.data[:, 2]
+            errorevery = max(1, t_ps.size // 50)
+            ax.errorbar(
+                t_ps, y, yerr=err, label=filename,
+                errorevery=errorevery, capsize=0, lw=1.0, alpha=0.9,
+            )
+        else:
+            line, = ax.plot(t_ps, y, label=filename)
+            if has_err:
+                err = data_obj.data[:, 2]
+                ax.fill_between(
+                    t_ps, y - err, y + err,
+                    alpha=0.25, color=line.get_color(), linewidth=0,
+                )
 
     ax.set_xlabel('Time (ps)')
     ax.set_ylabel('Amplitude')
@@ -185,8 +284,18 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
 
 
 def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
-    """Compute H(f) = Y_sample / Y_reference for each sample-reference pair."""
+    """Compute H(f) = Y_sample / Y_reference for each sample-reference pair.
+
+    Also applies an SNR-based trusted-band mask by default (intersection of
+    reference and sample dynamic range, with short-segment cleanup). Disable
+    via ``config['transfer']['apply_snr_mask'] = False`` to fall back to the
+    permissive finite-only mask.
+
+    Per-spectrum SNR masks are stored on both sample and reference objects as
+    ``processing_dict['snr_mask']`` for use by frequency-domain visualizations.
+    """
     config = config or {}
+    apply_snr_mask = config.get('transfer', {}).get('apply_snr_mask', True)
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -201,12 +310,28 @@ def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
         Y_samp = data_obj.processing_dict['fft_spectrum']
         Y_ref = ref_obj.processing_dict['fft_spectrum']
 
-        H, valid_mask, metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
+        H, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
 
         data_obj.processing_dict['transfer_H'] = H
-        data_obj.processing_dict['transfer_mask'] = valid_mask
-        data_obj.processing_dict['transfer_metrics'] = metrics
+        data_obj.processing_dict['transfer_metrics'] = tf_metrics
         data_obj.reference_filename = ref_obj.filename
+
+        if apply_snr_mask:
+            try:
+                snr_mask_combined, mask_metrics = core.trusted_band_mask(
+                    freq, Y_ref, Y_samp, H, config,
+                )
+                data_obj.processing_dict['transfer_mask'] = snr_mask_combined
+                data_obj.processing_dict['mask_metrics'] = mask_metrics
+                _write_snr_masks(data_obj, ref_obj, mask_metrics)
+            except Exception as exc:
+                print(
+                    f"Warning: SNR mask failed for '{filename}' ({exc}); "
+                    f"falling back to finite-only mask."
+                )
+                data_obj.processing_dict['transfer_mask'] = finite_mask
+        else:
+            data_obj.processing_dict['transfer_mask'] = finite_mask
 
         data_obj.data = np.column_stack((
             freq,
@@ -218,10 +343,12 @@ def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
 
 
 def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
-    """Compute SNR-based trusted-band mask for each sample-reference pair.
+    """Recompute the SNR-based trusted-band mask with explicit config.
 
-    Must be called after transfer_function and before invert_nk.
-    Replaces the finite-only 'transfer_mask' with a tighter SNR-filtered mask.
+    ``transfer_function`` now applies this by default, so this standalone is
+    only needed when overriding the threshold or other mask parameters after
+    the fact. It overwrites the existing 'transfer_mask' and refreshes the
+    per-spectrum 'snr_mask' arrays on both sample and reference.
     """
     config = config or {}
 
@@ -245,6 +372,7 @@ def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
 
         data_obj.processing_dict['transfer_mask'] = mask
         data_obj.processing_dict['mask_metrics'] = metrics
+        _write_snr_masks(data_obj, ref_obj, metrics)
 
     return dataset
 
@@ -367,10 +495,12 @@ def _grid_invert_substrate_only(dataset, config):
             continue
 
         H, _valid_mask, _tf_metrics = core.transfer_function(freq, Y_sub, Y_air, config)
-        mask, _mask_metrics = core.trusted_band_mask(freq, Y_air, Y_sub, H, config)
+        mask, mask_metrics = core.trusted_band_mask(freq, Y_air, Y_sub, H, config)
 
         data_obj.processing_dict['transfer_H'] = H
         data_obj.processing_dict['transfer_mask'] = mask
+        data_obj.processing_dict['mask_metrics'] = mask_metrics
+        _write_snr_masks(data_obj, air_obj, mask_metrics)
 
         n, k, metrics = core.invert_nk_grid(freq, H, mask, config)
         _store_nk_grid(data_obj, freq, n, k, metrics)
@@ -535,20 +665,34 @@ def _sample_items(dataset: DataSet):
             yield filename, data_obj
 
 
-def plot_fft(dataset: DataSet, freq_range: tuple | None = None, normalise: bool = False) -> None:
-    """Plot FFT magnitude for every file (samples and references)."""
+def plot_fft(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    normalise: bool = False,
+    show_snr_mask: bool = True,
+    **kwargs,
+) -> None:
+    """Plot FFT magnitude for every file (samples and references).
+
+    When ``show_snr_mask`` is True and per-spectrum SNR masks have been
+    computed (i.e. ``transfer_function`` has run), regions below each
+    spectrum's own SNR threshold are dimmed.
+    """
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
+    if kwargs.get('scale', None) == 'log':
+        ax.set_yscale('log')
+
     for filename, data_obj in dataset.data.items():
         freq = data_obj.processing_dict.get('fft_freq')
         spectrum = data_obj.processing_dict.get('fft_spectrum')
         if freq is None or spectrum is None:
             continue
-        # ax.semilogy(freq * _HZ_TO_THZ, np.abs(spectrum), label=filename)
         norm = np.abs(spectrum).max() if normalise else 1.0
-        ax.plot(freq * _HZ_TO_THZ, np.abs(spectrum) / norm, label=filename)
-
+        mag = np.abs(spectrum) / norm
+        snr_mask = data_obj.processing_dict.get('snr_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -560,8 +704,12 @@ def plot_fft(dataset: DataSet, freq_range: tuple | None = None, normalise: bool 
     plt.show()
 
 
-def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) -> None:
-    """Plot transfer function magnitude for each sample."""
+def plot_transfer_function(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
+    """Plot transfer function magnitude for each sample, dimming low-SNR bins."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -570,7 +718,8 @@ def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) ->
         freq = data_obj.processing_dict.get('fft_freq')
         if H is None or freq is None:
             continue
-        ax.plot(freq * _HZ_TO_THZ, np.abs(H), label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, np.abs(H), mask, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -582,7 +731,11 @@ def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) ->
     plt.show()
 
 
-def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_transfer_phase(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot unwrapped phase of the transfer function for each sample."""
     import matplotlib.pyplot as plt
 
@@ -593,7 +746,8 @@ def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> No
         if H is None or freq is None:
             continue
         phase = np.unwrap(np.angle(H))
-        ax.plot(freq * _HZ_TO_THZ, phase, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, phase, mask, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -605,7 +759,11 @@ def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> No
     plt.show()
 
 
-def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_nk(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot refractive index n and extinction coefficient k for each sample."""
     import matplotlib.pyplot as plt
 
@@ -616,8 +774,9 @@ def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
         k = data_obj.processing_dict.get('k')
         if freq is None or n is None or k is None:
             continue
-        ax_n.plot(freq * _HZ_TO_THZ, n, label=filename)
-        ax_k.plot(freq * _HZ_TO_THZ, k, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax_n, freq * _HZ_TO_THZ, n, mask, label=filename)
+        _plot_with_snr_mask(ax_k, freq * _HZ_TO_THZ, k, mask, label=filename)
 
     if freq_range is not None:
         ax_n.set_xlim(freq_range)
@@ -632,7 +791,11 @@ def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
     plt.show()
 
 
-def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_permittivity(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot real and imaginary parts of the complex permittivity."""
     import matplotlib.pyplot as plt
 
@@ -642,8 +805,9 @@ def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None
         eps = data_obj.processing_dict.get('eps')
         if freq is None or eps is None:
             continue
-        ax_r.plot(freq * _HZ_TO_THZ, eps.real, label=filename)
-        ax_i.plot(freq * _HZ_TO_THZ, eps.imag, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, eps.real, mask, label=filename)
+        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, eps.imag, mask, label=filename)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -658,7 +822,11 @@ def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None
     plt.show()
 
 
-def plot_conductivity(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_conductivity(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot real and imaginary parts of the optical conductivity."""
     import matplotlib.pyplot as plt
 
@@ -668,8 +836,9 @@ def plot_conductivity(dataset: DataSet, freq_range: tuple | None = None) -> None
         sigma = data_obj.processing_dict.get('sigma')
         if freq is None or sigma is None:
             continue
-        ax_r.plot(freq * _HZ_TO_THZ, sigma.real, label=filename)
-        ax_i.plot(freq * _HZ_TO_THZ, sigma.imag, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, sigma.real, mask, label=filename)
+        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, sigma.imag, mask, label=filename)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -867,12 +1036,13 @@ class ResultViewer:
         'Conductivity',
     ]
 
-    def __init__(self, dataset: DataSet):
+    def __init__(self, dataset: DataSet, show_snr_mask: bool = True):
         import matplotlib.pyplot as plt
         from matplotlib.widgets import RadioButtons, CheckButtons, TextBox
 
         self._plt = plt
         self._dataset = dataset
+        self._show_snr_mask = bool(show_snr_mask)
 
         # Collect sample filenames (ordered) and reference filenames
         self._sample_names = [
@@ -1029,9 +1199,18 @@ class ResultViewer:
             if self._visible.get(fn, False):
                 yield fn
 
+    def _spec_mask(self, fn: str):
+        """Per-spectrum SNR mask (sample or reference) for FFT-domain plots."""
+        return self._get(fn, 'snr_mask') if self._show_snr_mask else None
+
+    def _trusted_mask(self, fn: str):
+        """Combined trusted-band mask for transfer-derived plots (H, n, k, eps, sigma)."""
+        return self._get(fn, 'transfer_mask') if self._show_snr_mask else None
+
     def _draw_fft(self):
         ax = self._ax_top
-        # Plot references too (grey)
+        ax.set_yscale('log')
+        # Samples at higher alpha, references at lower alpha; SNR mask dims further.
         for fn in self._all_names:
             freq = self._get(fn, 'fft_freq')
             spec = self._get(fn, 'fft_spectrum')
@@ -1040,8 +1219,13 @@ class ResultViewer:
             is_sample = fn in self._sample_names
             if is_sample and not self._visible.get(fn, False):
                 continue
-            ax.semilogy(freq * _HZ_TO_THZ, np.abs(spec), color=self._colours[fn],
-                        label=self._short(fn), alpha=0.9 if is_sample else 0.4)
+            full_alpha = 0.9 if is_sample else 0.4
+            masked_alpha = 0.2 if is_sample else 0.1
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, np.abs(spec), self._spec_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+                full_alpha=full_alpha, masked_alpha=masked_alpha,
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|FFT|')
         ax.set_title('FFT Magnitude')
@@ -1058,8 +1242,13 @@ class ResultViewer:
             if is_sample and not self._visible.get(fn, False):
                 continue
             phase = np.unwrap(np.angle(spec))
-            ax.plot(freq * _HZ_TO_THZ, phase, color=self._colours[fn],
-                    label=self._short(fn), alpha=0.9 if is_sample else 0.4)
+            full_alpha = 0.9 if is_sample else 0.4
+            masked_alpha = 0.2 if is_sample else 0.1
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, phase, self._spec_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+                full_alpha=full_alpha, masked_alpha=masked_alpha,
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('Phase (rad)')
         ax.set_title('FFT Phase (unwrapped)')
@@ -1072,7 +1261,10 @@ class ResultViewer:
             freq = self._get(fn, 'fft_freq')
             if H is None or freq is None:
                 continue
-            ax.plot(freq * _HZ_TO_THZ, np.abs(H), color=self._colours[fn], label=self._short(fn))
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, np.abs(H), self._trusted_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|H(f)|')
         ax.set_title('Transfer Function Magnitude')
@@ -1086,7 +1278,10 @@ class ResultViewer:
             if H is None or freq is None:
                 continue
             phase = np.unwrap(np.angle(H))
-            ax.plot(freq * _HZ_TO_THZ, phase, color=self._colours[fn], label=self._short(fn))
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, phase, self._trusted_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('Phase (rad)')
         ax.set_title('Transfer Function Phase (unwrapped)')
@@ -1100,8 +1295,15 @@ class ResultViewer:
             k = self._get(fn, 'k')
             if freq is None or n is None or k is None:
                 continue
-            ax_n.plot(freq * _HZ_TO_THZ, n, color=self._colours[fn], label=self._short(fn))
-            ax_k.plot(freq * _HZ_TO_THZ, k, color=self._colours[fn], label=self._short(fn))
+            mask = self._trusted_mask(fn)
+            _plot_with_snr_mask(
+                ax_n, freq * _HZ_TO_THZ, n, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
+            _plot_with_snr_mask(
+                ax_k, freq * _HZ_TO_THZ, k, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax_n.set_ylabel('n')
         ax_n.set_title('Refractive Index')
         ax_n.legend(fontsize=7, loc='upper right')
@@ -1117,8 +1319,15 @@ class ResultViewer:
             eps = self._get(fn, 'eps')
             if freq is None or eps is None:
                 continue
-            ax_r.plot(freq * _HZ_TO_THZ, eps.real, color=self._colours[fn], label=self._short(fn))
-            ax_i.plot(freq * _HZ_TO_THZ, eps.imag, color=self._colours[fn], label=self._short(fn))
+            mask = self._trusted_mask(fn)
+            _plot_with_snr_mask(
+                ax_r, freq * _HZ_TO_THZ, eps.real, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
+            _plot_with_snr_mask(
+                ax_i, freq * _HZ_TO_THZ, eps.imag, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax_r.set_ylabel(r'$\varepsilon_r$')
         ax_r.set_title(r'Permittivity — Real ($n^2 - k^2$)')
         ax_r.legend(fontsize=7, loc='upper right')
@@ -1134,8 +1343,15 @@ class ResultViewer:
             sigma = self._get(fn, 'sigma')
             if freq is None or sigma is None:
                 continue
-            ax_r.plot(freq * _HZ_TO_THZ, sigma.real, color=self._colours[fn], label=self._short(fn))
-            ax_i.plot(freq * _HZ_TO_THZ, sigma.imag, color=self._colours[fn], label=self._short(fn))
+            mask = self._trusted_mask(fn)
+            _plot_with_snr_mask(
+                ax_r, freq * _HZ_TO_THZ, sigma.real, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
+            _plot_with_snr_mask(
+                ax_i, freq * _HZ_TO_THZ, sigma.imag, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax_r.set_ylabel(r'$\sigma_r$ (S/m)')
         ax_r.set_title('Optical Conductivity — Real')
         ax_r.legend(fontsize=7, loc='upper right')
@@ -1145,9 +1361,13 @@ class ResultViewer:
         ax_i.legend(fontsize=7, loc='upper right')
 
 
-def result_viewer(dataset: DataSet) -> ResultViewer:
-    """Launch the interactive result viewer GUI."""
-    return ResultViewer(dataset)
+def result_viewer(dataset: DataSet, show_snr_mask: bool = True) -> ResultViewer:
+    """Launch the interactive result viewer GUI.
+
+    Pass ``show_snr_mask=False`` to plot all bins at full alpha (useful when
+    you want to inspect noise-dominated regions explicitly).
+    """
+    return ResultViewer(dataset, show_snr_mask=show_snr_mask)
 
 def validate_thz(dataset: DataSet, verbose=True, label: str = "Validation") -> dict:
     """Check if dataset has the required structure for THz processing."""
