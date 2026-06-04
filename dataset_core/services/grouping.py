@@ -232,10 +232,10 @@ class GroupingService:
         self.keywords = selected_keywords
         self.parse_filenames()
         # self._identify_global_references()
-        print("Completed simple grouping of filenames.")
 
         self.integrity_check()
         self._match_references()
+        print("Completed simple grouping of filenames.")
         
         return self.file_items
 

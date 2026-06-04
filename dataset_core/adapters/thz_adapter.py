@@ -403,6 +403,67 @@ def invert_nk(dataset: DataSet, thickness_m: float, config: dict | None = None) 
     return dataset
 
 
+def invert_nk_reflection(
+    dataset: DataSet,
+    *,
+    theta_deg: float = 0.0,
+    polarization: str = 's',
+    r_reference: complex = -1.0 + 0.0j,
+    config: dict | None = None,
+) -> DataSet:
+    """Reflection-mode n,k for each sample (single-interface, semi-infinite).
+
+    Pulls the transmission-style ratio H = Y_samp / Y_ref from
+    ``processing_dict['transfer_H']`` (computed by ``transfer_function``) and
+    converts to a true sample reflection coefficient via
+    ``r_sample = r_reference * H``. Default ``r_reference = -1`` corresponds
+    to an ideal gold mirror; pass a complex value for other reference
+    materials.
+
+    Reflection measurements are very phase-sensitive — run
+    ``phase_correction(dataset, source='transfer')`` first to interactively
+    null any residual timing offset before calling this function.
+
+    Parameters
+    ----------
+    theta_deg : float, default 0.0
+        Angle of incidence in degrees (0 = normal incidence).
+    polarization : {'s', 'p'}, default 's'
+        Only 's' implemented for now; 'p' raises NotImplementedError.
+    r_reference : complex, default -1+0j (gold mirror)
+        Known complex reflection coefficient of the reference material.
+    """
+    config = config or {}
+    theta_rad = np.deg2rad(theta_deg)
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+
+        H = data_obj.processing_dict.get('transfer_H')
+        mask = data_obj.processing_dict.get('transfer_mask')
+        if H is None or mask is None:
+            print(f"Warning: no transfer function for '{filename}', skipping reflection inversion.")
+            continue
+
+        freq = data_obj.processing_dict['fft_freq']
+        r_sample = r_reference * np.asarray(H)
+
+        n, k, metrics = core.invert_nk_reflection(
+            freq, r_sample, mask, config,
+            theta_rad=theta_rad, polarization=polarization,
+        )
+
+        data_obj.processing_dict['reflection_r'] = r_sample
+        data_obj.processing_dict['n'] = n
+        data_obj.processing_dict['k'] = k
+        data_obj.processing_dict['invert_metrics'] = metrics
+
+        data_obj.data = np.column_stack((freq, n, k))
+
+    return dataset
+
+
 def invert_nk_grid(dataset: DataSet, config: dict | None = None) -> DataSet:
     """Extract n and k via brute-force 2D grid search for each sample.
 

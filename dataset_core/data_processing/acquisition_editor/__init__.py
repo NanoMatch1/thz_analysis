@@ -46,6 +46,7 @@ from acquisition_editor._editor import edit_acquisitions
 
 __all__ = [
     "process_directory",
+    "convert_directory",
     "load_file",
     "edit_data",
     "save_acc",
@@ -306,3 +307,53 @@ def process_directory(
 
     print(f"\nDone. {len(results)} file(s) processed → {export_dir}")
     return results
+
+
+def convert_directory(
+    directory: Union[str, Path],
+    *,
+    export_folder: str = "export",
+) -> list[Path]:
+    """Convert every ``.acc`` file in *directory* to a ``.dat`` without opening the editor.
+
+    The ``.dat`` is the mean of all scans in each file.  No editor window is
+    opened and the original ``.acc`` files are not modified.
+
+    Parameters
+    ----------
+    directory
+        Path to the folder containing ``.acc`` files.
+    export_folder
+        Sub-folder name (inside *directory*) where ``.dat`` files are written.
+
+    Returns
+    -------
+    list[Path]
+        Paths of the written ``.dat`` files.
+    """
+    directory = Path(directory)
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Directory not found: {directory}")
+
+    files = sorted(
+        p for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() == ".acc"
+    )
+
+    if not files:
+        print(f"No .acc files found in {directory}")
+        return []
+
+    export_dir = directory / export_folder
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[Path] = []
+    for filepath in files:
+        data_dict = load_file(filepath)
+        dat_path = export_dir / (filepath.stem + ".dat")
+        save_dat(data_dict, dat_path)
+        print(f"  {filepath.name} → {dat_path}")
+        written.append(dat_path)
+
+    print(f"\nDone. {len(written)} file(s) converted → {export_dir}")
+    return written

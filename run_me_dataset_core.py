@@ -55,11 +55,14 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-05_ste-test\test"
     fileDir = r"C:\Users\Samuel\Data\THz\Reference Data"
     fileDir = r"C:\Users\Samuel\Data\THz\CNTs\Sam\Sam\data\test"
-    # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-05_STE-tests_2\compare"
+    fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-06-02_TDS-ambients\Comparison\export\export"
+    fileDir = r"C:\Users\Samuel\Data\THz\CNTs\2026-06-03_CNT-4\analysis"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_OPTP-M-HHTP"
     # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-08_noise"
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
+    # acquisition_editor.convert_directory(fileDir)
 
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
@@ -69,6 +72,7 @@ if __name__ == "__main__":
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
 
+
         # assess_drift(dataset)
         for filename, data_obj in dataset.data_dict.items():
             # get standard deviation of the acquisition data
@@ -76,7 +80,7 @@ if __name__ == "__main__":
             print(f"{filename}: Standard Deviation of Acquisitions: {std_dev}")
         
 
-        dataset.plot_current()
+        # dataset.plot_current()
 
 
         # thz.fft_spectrum(dataset)
@@ -87,17 +91,18 @@ if __name__ == "__main__":
         # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
         # breakpoint()
         # thz.print_metrics(validation)
-        dataset.group_files(keywords=['type'])
-        dataset.grouping.show_matches()
         # breakpoint()
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
-        thz.subtract_baseline(dataset, show_graph=show_graph)
+        # thz.subtract_baseline(dataset, show_graph=show_graph)
         # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
     preprocess(dataset)
-    dataset.load_state()
+    # dataset.load_state()
+    dataset.group_files(keywords=['type'])
+    dataset.grouping.show_matches()
+    breakpoint()
     # dataset.plot_current()
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
 
@@ -162,7 +167,7 @@ if __name__ == "__main__":
     # breakpoint()
 
 
-    # thz.phase_correction_demo(dataset, source='transfer')
+    thz.phase_correction(dataset, source='transfer')
 
     # dataset.save_state()
     # thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
