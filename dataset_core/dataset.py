@@ -385,8 +385,12 @@ class DataSet:
         return self.data.current_data_dict()
     
     def group_files(self, **kwargs):
-        '''Simple grouping based on sample and reference keys provided during initialization.'''
-        self.grouping.simple_grouping(keywords=kwargs.get('keywords', None))
+        '''Simple grouping based on sample and reference keys provided during initialization.
+
+        Forwards all kwargs (e.g. ``keywords``, ``merge_extra``, ``delimiter``)
+        to ``GroupingService.simple_grouping``.
+        '''
+        self.grouping.simple_grouping(**kwargs)
 
     def add_item(self, filename, obj):
         self.data.add_item(filename, obj)

@@ -57,6 +57,8 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\CNTs\Sam\Sam\data\test"
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-06-02_TDS-ambients\Comparison\export\export"
     fileDir = r"C:\Users\Samuel\Data\THz\CNTs\2026-06-03_CNT-4\analysis"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-04_OPTP-M-HHTP"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_OPTP-M-HHTP"
     # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-08_noise"
 
@@ -94,15 +96,15 @@ if __name__ == "__main__":
         # breakpoint()
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
-        # thz.subtract_baseline(dataset, show_graph=show_graph)
-        # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
+        thz.subtract_baseline(dataset, show_graph=show_graph)
+        thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    preprocess(dataset)
-    # dataset.load_state()
-    dataset.group_files(keywords=['type'])
+    # preprocess(dataset)
+    dataset.load_state()
+    dataset.group_files(keywords=['type', 'set'])
     dataset.grouping.show_matches()
-    breakpoint()
+    # breakpoint()
     # dataset.plot_current()
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
 
@@ -111,61 +113,9 @@ if __name__ == "__main__":
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     # thz.extend_grid
     thz.fft_spectrum(dataset)
-    thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
+    thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='')
     # thz.plot_fft(dataset)
-
-    # breakpoint()
-    
-
-
     thz.transfer_function(dataset)
-    from thz_core import invert_nk
-    from matplotlib import pyplot as plt
-    import numpy as np
-    # for filename, data in dataset.data.items():
-    #     phase_data = data.data
-    #     # for index in range(*phase_range):
-    #     plt.plot(data.data[:, 0], np.unwrap(data.data[:, 2]), label="Original Phase {}".format(filename))
-    # plt.legend()
-    # plt.show()
-    # # phase_after = tools.inspect_phase(dataset, title="Phase After Transfer Function")
-    # # new_dataset = 
-
-    # phase_dict = {}
-    # for filename, data in dataset.data.items():
-    #     phase_dict[filename] = data.data
-    #     # plt.plot(data.data[:, 0], data.data[:, 1], label="Amplitude {}".format(filename))
-
-
-    # offset_dict = {}
-    # for filename, phase_data in phase_dict.items():
-    #     if 'reference' in filename.lower():
-    #         continue
-    #     for offset in range(5):
-    #         offset_phase = tools.phase_offset(phase_data, offset=offset)
-    #         # plt.plot(phase_data[:, 0], offset_phase, label="Offset Phase {} Offset {}".format(filename, offset))
-    #         if filename not in offset_dict:
-    #             offset_dict[filename] = {}
-    #         offset_dict[filename][offset] = np.column_stack((phase_data[:, 0], phase_data[:, 1], offset_phase))
-
-    # fig, ax = plt.subplots(3, 1)
-    # for filename, offsets in offset_dict.items():
-    #     for value, data in offsets.items():
-    #         mask = np.array([True if 0.3e12 < x < 3e12 else False for x in data[:, 0]])
-    #         data = data[mask]
-    #         n, k, metrics = invert_nk(data[:, 0], data[:, 1], thickness_m=1e-3, mask=[True for _ in range(data.shape[0])], config=None)
-    #         ax[0].plot(data[:, 0], n, label="n {} Offset {}".format(filename, value))
-    #         ax[1].plot(data[:, 0], k, label="k {} Offset {}".format(filename, value))
-    #         ax[2].plot(data[:, 0], data[:, 2], label="Phase {} Offset {}".format(filename, value))
-    #     ax[0].legend()
-    #     ax[1].legend()
-    #     ax[2].legend()
-    #     plt.show()
-    # breakpoint()
-    
-    # for filename, offsets in offset_dict.items():
-    # breakpoint()
-
 
     thz.phase_correction(dataset, source='transfer')
 

@@ -283,7 +283,7 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     return dataset
 
 
-def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
+def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: str = 'substrate') -> DataSet:
     """Compute H(f) = Y_sample / Y_reference for each sample-reference pair.
 
     Also applies an SNR-based trusted-band mask by default (intersection of
@@ -301,7 +301,7 @@ def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
         if dataset.data.is_reference(filename):
             continue
 
-        ref_obj = dataset.get_reference(filename, ref_type='substrate')
+        ref_obj = dataset.get_reference(filename, ref_type=ref_type)
         if ref_obj is None:
             print(f"Warning: no reference found for '{filename}', skipping transfer function.")
             continue
@@ -750,7 +750,9 @@ def plot_fft(
         spectrum = data_obj.processing_dict.get('fft_spectrum')
         if freq is None or spectrum is None:
             continue
-        norm = np.abs(spectrum).max() if normalise else 1.0
+        norm_range = np.where((freq >= (freq_range[0] / _HZ_TO_THZ if freq_range else 0)) &
+                              (freq <= (freq_range[1] / _HZ_TO_THZ if freq_range else np.inf)))
+        norm = np.abs(spectrum[norm_range]).max() if normalise else 1.0
         mag = np.abs(spectrum) / norm
         snr_mask = data_obj.processing_dict.get('snr_mask') if show_snr_mask else None
         _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename)
