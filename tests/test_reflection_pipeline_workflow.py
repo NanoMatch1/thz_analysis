@@ -127,6 +127,61 @@ def test_recovered_reflection_has_pi_phase_for_high_index_sample():
         assert np.mean(r_band.real) < 0, "high-index sample should give negative (pi-flipped) r"
 
 
+def _write_second_only_acc(path, name, centre_ps, amplitude):
+    """Write a single-scan .acc holding only one (second-reflection) pulse."""
+    t_ps = np.arange(159.0, 169.5, 0.05)
+    y = amplitude * _gaussian(t_ps, centre_ps)
+    lines = [f"%title {name} acc 1", "%type 0"]
+    lines += [f"{t:.6f} {e:.10e}" for t, e in zip(t_ps, y)]
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def test_align_to_reference_removes_injected_offset():
+    """A sample second reflection offset by +0.15 ps is pulled back to T0,
+    and the inversion then recovers the known index."""
+    offset_ps = 0.15
+    with tempfile.TemporaryDirectory() as tmpdir:
+        theta_int = float(np.real(core.snell_refracted_angle(np.deg2rad(THETA_EXT_DEG), 1.0, N_SIO2)))
+        r_air = core.fresnel_reflection_s(N_SIO2, 1.0, theta_int)
+        r_sample = core.fresnel_reflection_s(N_SIO2, N_SAMPLE_TRUTH, theta_int)
+        _write_second_only_acc(
+            os.path.join(tmpdir, "reference_sio2_set_0.acc"),
+            "reference_sio2_set_0", SECOND_PS, float(r_air.real),
+        )
+        _write_second_only_acc(
+            os.path.join(tmpdir, SAMP_NAME),
+            "sample_film-1_set_0", SECOND_PS + offset_ps, float(r_sample.real),
+        )
+
+        dataset = DataSet(tmpdir)
+        dataset.load_all_data(case_insensitive=True)
+        dataset.group_files(keywords=["type"])
+
+        thz.align_to_reference(dataset, ref_type="reference")
+        applied_ps = dataset.data[SAMP_NAME].processing_dict["align_metrics"]["values"][
+            "applied_shift_seconds"
+        ] * 1e12
+        # The sample sat 0.15 ps late, so it must be shifted ~0.15 ps earlier.
+        assert abs(abs(applied_ps) - offset_ps) < 0.02, f"applied {applied_ps:.3f} ps"
+
+        thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}})
+        thz.fft_spectrum(dataset)
+        thz.transfer_function(dataset, ref_type="reference")
+        thz.invert_nk_reflection(
+            dataset, geometry="window", theta_deg=THETA_EXT_DEG, n_window=N_SIO2,
+        )
+        pd_ = dataset.data[SAMP_NAME].processing_dict
+        f_thz = pd_["fft_freq"] * 1e-12
+        n = pd_["n"]
+        band = (f_thz > 0.5) & (f_thz < 3.0) & np.isfinite(n)
+        # Correct sign of the shift -> clean recovery; a wrong sign would double
+        # the offset and badly corrupt n.
+        assert abs(float(np.nanmean(n[band])) - N_SAMPLE_TRUTH) < 0.1, (
+            f"n after alignment {np.nanmean(n[band]):.3f}, expected ~3.0"
+        )
+
+
 def _run_all():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failures = 0

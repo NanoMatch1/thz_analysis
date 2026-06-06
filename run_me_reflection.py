@@ -31,7 +31,7 @@ from dataset_core.adapters import thz_adapter as thz
 # ── configuration ───────────────────────────────────────────────────────────
 FILE_DIR = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing"
 
-INTERACTIVE = False          # True -> SpanSelector per file; False -> GATES below
+INTERACTIVE = True          # True -> SpanSelector per file; False -> GATES below
 SHOW_GRAPHS = False          # set True when running with a GUI to see each stage
 
 THETA_EXTERNAL_DEG = 45.0    # external incidence angle (refracts inside the window)
@@ -62,7 +62,7 @@ def segment(file_dir=FILE_DIR, interactive=INTERACTIVE, show_graphs=SHOW_GRAPHS)
     return os.path.join(file_dir, "segmented")
 
 
-def process(component_dir):
+def process(component_dir, show_graphs=False):
     """Phase 2: the normal transmission-style chain on the second reflections."""
     dataset = DataSet(component_dir)
     dataset.load_all_data(case_insensitive=True)
@@ -73,12 +73,20 @@ def process(component_dir):
     dataset.group_files(keywords=["type"])
     dataset.grouping.show_matches()
 
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}})
+    # Calibrate: shift each sample to its reference T0 (removes the instrumental
+    # timing offset; cross-correlation, sub-sample, handles the sign flip).
+    thz.align_to_reference(dataset, ref_type="reference")
+
+    thz.window_time(dataset, config={"window": {"type": "Hann", "alpha": 0.1}}, show_graph=show_graphs)
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graphs)
     thz.fft_spectrum(dataset)
+    if show_graphs:
+        thz.plot_fft(dataset, normalise=False, scale="")
 
     # H = second_reflection_sample / second_reflection_reference (SiO2-only).
     # ref_type='reference' matches the bare-'reference' SiO2 file.
     thz.transfer_function(dataset, ref_type="reference")
+    # thz.phase_correction(dataset, source="transfer")
 
     # Window geometry: r_sample = r_{SiO2->air} * H, invert inside the SiO2.
     thz.invert_nk_reflection(
@@ -124,6 +132,11 @@ def report(dataset, band_thz=(0.5, 3.0)):
 
 
 if __name__ == "__main__":
-    segmented_root = segment()
-    ds = process(os.path.join(segmented_root, "second_reflection"))
+    INTERACTIVE = True          # True -> SpanSelector per file; False -> GATES below
+    # segmented_root = segment()
+    show_graphs = True
+    segmented_root = os.path.join(FILE_DIR, "segmented")
+
+    ds = process(os.path.join(segmented_root, "second_reflection"), show_graphs=show_graphs)
     report(ds)
+    thz.result_viewer(ds)

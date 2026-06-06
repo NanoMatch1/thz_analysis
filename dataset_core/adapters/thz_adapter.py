@@ -343,6 +343,106 @@ def segment_reflections(
     return written
 
 
+def align_to_reference(
+    dataset: DataSet,
+    *,
+    ref_type: str = 'reference',
+    roi: tuple | None = None,
+    max_lag_ps: float | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Shift each sample in time so it shares its reference's T0 (cross-correlation).
+
+    Calibration step: removes the bulk instrumental timing offset between a
+    sample and its reference by cross-correlating their time-domain pulses (with
+    sub-sample, parabolic precision) and shifting the SAMPLE onto the reference's
+    time axis. The reference is the T0 anchor and is left untouched.
+
+    Cross-correlation maximises |correlation|, so it aligns correctly even when
+    the sample pulse is sign-flipped relative to the reference (e.g. a
+    higher-index sample at a window interface). It removes a constant group delay
+    only, preserving the sample's genuine (non-linear) reflection phase.
+
+    Run in the processing phase before window_time/FFT, on the traces you intend
+    to ratio (e.g. the segmented second reflections).
+
+    Parameters
+    ----------
+    ref_type : str
+        Reference type to align to (passed to ``dataset.get_reference``).
+    roi : tuple[float, float] | None
+        Optional ``(start_ps, stop_ps)`` restricting the correlation to the
+        pulse region. Default None uses the whole trace.
+    max_lag_ps : float | None
+        Optional cap on the search lag in ps. Default None uses ``align_time``'s
+        default (a quarter of the trace length).
+    show_graph : bool
+        If True, plot reference + sample before/after alignment per sample.
+    """
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        ref_obj = dataset.get_reference(filename, ref_type=ref_type)
+        if ref_obj is None:
+            print(f"Warning: no '{ref_type}' reference for '{filename}', skipping alignment.")
+            continue
+
+        ref_t = ref_obj.data[:, 0]
+        ref_y = ref_obj.data[:, 1]
+        samp_t = data_obj.data[:, 0]
+        samp_y = data_obj.data[:, 1]
+
+        align_cfg: dict = {}
+        if roi is not None:
+            align_cfg['roi'] = (roi[0] / _S_TO_PS, roi[1] / _S_TO_PS)
+        if max_lag_ps is not None:
+            dt = float(np.median(np.diff(ref_t)))
+            align_cfg['max_lag_samples'] = int(round((max_lag_ps / _S_TO_PS) / dt))
+
+        _, _, metrics = core.align_time(ref_t, ref_y, samp_t, samp_y, {'align': align_cfg})
+        shift = float(metrics['values']['applied_shift_seconds'])
+
+        # Apply the same shift to every sample column, on the reference grid.
+        new_columns = [ref_t]
+        for col_idx in range(1, data_obj.data.shape[1]):
+            col_on_ref = np.interp(ref_t, samp_t, data_obj.data[:, col_idx])
+            new_columns.append(
+                np.interp(ref_t - shift, ref_t, col_on_ref, left=0.0, right=0.0)
+            )
+        data_obj.processing_dict['pre_align'] = np.column_stack((samp_t, samp_y))
+        data_obj.processing_dict['align_metrics'] = metrics
+        data_obj.data = np.column_stack(new_columns)
+
+        corr = metrics['values'].get('corr_peak', float('nan'))
+        print(
+            f"Aligned '{filename}' to '{ref_obj.filename}': "
+            f"shift {shift * _S_TO_PS:+.4f} ps (corr {corr:.3f})"
+        )
+
+    if show_graph:
+        for filename, data_obj in dataset.data.items():
+            if dataset.data.is_reference(filename):
+                continue
+            pre = data_obj.processing_dict.get('pre_align')
+            ref_obj = dataset.get_reference(filename, ref_type=ref_type)
+            fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+            if ref_obj is not None:
+                ax.plot(ref_obj.data[:, 0] * _S_TO_PS, ref_obj.data[:, 1],
+                        color='0.5', lw=1, label='reference')
+            if pre is not None:
+                ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], '--', lw=1, alpha=0.7,
+                        label='sample (before)')
+            ax.plot(data_obj.data[:, 0] * _S_TO_PS, data_obj.data[:, 1], lw=1.4,
+                    label='sample (aligned)')
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Amplitude')
+            ax.set_title(f'Align to reference — {filename}')
+            ax.legend()
+            plt.show()
+
+    return dataset
+
+
 def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
     """Plot the current time-domain traces for all files in the dataset.
 

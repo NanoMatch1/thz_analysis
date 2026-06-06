@@ -59,6 +59,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\CNTs\2026-06-03_CNT-4\analysis"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing\segmented\second_reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-04_OPTP-M-HHTP"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
@@ -72,36 +73,20 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
     dataset = DataSet(fileDir)
-    show_graph = False
+    show_graph = True
 
     # use_reference = 'gold'
 
-    dataset.load_state()
+    # dataset.load_state()
+
     dataset.plot_current()
     
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
-
-
-        # assess_drift(dataset)
-        for filename, data_obj in dataset.data_dict.items():
-            # get standard deviation of the acquisition data
-            std_dev = np.std(data_obj.raw_data[:, 1:], axis=0)
-            print(f"{filename}: Standard Deviation of Acquisitions: {std_dev}")
-        
-
-        # dataset.plot_current()
-
-
-        # thz.fft_spectrum(dataset)
-        # thz.plot_fft(dataset, freq_range=(0.0, 15), normalise=False, scale='log')
-        
-
-        # edited = dataset.modify_acquisitions(in_place=True, export=True)
-        # validation = thz.validate_thz(dataset, verbose=True, label="Input Validation", permit=["clipping"])
-        # breakpoint()
-        # thz.print_metrics(validation)
-        # breakpoint()
+        # --- For reflection data ---
+        # thz.segment_reflections(dataset, show_graph=True)
+        dataset.group_files(keywords=['type'])
+        thz.align_to_reference(dataset, show_graph=True)
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
         # thz.subtract_baseline(dataset, show_graph=show_graph)
@@ -109,44 +94,21 @@ if __name__ == "__main__":
         dataset.save_state()
 
     # preprocess(dataset)
+    # breakpoint()
+    # dataset.group_files(keywords=['type', 'temp', 'set', 'extra'])
     dataset.load_state()
-    dataset.group_files(keywords=['type', 'temp', 'set', 'extra'])
+    dataset.group_files(keywords=['type'])
     dataset.grouping.show_matches()
-    # breakpoint()
-    newlist = [key for key in dataset.current_data.keys() if '33.6' in key]
-    dataset.set_current_files(newlist)
-    dataset.plot_current()
-    # breakpoint()
-    # for filename, data_obj in dataset.current_data.items():
-    #     print(data_obj.help)
-    #     data = data_obj.raw_data
-    #     for index in range(data.shape[1]):
-    #         if index == 0:
-    #             continue
-    #         plt.plot(data[:, 0], data[:, index], label=f"{filename} - Acquisition {index}")
-    #     plt.title(f"Raw Data - {filename}")
-    #     plt.xlabel("Time (ps)")
-    #     plt.ylabel("Amplitude (a.u.)")
-    #     plt.legend()
-    #     plt.show()
-    #     breakpoint()
-
-    # thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
-    segment_dict = {"first_segment": (151, 158.10), "second_segment": (157.9, 162.8)}
-    thz.segment_reflections(dataset, show_graph=True)
-
+    # segment_dict = {"first_segment": (151, 158.10), "second_segment": (157.9, 162.8)}
     thz.plot_current(dataset)
-    dataset.save_state()
-    
-    breakpoint()
-    
+
+    thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.2}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     # thz.extend_grid
     thz.fft_spectrum(dataset)
-    thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='')
+    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='')
     # thz.plot_fft(dataset)
-    breakpoint()
-    thz.transfer_function(dataset, ref_type=use_reference)
+    thz.transfer_function(dataset, ref_type='reference')
 
     thz.phase_correction(dataset, source='transfer')
 
