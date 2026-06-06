@@ -60,6 +60,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-bare"
     # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-04_OPTP-M-HHTP"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
@@ -79,10 +80,11 @@ if __name__ == "__main__":
 
     # dataset.load_state()
 
-    dataset.plot_current()
+    # dataset.plot_current()
     
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
+        dataset.plot_current()
         # --- For reflection data ---
         # thz.segment_reflections(dataset, show_graph=True)
         dataset.group_files(keywords=['type'])
@@ -93,7 +95,7 @@ if __name__ == "__main__":
         # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    # preprocess(dataset)
+    preprocess(dataset)
     # breakpoint()
     # dataset.group_files(keywords=['type', 'temp', 'set', 'extra'])
     dataset.load_state()
@@ -110,13 +112,20 @@ if __name__ == "__main__":
     # thz.plot_fft(dataset)
     thz.transfer_function(dataset, ref_type='reference')
 
-    thz.phase_correction(dataset, source='transfer')
+    # thz.phase_correction(dataset, source='transfer')
 
     # dataset.save_state()
     # thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
     #                                              "tail_fraction": 0.25,
     #                                              "min_contiguous_bins": 3}})
-    thz.invert_nk(dataset, thickness_m=1e-3)
+    # thz.invert_nk(dataset, thickness_m=1e-3)
+    thz.invert_nk_reflection(
+        dataset,
+        geometry="gold",
+        theta_deg=45,
+        polarization='s',
+        # n_window=N_SIO2,
+    )
     thz.derive_eps_sigma(dataset)
 
 
