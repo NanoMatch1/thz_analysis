@@ -198,6 +198,11 @@ def _span_select_bounds(t_ps: np.ndarray, y: np.ndarray, title: str) -> tuple:
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(t_ps, y, lw=1)
+    # Frame the axis to the data extent. This also disables x-autoscale, so the
+    # interactive SpanSelector's rectangle patch (initialised near x=0) can no
+    # longer stretch the view back to 0.
+    ax.set_xlim(float(np.nanmin(t_ps)), float(np.nanmax(t_ps)))
+    ax.margins(x=0)
     ax.set_xlabel('Time (ps)')
     ax.set_ylabel('Amplitude')
     ax.set_title(title)

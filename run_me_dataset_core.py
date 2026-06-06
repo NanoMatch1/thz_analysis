@@ -105,7 +105,7 @@ if __name__ == "__main__":
         # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    preprocess(dataset)
+    # preprocess(dataset)
     dataset.load_state()
     dataset.group_files(keywords=['type', 'temp', 'set', 'extra'])
     dataset.grouping.show_matches()
@@ -113,7 +113,6 @@ if __name__ == "__main__":
     newlist = [key for key in dataset.current_data.keys() if '33.6' in key]
     dataset.set_current_files(newlist)
     dataset.plot_current()
-    breakpoint()
     # breakpoint()
     # for filename, data_obj in dataset.current_data.items():
     #     print(data_obj.help)
@@ -129,15 +128,18 @@ if __name__ == "__main__":
     #     plt.show()
     #     breakpoint()
 
-    thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
+    # thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
+    thz.segment_reflections(dataset, show_graph=True)
 
     # thz.plot_current(dataset)
+    breakpoint()
     
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     # thz.extend_grid
     thz.fft_spectrum(dataset)
     thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='')
     # thz.plot_fft(dataset)
+    breakpoint()
     thz.transfer_function(dataset, ref_type=use_reference)
 
     thz.phase_correction(dataset, source='transfer')
