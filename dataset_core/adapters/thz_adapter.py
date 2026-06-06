@@ -190,9 +190,9 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
 def _span_select_bounds(t_ps: np.ndarray, y: np.ndarray, title: str) -> tuple:
     """Open a SpanSelector and return the dragged (xmin, xmax) in ps.
 
-    Thin interactive shell over the deterministic core.segment_waveform; for
-    headless/repeat analysis supply the bounds directly to segment_reflections
-    instead of opening this window.
+    Thin interactive shell for picking gate bounds; for headless/repeat analysis
+    supply the bounds directly to segment_reflections instead of opening this
+    window.
     """
     from matplotlib.widgets import SpanSelector
 
@@ -237,23 +237,28 @@ def segment_reflections(
     dataset: DataSet,
     *,
     segments: dict | None = None,
-    components: tuple = ('first_reflection', 'echo'),
-    active: str = 'echo',
-    taper: dict | None = None,
+    components: tuple = ('first_reflection', 'second_reflection'),
+    output_dir: str | None = None,
     bounds_units: str = 'ps',
     show_graph: bool = False,
-) -> DataSet:
-    """Split each trace into named, time-gated reflection components.
+) -> list[str]:
+    """Crop each trace into named reflection components and save them as .acc files.
 
-    In the window-coupled reflection geometry one acquisition holds both the
-    front-face reflection and the back-face echo. This step gates each into a
-    named component on the *full* time axis (zeros outside the gate, so absolute
-    timing — and hence the transfer-function phase — is preserved) and promotes
-    one component (``active``, default 'echo') to the working trace so the
-    existing ``zero_pad → fft_spectrum → transfer_function`` chain runs on it.
+    A clean splitter, nothing more. For every loaded file it crops the raw
+    (multi-scan) trace to each component's time gate — no zero-padding, no
+    apodisation — and writes the result as a ``.acc`` file in the same format
+    as the source. It does NOT modify the in-memory dataset or run any
+    downstream processing: reload the written files and process as normal.
 
-    ALL files are processed, references included: the SiO2-only echo is the
-    reference for the sample echo.
+    Components are written into per-name subfolders of ``output_dir`` keeping
+    the original filenames, e.g.::
+
+        <output_dir>/first_reflection/<original>.acc
+        <output_dir>/second_reflection/<original>.acc
+
+    so pointing a fresh ``DataSet`` at ``second_reflection/`` groups and pairs
+    exactly like the originals (no filename suffixes, no pairing ambiguity).
+    All files are written, references included.
 
     Parameters
     ----------
@@ -262,89 +267,80 @@ def segment_reflections(
           in ``components`` (a window opens per component).
         - ``{component: (start, stop)}`` → shared bounds for every file.
         - ``{filename: {component: (start, stop)}}`` → per-file bounds.
-        Bounds are in ``bounds_units`` (default 'ps', matching plotted axes).
+        Bounds are in ``bounds_units`` (default 'ps').
     components : tuple[str]
-        Component names to extract, in selection order.
-    active : str
-        Component promoted to the working trace for downstream FFT.
-    taper : dict | None
-        ``config['segment']`` for ``core.segment_waveform`` (``type``, ``alpha``).
-        Default ``{'type': 'tukey', 'alpha': 0.1}``.
+        Component names to extract (also the subfolder names), in selection order.
+    output_dir : str | None
+        Destination root. Defaults to ``<dataset.file_dir>/segmented``.
     bounds_units : {'ps', 's'}
-        Units of the supplied/selected bounds; converted to seconds internally.
+        Units of the supplied/selected bounds. The source time axis is in ps;
+        's' bounds are converted to ps before cropping.
+    show_graph : bool
+        If True, plot each trace with the selected gates shaded for verification.
+
+    Returns
+    -------
+    list[str]
+        Paths of the written .acc files.
     """
-    if active not in components:
-        raise ValueError(f"active '{active}' must be one of components {components}.")
+    import os
+    from acquisition_editor import save_acc
+
     if bounds_units not in ('ps', 's'):
         raise ValueError("bounds_units must be 'ps' or 's'.")
+    to_ps = (lambda v: float(v)) if bounds_units == 'ps' else (lambda v: float(v) * _S_TO_PS)
 
-    scale = _S_TO_PS  # seconds -> ps for display
-    to_seconds = (lambda v: v / _S_TO_PS) if bounds_units == 'ps' else (lambda v: float(v))
-    taper_config = {'segment': taper or {'type': 'tukey', 'alpha': 0.1}}
+    base_out = output_dir or os.path.join(dataset.file_dir, 'segmented')
+    per_file = bool(segments) and all(isinstance(v, dict) for v in segments.values())
 
-    # Decide whether a provided dict is per-file or shared-by-component.
-    per_file = bool(segments) and all(
-        isinstance(v, dict) for v in segments.values()
-    )
-
+    written: list[str] = []
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0]
-        y = data_obj.data[:, 1]
-        has_err = data_obj.data.shape[1] > 2
-        err = data_obj.data[:, 2] if has_err else None
+        raw = np.asarray(data_obj.raw_data)        # [time_ps, scan1, scan2, ...]
+        time_ps = raw[:, 0]
+        mean_y = raw[:, 1:].mean(axis=1) if raw.shape[1] > 1 else raw[:, 1]
+        scan_headers = [obj.headers for obj in data_obj.data_list]
 
         if segments is None:
             bounds_ps = {
-                name: _span_select_bounds(
-                    t * scale, y, title=f"{filename} — {name}",
-                )
+                name: _span_select_bounds(time_ps, mean_y, title=f"{filename} — {name}")
                 for name in components
             }
-            bounds_s = {n: (b[0] / _S_TO_PS, b[1] / _S_TO_PS) for n, b in bounds_ps.items()}
         else:
             source = segments[filename] if per_file else segments
-            bounds_s = {
-                name: (to_seconds(source[name][0]), to_seconds(source[name][1]))
+            bounds_ps = {
+                name: (to_ps(source[name][0]), to_ps(source[name][1]))
                 for name in components if name in source
             }
-            if active not in bounds_s:
+
+        for name, (start, stop) in bounds_ps.items():
+            mask = (time_ps >= start) & (time_ps <= stop)
+            if np.count_nonzero(mask) < 2:
                 raise ValueError(
-                    f"No bounds for active component '{active}' for file '{filename}'."
+                    f"Gate '{name}' [{start}, {stop}] ps selects <2 samples of "
+                    f"'{filename}'."
                 )
+            cropped = raw[mask, :]
+            dest = os.path.join(base_out, name, filename)
+            save_acc(
+                {'data': cropped, 'scan_headers': scan_headers, 'header': data_obj.headers},
+                dest,
+            )
+            written.append(dest)
 
-        comps_mean, seg_metrics = core.segment_waveform(t, y, bounds_s, taper_config)
-        comps_err = None
-        if has_err:
-            comps_err, _ = core.segment_waveform(t, err, bounds_s, taper_config)
-
-        stored = {}
-        for name, gated in comps_mean.items():
-            if comps_err is not None:
-                stored[name] = np.column_stack((t, gated, comps_err[name]))
-            else:
-                stored[name] = np.column_stack((t, gated))
-        data_obj.processing_dict['segments'] = stored
-        data_obj.processing_dict['segment_metrics'] = seg_metrics
-        data_obj.processing_dict['segment_active'] = active
-
-        data_obj.data = stored[active]
-
-    if show_graph:
-        for filename, data_obj in dataset.data.items():
-            stored = data_obj.processing_dict['segments']
-            pre = data_obj.processing_dict.get('time_domain')
+        if show_graph:
             fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
-            if pre is not None:
-                ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], color='0.6', lw=1, label='full trace')
-            for name, arr in stored.items():
-                ax.plot(arr[:, 0] * _S_TO_PS, arr[:, 1], lw=1.4, label=name)
+            ax.plot(time_ps, mean_y, color='0.4', lw=1)
+            ax.set_xlim(float(np.nanmin(time_ps)), float(np.nanmax(time_ps)))
+            for name, (start, stop) in bounds_ps.items():
+                ax.axvspan(start, stop, alpha=0.2, label=name)
             ax.set_xlabel('Time (ps)')
             ax.set_ylabel('Amplitude')
-            ax.set_title(f'Segmented reflections — {filename}')
+            ax.set_title(f'Segments — {filename}')
             ax.legend()
             plt.show()
 
-    return dataset
+    print(f"Wrote {len(written)} segmented .acc files under '{base_out}'.")
+    return written
 
 
 def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
@@ -577,8 +573,8 @@ def invert_nk_reflection(
 
     Pulls the measured ratio H = Y_samp / Y_ref from
     ``processing_dict['transfer_H']`` (computed by ``transfer_function`` on the
-    gated echo spectra) and converts it to a true sample reflection coefficient,
-    then inverts with the Fresnel closed form.
+    gated second-reflection spectra) and converts it to a true sample
+    reflection coefficient, then inverts with the Fresnel closed form.
 
     Geometry selects the incident medium, the angle handling, and the reference
     model:
@@ -593,8 +589,8 @@ def invert_nk_reflection(
       internal angle is found by Snell's law, the reference is the computed
       window→air Fresnel coefficient r_{window→air}, and the incident medium is
       the window. Because H = r_{window→sample}/r_{window→air} (the SiO2-only
-      echo cancels the window path), ``r_sample = r_{window→air} * H`` recovers
-      the true window→sample reflection.
+      second reflection cancels the window path), ``r_sample = r_{window→air} * H``
+      recovers the true window→sample reflection.
 
     Reflection measurements are phase-sensitive — run
     ``phase_correction(dataset, source='transfer')`` first to null any residual

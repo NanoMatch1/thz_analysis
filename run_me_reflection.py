@@ -2,18 +2,24 @@
 
 Geometry: a sample pressed against the flat back face of a SiO2 window, probed
 at 45 deg external incidence, s-polarised. One acquisition contains the front
-(air->SiO2) reflection and the back (SiO2->sample) echo. The SiO2-only trace is
-the reference: its back echo is r_{SiO2->air}, which cancels the window path
-when we ratio, then restores absolute scale via the computed Fresnel coefficient.
+(air->SiO2) first reflection and the back (SiO2->sample) second reflection. The
+SiO2-only trace is the reference: its second reflection is r_{SiO2->air}, which
+cancels the window path when we ratio, then restores absolute scale via the
+computed Fresnel coefficient.
 
-Pipeline:
-    load -> group -> segment (front + echo) -> FFT(echo) -> H = echo_s/echo_ref
-         -> r_sample = r_{SiO2->air} * H -> invert (n_incident = n_SiO2, internal angle)
-         -> derive eps/sigma
+Two phases:
+  1. segment(): load the raw traces and crop the first + second reflections into
+     separate .acc files under <dir>/segmented/<component>/ (no zero-pad, no
+     taper). This is the only reflection-specific step.
+  2. process(): point a normal DataSet at segmented/second_reflection/ and run
+     the standard chain -> group -> zero_pad -> FFT -> H = second_s/second_ref
+     -> r_sample = r_{SiO2->air} * H -> invert -> derive eps/sigma.
 
-Set INTERACTIVE = True to pick the front/echo gates by dragging; otherwise the
-headless GATES below are used (repeatable analysis).
+Set INTERACTIVE = True to pick the first/second-reflection gates by dragging;
+otherwise the headless GATES below are used (repeatable analysis).
 """
+
+import os
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,15 +38,33 @@ THETA_EXTERNAL_DEG = 45.0    # external incidence angle (refracts inside the win
 N_SIO2 = 1.95                # fused-silica THz index (supplied; extraction deferred)
 POLARIZATION = "s"
 
-# Headless gates in ps (front pulse ~153.4 ps, back echo ~164.3 ps; window 151-169).
+# Headless gates in ps (first reflection ~153.4 ps, second reflection ~164.3 ps;
+# window 151-169). The GaP detection-crystal echo at ~158.7 ps is excluded.
 GATES = {
     "first_reflection": (151.2, 158.5),
-    "echo": (159.5, 168.8),
+    "second_reflection": (159.5, 168.8),
 }
 
 
-def run(file_dir=FILE_DIR, interactive=INTERACTIVE, show_graphs=SHOW_GRAPHS):
+def segment(file_dir=FILE_DIR, interactive=INTERACTIVE, show_graphs=SHOW_GRAPHS):
+    """Phase 1: crop the first + second reflections to separate .acc files.
+
+    Returns the segmented root dir; the second reflections land in
+    ``<root>/second_reflection/`` with the original filenames.
+    """
     dataset = DataSet(file_dir)
+    dataset.load_all_data(case_insensitive=True)
+
+    segments = None if interactive else GATES
+    thz.segment_reflections(
+        dataset, segments=segments, show_graph=show_graphs,
+    )
+    return os.path.join(file_dir, "segmented")
+
+
+def process(component_dir):
+    """Phase 2: the normal transmission-style chain on the second reflections."""
+    dataset = DataSet(component_dir)
     dataset.load_all_data(case_insensitive=True)
 
     # Pair sample <-> SiO2 reference. keywords=['type'] keeps the differing
@@ -49,18 +73,11 @@ def run(file_dir=FILE_DIR, interactive=INTERACTIVE, show_graphs=SHOW_GRAPHS):
     dataset.group_files(keywords=["type"])
     dataset.grouping.show_matches()
 
-    # Split each trace into front reflection + back echo; promote the echo to
-    # the working trace. Processes references too (their echo is r_{SiO2->air}).
-    segments = None if interactive else GATES
-    thz.segment_reflections(
-        dataset, segments=segments, active="echo", show_graph=show_graphs,
-    )
-
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}})
     thz.fft_spectrum(dataset)
 
-    # H = echo_sample / echo_reference (SiO2-only). ref_type='reference' matches
-    # the bare-'reference' SiO2 file.
+    # H = second_reflection_sample / second_reflection_reference (SiO2-only).
+    # ref_type='reference' matches the bare-'reference' SiO2 file.
     thz.transfer_function(dataset, ref_type="reference")
 
     # Window geometry: r_sample = r_{SiO2->air} * H, invert inside the SiO2.
@@ -107,5 +124,6 @@ def report(dataset, band_thz=(0.5, 3.0)):
 
 
 if __name__ == "__main__":
-    ds = run()
+    segmented_root = segment()
+    ds = process(os.path.join(segmented_root, "second_reflection"))
     report(ds)

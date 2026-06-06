@@ -74,7 +74,10 @@ if __name__ == "__main__":
     dataset = DataSet(fileDir)
     show_graph = False
 
-    use_reference = 'gold'
+    # use_reference = 'gold'
+
+    dataset.load_state()
+    dataset.plot_current()
     
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
@@ -129,9 +132,12 @@ if __name__ == "__main__":
     #     breakpoint()
 
     # thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
+    segment_dict = {"first_segment": (151, 158.10), "second_segment": (157.9, 162.8)}
     thz.segment_reflections(dataset, show_graph=True)
 
-    # thz.plot_current(dataset)
+    thz.plot_current(dataset)
+    dataset.save_state()
+    
     breakpoint()
     
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
