@@ -3,8 +3,57 @@
 #TODO - create dataset module import, others can import from dataset_core.dataset 
 
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Optional
 from dataset_core.data_structures.filename_info import FilenameInfo
+
+
+def select_closest_filename(target_filename, candidate_filenames, margin):
+    '''Pick the candidate filename most similar to ``target_filename``.
+
+    Used as a tiebreaker when several references survive the structured
+    (keyword / ``key=value``) match filter. Similarity is the
+    :class:`difflib.SequenceMatcher` ratio over the full filenames, so shared
+    tokens lift every candidate equally and the differing trailing descriptors
+    (e.g. ``post-alignment`` vs ``pre-alignment``) decide the winner.
+
+    Parameters
+    ----------
+    target_filename : str
+        The sample (or substrate) filename seeking a reference.
+    candidate_filenames : list[str]
+        Reference filenames that all passed the hard match criteria.
+    margin : float
+        Minimum gap between the best and second-best similarity ratio for the
+        winner to be accepted. If the gap is smaller, the choice is considered a
+        genuine tie.
+
+    Returns
+    -------
+    dict
+        ``{'winner', 'winner_score', 'runner_up', 'runner_up_score',
+        'all_scores', 'decisive'}``. ``decisive`` is True when the gap met the
+        margin. The caller decides whether to accept or raise on a non-decisive
+        result, so this function never raises on ambiguity itself.
+    '''
+
+    scored = sorted(
+        ((name, SequenceMatcher(None, target_filename, name).ratio()) for name in candidate_filenames),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    winner, winner_score = scored[0]
+    runner_up, runner_up_score = scored[1]
+    gap = winner_score - runner_up_score
+    return {
+        'winner': winner,
+        'winner_score': winner_score,
+        'runner_up': runner_up,
+        'runner_up_score': runner_up_score,
+        'gap': gap,
+        'all_scores': scored,
+        'decisive': gap >= margin,
+    }
 
 @dataclass
 class TemperatureItem:
@@ -127,6 +176,13 @@ class GroupingService:
                 print(f"Sample: {filename}")
                 for ref_id in reference_ids:
                     print(f"  > {ref_id.replace('_', ' ').title()}: {getattr(item, ref_id)}") # print the reference filename associated with this sample for each reference type (e.g. substrate_reference, air_reference)
+                    scoring = item.__dict__.get(f"{ref_id}_match", None)
+                    if scoring is not None:
+                        print(
+                            f"      (resolved by filename similarity: "
+                            f"{scoring['winner_score']:.3f} vs runner-up "
+                            f"{scoring['runner_up']} {scoring['runner_up_score']:.3f})"
+                        )
 
     def get_state(self):
         '''Returns a dictionary representing the current state of the grouping service, including file items and grouping keywords.'''
@@ -175,8 +231,8 @@ class GroupingService:
     
     def get_reference_filename(self, filename, ref_type='substrate'):
         '''Finds the corresponding reference filename for a given sample filename based on grouping.'''
-        if ref_type not in ['substrate', 'air']:
-            raise ValueError("ref_type must be either 'substrate' or 'air'.")
+        if ref_type not in self.DEFAULT_REFERENCE_IDENTIFIERS:
+            raise ValueError(f"ref_type must be one of {self.DEFAULT_REFERENCE_IDENTIFIERS}.")
 
         group_info = self(filename)
         if group_info is None:
@@ -188,9 +244,9 @@ class GroupingService:
         if data_type in self.reference_identifiers:
             return None  # references don't have their own references
         if data_type in self.sample_identifiers:
-            if ref_type == 'air':
-                return group_info.air_reference
-            return group_info.substrate_reference
+            ref = getattr(group_info, f"{ref_type}_reference", None)
+            if ref is not None:
+                return ref
         print(f"Unknown data type '{data_type}' for filename: {filename}")
         return None
 
@@ -257,6 +313,8 @@ class GroupingService:
         keywords: list | None = None,
         *,
         merge_extra: bool = False,
+        reference_tiebreaker: str = 'closest',
+        tiebreak_margin: float = 0.10,
     ):
         '''Groups data by slicing the filename and pairing samples to references.
 
@@ -278,6 +336,14 @@ class GroupingService:
             Leave this False if any of your filenames use ``key=value``
             tokens; turning it on with mixed-style filenames will break
             pairing by folding descriptive metadata into ``series``.
+        reference_tiebreaker : {'closest', 'strict'}
+            How to resolve more than one reference of the same subtype passing
+            the hard match criteria. ``'closest'`` (default) breaks the tie by
+            filename similarity; ``'strict'`` always raises. See
+            :meth:`_match_references`.
+        tiebreak_margin : float
+            Minimum filename-similarity gap for ``'closest'`` to commit to a
+            winner rather than raising. Default ``0.10``.
 
         # TODO: support an explicit pairing_keys argument so users can choose
         #   which parsed attributes drive matching independently of which are
@@ -295,7 +361,9 @@ class GroupingService:
         # self._identify_global_references()
 
         self.integrity_check()
-        self._match_references()
+        self._match_references(
+            tiebreaker=reference_tiebreaker, tiebreak_margin=tiebreak_margin,
+        )
         print("Completed simple grouping of filenames.")
 
         return self.file_items
@@ -322,7 +390,7 @@ class GroupingService:
         else:
             print("Integrity check passed: All groups have required components.")
         
-    def _match_references(self):
+    def _match_references(self, tiebreaker='closest', tiebreak_margin=0.10):
         '''Works through file_items to match references to samples (and substrates to air).
 
         For each sample: sets substrate_reference and air_reference attributes by
@@ -331,12 +399,40 @@ class GroupingService:
         For each substrate: additionally sets air_reference so that the
         substrate_only grid-search inversion can compute H = Y_sub / Y_air
         without the user having to wire up that lookup manually.
+
+        Parameters
+        ----------
+        tiebreaker : {'closest', 'strict'}
+            How to resolve the case where more than one reference of the same
+            subtype passes the hard match criteria. ``'strict'`` always raises a
+            ``ValueError`` (the safest, most explicit option). ``'closest'``
+            breaks the tie by filename similarity, accepting the most-similar
+            reference only when it beats the runner-up by ``tiebreak_margin``;
+            otherwise it raises.
+        tiebreak_margin : float
+            Minimum similarity gap for ``'closest'`` to commit to a winner.
         '''
 
         references = {filename: item for filename, item in self.file_items.items() if item.data_type in self.reference_identifiers}
         samples = {filename: item for filename, item in self.file_items.items() if item.data_type in self.sample_identifiers}
         substrates = {filename: item for filename, item in self.file_items.items() if item.data_type == 'substrate'}
         air_refs = {filename: item for filename, item in self.file_items.items() if item.data_type == 'air'}
+
+        def _raise_ambiguous(target_item, reftype, refs, match_criteria, scoring=None):
+            detail = ''
+            if scoring is not None:
+                ranked = ', '.join(f"{name} ({score:.3f})" for name, score in scoring['all_scores'])
+                detail = (
+                    f" Closest-filename tiebreaker could not decide (gap "
+                    f"{scoring['gap']:.3f} < margin {tiebreak_margin}): {ranked}."
+                )
+            raise ValueError(
+                f"Ambiguous reference pairing for '{target_item.filename}': "
+                f"{len(refs)} '{reftype}' references match criteria {match_criteria}: "
+                f"{refs}.{detail} Pairing is symmetric — add a distinguishing "
+                f"key=value token (e.g. 'repeat=2') to BOTH the target "
+                f"and the intended reference so only one reference matches."
+            )
 
         def _assign_references(target_item, ref_pool):
             keywords = target_item.report_list.copy()
@@ -350,15 +446,26 @@ class GroupingService:
                     matches_per_reftype.setdefault(ref_item.data_type, []).append(ref_filename)
 
             for reftype, refs in matches_per_reftype.items():
-                if len(refs) > 1:
-                    raise ValueError(
-                        f"Ambiguous reference pairing for '{target_item.filename}': "
-                        f"{len(refs)} '{reftype}' references match criteria {match_criteria}: "
-                        f"{refs}. Pairing is symmetric — add a distinguishing "
-                        f"key=value token (e.g. 'repeat=2') to BOTH the target "
-                        f"and the intended reference so only one reference matches."
-                    )
-                target_item.__dict__[f"{reftype}_reference"] = refs[0]
+                if len(refs) == 1:
+                    target_item.__dict__[f"{reftype}_reference"] = refs[0]
+                    continue
+
+                # More than one candidate of this subtype passed the hard filter.
+                if tiebreaker == 'strict':
+                    _raise_ambiguous(target_item, reftype, refs, match_criteria)
+
+                scoring = select_closest_filename(target_item.filename, refs, tiebreak_margin)
+                if not scoring['decisive']:
+                    _raise_ambiguous(target_item, reftype, refs, match_criteria, scoring=scoring)
+
+                target_item.__dict__[f"{reftype}_reference"] = scoring['winner']
+                target_item.__dict__[f"{reftype}_reference_match"] = scoring
+                print(
+                    f"Resolved {reftype} reference for '{target_item.filename}' by "
+                    f"filename similarity: '{scoring['winner']}' "
+                    f"({scoring['winner_score']:.3f}) over '{scoring['runner_up']}' "
+                    f"({scoring['runner_up_score']:.3f}), gap {scoring['gap']:.3f}."
+                )
 
         # Match samples to all references (substrate and air)
         for filename, fileitem in samples.items():

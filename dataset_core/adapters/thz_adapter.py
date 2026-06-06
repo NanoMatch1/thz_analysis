@@ -187,6 +187,161 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
 
     return dataset
 
+def _span_select_bounds(t_ps: np.ndarray, y: np.ndarray, title: str) -> tuple:
+    """Open a SpanSelector and return the dragged (xmin, xmax) in ps.
+
+    Thin interactive shell over the deterministic core.segment_waveform; for
+    headless/repeat analysis supply the bounds directly to segment_reflections
+    instead of opening this window.
+    """
+    from matplotlib.widgets import SpanSelector
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(t_ps, y, lw=1)
+    ax.set_xlabel('Time (ps)')
+    ax.set_ylabel('Amplitude')
+    ax.set_title(title)
+    selected = {}
+
+    def _onselect(xmin, xmax):
+        if xmax < xmin:
+            xmin, xmax = xmax, xmin
+        selected['bounds'] = (float(xmin), float(xmax))
+        ax.axvspan(xmin, xmax, alpha=0.2, color='tab:orange')
+        fig.canvas.draw_idle()
+        print(f"  selected {title}: {xmin:.2f}–{xmax:.2f} ps")
+
+    span = SpanSelector(
+        ax, onselect=_onselect, direction='horizontal',
+        useblit=True, interactive=True, props=dict(alpha=0.2), minspan=0.0,
+    )
+    _ = span  # keep alive until window closes
+    ax.text(
+        0.01, 0.99, f"Drag to select the {title} region, then close the window.",
+        transform=ax.transAxes, va='top', ha='left', fontsize=9,
+        bbox=dict(boxstyle='round,pad=0.3', alpha=0.2),
+    )
+    plt.show()
+
+    if 'bounds' not in selected:
+        raise RuntimeError(f"No span selected for '{title}'.")
+    return selected['bounds']
+
+
+def segment_reflections(
+    dataset: DataSet,
+    *,
+    segments: dict | None = None,
+    components: tuple = ('first_reflection', 'echo'),
+    active: str = 'echo',
+    taper: dict | None = None,
+    bounds_units: str = 'ps',
+    show_graph: bool = False,
+) -> DataSet:
+    """Split each trace into named, time-gated reflection components.
+
+    In the window-coupled reflection geometry one acquisition holds both the
+    front-face reflection and the back-face echo. This step gates each into a
+    named component on the *full* time axis (zeros outside the gate, so absolute
+    timing — and hence the transfer-function phase — is preserved) and promotes
+    one component (``active``, default 'echo') to the working trace so the
+    existing ``zero_pad → fft_spectrum → transfer_function`` chain runs on it.
+
+    ALL files are processed, references included: the SiO2-only echo is the
+    reference for the sample echo.
+
+    Parameters
+    ----------
+    segments : None | dict
+        - ``None``  → interactive SpanSelector per file: drag one span per name
+          in ``components`` (a window opens per component).
+        - ``{component: (start, stop)}`` → shared bounds for every file.
+        - ``{filename: {component: (start, stop)}}`` → per-file bounds.
+        Bounds are in ``bounds_units`` (default 'ps', matching plotted axes).
+    components : tuple[str]
+        Component names to extract, in selection order.
+    active : str
+        Component promoted to the working trace for downstream FFT.
+    taper : dict | None
+        ``config['segment']`` for ``core.segment_waveform`` (``type``, ``alpha``).
+        Default ``{'type': 'tukey', 'alpha': 0.1}``.
+    bounds_units : {'ps', 's'}
+        Units of the supplied/selected bounds; converted to seconds internally.
+    """
+    if active not in components:
+        raise ValueError(f"active '{active}' must be one of components {components}.")
+    if bounds_units not in ('ps', 's'):
+        raise ValueError("bounds_units must be 'ps' or 's'.")
+
+    scale = _S_TO_PS  # seconds -> ps for display
+    to_seconds = (lambda v: v / _S_TO_PS) if bounds_units == 'ps' else (lambda v: float(v))
+    taper_config = {'segment': taper or {'type': 'tukey', 'alpha': 0.1}}
+
+    # Decide whether a provided dict is per-file or shared-by-component.
+    per_file = bool(segments) and all(
+        isinstance(v, dict) for v in segments.values()
+    )
+
+    for filename, data_obj in dataset.data.items():
+        t = data_obj.data[:, 0]
+        y = data_obj.data[:, 1]
+        has_err = data_obj.data.shape[1] > 2
+        err = data_obj.data[:, 2] if has_err else None
+
+        if segments is None:
+            bounds_ps = {
+                name: _span_select_bounds(
+                    t * scale, y, title=f"{filename} — {name}",
+                )
+                for name in components
+            }
+            bounds_s = {n: (b[0] / _S_TO_PS, b[1] / _S_TO_PS) for n, b in bounds_ps.items()}
+        else:
+            source = segments[filename] if per_file else segments
+            bounds_s = {
+                name: (to_seconds(source[name][0]), to_seconds(source[name][1]))
+                for name in components if name in source
+            }
+            if active not in bounds_s:
+                raise ValueError(
+                    f"No bounds for active component '{active}' for file '{filename}'."
+                )
+
+        comps_mean, seg_metrics = core.segment_waveform(t, y, bounds_s, taper_config)
+        comps_err = None
+        if has_err:
+            comps_err, _ = core.segment_waveform(t, err, bounds_s, taper_config)
+
+        stored = {}
+        for name, gated in comps_mean.items():
+            if comps_err is not None:
+                stored[name] = np.column_stack((t, gated, comps_err[name]))
+            else:
+                stored[name] = np.column_stack((t, gated))
+        data_obj.processing_dict['segments'] = stored
+        data_obj.processing_dict['segment_metrics'] = seg_metrics
+        data_obj.processing_dict['segment_active'] = active
+
+        data_obj.data = stored[active]
+
+    if show_graph:
+        for filename, data_obj in dataset.data.items():
+            stored = data_obj.processing_dict['segments']
+            pre = data_obj.processing_dict.get('time_domain')
+            fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+            if pre is not None:
+                ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], color='0.6', lw=1, label='full trace')
+            for name, arr in stored.items():
+                ax.plot(arr[:, 0] * _S_TO_PS, arr[:, 1], lw=1.4, label=name)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Amplitude')
+            ax.set_title(f'Segmented reflections — {filename}')
+            ax.legend()
+            plt.show()
+
+    return dataset
+
+
 def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
     """Plot the current time-domain traces for all files in the dataset.
 
@@ -406,35 +561,73 @@ def invert_nk(dataset: DataSet, thickness_m: float, config: dict | None = None) 
 def invert_nk_reflection(
     dataset: DataSet,
     *,
+    geometry: str = 'gold',
     theta_deg: float = 0.0,
     polarization: str = 's',
     r_reference: complex = -1.0 + 0.0j,
+    n_window: complex | np.ndarray = 1.95,
     config: dict | None = None,
 ) -> DataSet:
     """Reflection-mode n,k for each sample (single-interface, semi-infinite).
 
-    Pulls the transmission-style ratio H = Y_samp / Y_ref from
-    ``processing_dict['transfer_H']`` (computed by ``transfer_function``) and
-    converts to a true sample reflection coefficient via
-    ``r_sample = r_reference * H``. Default ``r_reference = -1`` corresponds
-    to an ideal gold mirror; pass a complex value for other reference
-    materials.
+    Pulls the measured ratio H = Y_samp / Y_ref from
+    ``processing_dict['transfer_H']`` (computed by ``transfer_function`` on the
+    gated echo spectra) and converts it to a true sample reflection coefficient,
+    then inverts with the Fresnel closed form.
 
-    Reflection measurements are very phase-sensitive — run
-    ``phase_correction(dataset, source='transfer')`` first to interactively
-    null any residual timing offset before calling this function.
+    Geometry selects the incident medium, the angle handling, and the reference
+    model:
+
+    - ``'gold'`` (external reflection in air): the sample is a flat surface in
+      air referenced to a gold mirror. ``r_sample = r_reference * H`` with
+      ``r_reference = -1`` for an ideal mirror, incident medium = air,
+      incidence angle = ``theta_deg``.
+    - ``'window'`` (internal reflection through a window): the wave reflects at
+      a window/sample interface accessed through a window of index
+      ``n_window`` (e.g. SiO2 ~1.95). ``theta_deg`` is the EXTERNAL angle; the
+      internal angle is found by Snell's law, the reference is the computed
+      window→air Fresnel coefficient r_{window→air}, and the incident medium is
+      the window. Because H = r_{window→sample}/r_{window→air} (the SiO2-only
+      echo cancels the window path), ``r_sample = r_{window→air} * H`` recovers
+      the true window→sample reflection.
+
+    Reflection measurements are phase-sensitive — run
+    ``phase_correction(dataset, source='transfer')`` first to null any residual
+    timing offset before calling this function.
 
     Parameters
     ----------
-    theta_deg : float, default 0.0
-        Angle of incidence in degrees (0 = normal incidence).
-    polarization : {'s', 'p'}, default 's'
+    geometry : {'gold', 'window'}
+        Reference/incidence model (see above).
+    theta_deg : float
+        Angle of incidence in degrees. For 'gold' this is the in-air incidence
+        angle; for 'window' it is the EXTERNAL angle before refraction.
+    polarization : {'s', 'p'}
         Only 's' implemented for now; 'p' raises NotImplementedError.
-    r_reference : complex, default -1+0j (gold mirror)
-        Known complex reflection coefficient of the reference material.
+    r_reference : complex
+        Reference reflection coefficient for the 'gold' geometry (-1 = mirror).
+        Ignored for 'window' (computed from n_window).
+    n_window : complex or np.ndarray
+        Window refractive index for the 'window' geometry (scalar, or a
+        per-frequency n_SiO2(f) array). Ignored for 'gold'.
     """
     config = config or {}
-    theta_rad = np.deg2rad(theta_deg)
+    theta_external_rad = np.deg2rad(theta_deg)
+
+    if geometry == 'gold':
+        n_incident = 1.0
+        theta_internal_rad = theta_external_rad
+        r_reference_value = r_reference
+    elif geometry == 'window':
+        n_incident = n_window
+        theta_internal_rad = float(
+            np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window))
+        )
+        r_reference_value = core.fresnel_reflection_s(
+            n_window, 1.0, theta_internal_rad,
+        )
+    else:
+        raise ValueError(f"Unknown geometry '{geometry}'. Use 'gold' or 'window'.")
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -447,14 +640,18 @@ def invert_nk_reflection(
             continue
 
         freq = data_obj.processing_dict['fft_freq']
-        r_sample = r_reference * np.asarray(H)
+        r_sample = r_reference_value * np.asarray(H)
 
         n, k, metrics = core.invert_nk_reflection(
             freq, r_sample, mask, config,
-            theta_rad=theta_rad, polarization=polarization,
+            theta_rad=theta_internal_rad, polarization=polarization,
+            n_incident=n_incident,
         )
 
         data_obj.processing_dict['reflection_r'] = r_sample
+        data_obj.processing_dict['reflection_geometry'] = geometry
+        data_obj.processing_dict['theta_internal_rad'] = theta_internal_rad
+        data_obj.processing_dict['r_reference'] = r_reference_value
         data_obj.processing_dict['n'] = n
         data_obj.processing_dict['k'] = k
         data_obj.processing_dict['invert_metrics'] = metrics

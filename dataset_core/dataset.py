@@ -56,6 +56,7 @@ class DataService:
         print("DataService Methods and Properties:")
         print("-" * 40)
         print("data_dict: dict - Full master data dictionary.")
+        print("current_data: dict - Subset of data_dict filtered to what the current working dataset should be.")
         print("grouping: GroupingService - Service for managing file groupings and references.")
         print("references: list - List of filenames identified as references.")
         print("samples: list - List of filenames identified as samples.")

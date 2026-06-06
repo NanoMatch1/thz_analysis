@@ -218,6 +218,22 @@ class THzData:
         self._data = self._time_data  # Current working data (time or frequency domain)
         self.current_state = 'time_domain'  # tracks whether current data is time or frequency domain, etc.
 
+    @property
+    def help(self):
+        '''Prints available methods and properties of the THzData object.'''
+        print("THzData Methods and Properties:")
+        print("-" * 40)
+        print("data_list: list - List of BaseTHzData objects for each scan.")
+        print("raw_data: np.array - Compiled data array from all scans.")
+        print("std_dev: np.array - Standard deviation across scans for each time point.")
+        print("headers: list - Headers from the first scan.")
+        print("data_type: str - Type of data (e.g., 'acc', 'dat').")
+        print("filename: str - Filename of the dataset.")
+        print("reference_filename: str - Filename of the reference dataset, if any.")
+        print("processing_dict: dict - Stores processed data at various steps.")
+        print("current_state: str - Tracks whether current data is time or frequency domain.")
+        print("help: property - Prints this help message.")
+
     def __getitem__(self, key):
         """
         Backwards-compatible dictionary-style access.

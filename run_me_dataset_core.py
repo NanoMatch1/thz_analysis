@@ -57,6 +57,9 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\CNTs\Sam\Sam\data\test"
     fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-06-02_TDS-ambients\Comparison\export\export"
     fileDir = r"C:\Users\Samuel\Data\THz\CNTs\2026-06-03_CNT-4\analysis"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing"
+    # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-04_OPTP-M-HHTP"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_OPTP-M-HHTP"
@@ -69,7 +72,9 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
     dataset = DataSet(fileDir)
-    show_graph = True
+    show_graph = False
+
+    use_reference = 'gold'
     
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
@@ -96,16 +101,34 @@ if __name__ == "__main__":
         # breakpoint()
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
-        thz.subtract_baseline(dataset, show_graph=show_graph)
-        thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
+        # thz.subtract_baseline(dataset, show_graph=show_graph)
+        # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
         dataset.save_state()
 
-    # preprocess(dataset)
+    preprocess(dataset)
     dataset.load_state()
-    dataset.group_files(keywords=['type', 'set'])
+    dataset.group_files(keywords=['type', 'temp', 'set', 'extra'])
     dataset.grouping.show_matches()
     # breakpoint()
-    # dataset.plot_current()
+    newlist = [key for key in dataset.current_data.keys() if '33.6' in key]
+    dataset.set_current_files(newlist)
+    dataset.plot_current()
+    breakpoint()
+    # breakpoint()
+    # for filename, data_obj in dataset.current_data.items():
+    #     print(data_obj.help)
+    #     data = data_obj.raw_data
+    #     for index in range(data.shape[1]):
+    #         if index == 0:
+    #             continue
+    #         plt.plot(data[:, 0], data[:, index], label=f"{filename} - Acquisition {index}")
+    #     plt.title(f"Raw Data - {filename}")
+    #     plt.xlabel("Time (ps)")
+    #     plt.ylabel("Amplitude (a.u.)")
+    #     plt.legend()
+    #     plt.show()
+    #     breakpoint()
+
     thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.25}}, show_graph=show_graph)
 
     # thz.plot_current(dataset)
@@ -115,7 +138,7 @@ if __name__ == "__main__":
     thz.fft_spectrum(dataset)
     thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='')
     # thz.plot_fft(dataset)
-    thz.transfer_function(dataset)
+    thz.transfer_function(dataset, ref_type=use_reference)
 
     thz.phase_correction(dataset, source='transfer')
 
