@@ -61,6 +61,12 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-bare"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-08_CNT-paper"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\CNT"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
+    # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
     # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-04_OPTP-M-HHTP"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
@@ -73,76 +79,128 @@ if __name__ == "__main__":
 
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
-    dataset = DataSet(fileDir)
-    show_graph = True
+    import sys
 
-    # use_reference = 'gold'
-
-    # dataset.load_state()
-
-    # dataset.plot_current()
+    def acquisition_editor(fileDir):
+        import acquisition_editor
+        acquisition_editor.process_directory(fileDir)
+        print("Acquisition editing complete.")
+        breakpoint()
     
+    def plot_sigma(dataset):
+        fig, ax = plt.subplots()
+        show_snr_mask = True
+        for filename, data_obj in thz._sample_items(dataset):
+            freq = data_obj.processing_dict.get('fft_freq')
+            # n = data_obj.processing_dict.get('n')
+            # k = data_obj.processing_dict.get('k')
+            sigma = data_obj.processing_dict.get('sigma')
+            real = sigma.real
+            imag = sigma.imag
+            if freq is None or real is None or imag is None:
+                continue
+            mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+            thz._plot_with_snr_mask(ax, freq * thz._HZ_TO_THZ, real, mask, label="{} (real)".format(filename))
+            thz._plot_with_snr_mask(ax, freq * thz._HZ_TO_THZ, imag, mask, label="{} (imag)".format(filename))
+        
+        plt.legend()
+        plt.xlabel("Frequency (THz)")
+        # plt.ylabel("Refractive Index / Extinction Coefficient")
+        plt.ylabel("Conductivity (S/m)")
+        plt.title("Derived Conductivity")
+        plt.show()
+        return 
+    
+
+    ### --- Config Setup ---
+
+    ### --- Acquisition editing ---
+
+   
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
-        dataset.plot_current()
+        # dataset.plot_current()
         # --- For reflection data ---
-        # thz.segment_reflections(dataset, show_graph=True)
         dataset.group_files(keywords=['type'])
-        thz.align_to_reference(dataset, show_graph=True)
+        thz.subtract_baseline(dataset, show_graph=show_graph)
         # --- THz-TDS processing pipeline ---
         # --- initial pre-processing steps ---
-        # thz.subtract_baseline(dataset, show_graph=show_graph)
-        # thz.align_on_peak(dataset, show_graph=True)#, auto_range=(40,60))
-        dataset.save_state()
 
-    preprocess(dataset)
-    # breakpoint()
-    # dataset.group_files(keywords=['type', 'temp', 'set', 'extra'])
-    dataset.load_state()
-    dataset.group_files(keywords=['type'])
+        # --- alignment step, different protocols
+        thz.align_to_reference(dataset, ref_type="reference", roi=(152, 156))
+
+        thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
+        thz.segment_reflections(dataset, show_graph=True)
+
+        # dataset.save_state()
+
+
+    # acquisition_editor(fileDir)
+    dataset = DataSet(fileDir)
+    show_graph = False
+    dataset.load_all_data(case_insensitive=True)
+    dataset.plot_current()
+        
+    ### --- Pre-processing and segmentation ---
+    # preprocess(dataset)
+    thz.subtract_baseline(dataset, show_graph=show_graph)
+    dataset.group_files(keywords=['type', 'seri'])
     dataset.grouping.show_matches()
-    # segment_dict = {"first_segment": (151, 158.10), "second_segment": (157.9, 162.8)}
-    thz.plot_current(dataset)
 
+    # thz.align_to_reference(dataset, ref_type="reference", show_graph=show_graph)
+    # dataset.plot_current()
+    # dataset.load_database('CNT_interp_norm_2_db.pkl')
+    # thz.segment_reflections(dataset, show_graph=show_graph)
+
+    # dataset.group_files(keywords=['type'])
+
+    # thz.pre_window_align_peak(dataset, show_graph=show_graph)
+    # thz.plot_current(dataset)
+    # thz.pre_window_align_peak(dataset,show_graph=show_graph)
+    # thz.global_truncate(dataset)
+    # dataset.plot_current()
+    # breakpoint()
+
+    # dataset.save_state()
+    # show_graph = False
+    # dataset.load_database()  # optional .db file with pre-parsed metadata; skip if you want to re-parse from the raw files
+    # thz.result_viewer(dataset)
+    # dataset.save_database()
+    # print("Stop after pre-processing and alignment.")
+    # breakpoint()
     thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.2}}, show_graph=show_graph)
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
-    # thz.extend_grid
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
-    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='')
+    thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 1.5,
+                                                 "tail_fraction": 0.25,
+                                                 "min_contiguous_bins": 3}})
+    thz.transfer_function(dataset, config={"transfer": {"apply_snr_mask": True}}, ref_type='reference')
+    # dataset.save_state()
+    # dataset.save_database()
+
+    # thz.extend_grid
+    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='log')
     # thz.plot_fft(dataset)
-    thz.transfer_function(dataset, ref_type='reference')
 
     # thz.phase_correction(dataset, source='transfer')
 
     # dataset.save_state()
-    # thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
-    #                                              "tail_fraction": 0.25,
-    #                                              "min_contiguous_bins": 3}})
     # thz.invert_nk(dataset, thickness_m=1e-3)
     thz.invert_nk_reflection(
         dataset,
-        geometry="gold",
+        geometry="window",
         theta_deg=45,
         polarization='s',
-        # n_window=N_SIO2,
+        n_window=1.95,
     )
+    # thz.invert_nk_reflection(
+    #     dataset,
+    #     geometry="gold",
+    #     theta_deg=45,
+    #     polarization='s',
+    #     # n_window=1.95,
+    # )
     thz.derive_eps_sigma(dataset)
 
-
-    # breakpoint()
-    thz.export_results(dataset)
-    # from matplotlib import pyplot as plt
-
-    # for filename, data in dataset.data.items():
-    #     # print(f"{filename}: {data.keys()}")
-    #     if 'reference' in filename.lower():
-    #         continue
-    #     for key, results in data.processing_dict.items():
-    #         print(key)
-    #         print(results)
-    #         breakpoint()
-
-    # breakpoint()
-
-    # dataset.plot_current()
     thz.result_viewer(dataset)
+    thz.export_results(dataset)

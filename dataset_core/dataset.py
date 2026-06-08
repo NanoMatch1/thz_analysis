@@ -569,10 +569,128 @@ class DataSet:
 
         return edited_data
     
-    def save_state(self):
+    def save_database(self, seriesname=None, database_dir=r"C:\Users\Samuel\Data\database"):
+        '''Saves dataset to a pickle file in the database directory. Never overwrites — appends a numeric index suffix if the filename already exists. Logs the save to a chronological index file.'''
+        import pickle
+        if seriesname is not None:
+            self.seriesname = seriesname.strip()
+        else:
+            seriesname = input("Enter a name for this dataset series (used for database filename): ").strip()
+            if not seriesname:
+                print("No name entered. Aborting save.")
+                return
+
+        if not (os.path.exists(database_dir) and os.path.isdir(database_dir)):
+            print(f"Database directory '{database_dir}' does not exist. Aborting save.")
+            return
+
+        base_name = f"{seriesname}_db"
+        db_path = os.path.join(database_dir, f"{base_name}.pkl")
+        counter = 1
+        while os.path.exists(db_path):
+            db_path = os.path.join(database_dir, f"{base_name}_{counter}.pkl")
+            counter += 1
+
+        filename = os.path.basename(db_path)
+
+        notes = input("Enter notes/comments for this save (or press Enter to skip): ").strip()
+
+        state = {
+            "data_dict": self.data.data_dict,
+            "grouping_state": self.grouping.get_state(),
+            "notes": notes,
+        }
+        with open(db_path, "wb") as f:
+            pickle.dump(state, f)
+
+        index_path = os.path.join(database_dir, "_database_index.txt")
+        with open(index_path, "a") as f:
+            f.write(f"{filename}|{notes}\n")
+
+        print(f"Saved dataset to database at {db_path}.")
+
+    def load_database(self, seriesname=None, database_dir=r"C:\Users\Samuel\Data\database"):
+        '''Loads a dataset from the database directory. Displays a chronologically ordered list (latest last), optionally filtered by a search query, and prompts the user to select one.'''
+        import pickle
+        if not (os.path.exists(database_dir) and os.path.isdir(database_dir)):
+            print(f"Database directory '{database_dir}' does not exist.")
+            return
+
+        index_path = os.path.join(database_dir, "_database_index.txt")
+        if not os.path.exists(index_path):
+            print("No database index found. No datasets have been saved yet.")
+            return
+
+        with open(index_path, "r") as f:
+            raw_lines = [line.strip() for line in f if line.strip()]
+
+        def _parse_index_line(line):
+            parts = line.split("|", 1)
+            return parts[0], parts[1] if len(parts) > 1 else ""
+
+        all_entries = [_parse_index_line(line) for line in raw_lines]
+        existing_entries = [
+            (fname, notes) for fname, notes in all_entries
+            if os.path.exists(os.path.join(database_dir, fname))
+        ]
+        if not existing_entries:
+            print("No database files found.")
+            return
+
+        ordered_entries = list(existing_entries)
+
+        if seriesname is not None:
+            query = seriesname.strip()
+        else:
+            query = input("Enter a search query to filter datasets (or press Enter to show all): ").strip()
+
+        filtered_entries = [
+            (fname, notes) for fname, notes in ordered_entries
+            if query.lower() in fname.lower() or query.lower() in notes.lower()
+        ] if query else ordered_entries
+        if not filtered_entries:
+            print(f"No datasets matching '{query}'.")
+            return
+
+        print("\nAvailable datasets (latest first):")
+        for i, (fname, notes) in enumerate(filtered_entries):
+            print(f"  [{i + 1}] {fname}")
+            if notes:
+                print(f"       {notes}")
+
+        selection = input("\nEnter the number of the dataset to load: ").strip()
+        try:
+            selection_index = int(selection) - 1
+            if selection_index < 0 or selection_index >= len(filtered_entries):
+                print("Invalid selection.")
+                return
+        except ValueError:
+            print("Invalid input. Please enter a number.")  
+            return
+
+        selected_filename = filtered_entries[selection_index][0]
+
+        db_path = os.path.join(database_dir, selected_filename)
+
+        with open(db_path, "rb") as f:
+            state = pickle.load(f)
+
+        self.data._data_dict = state.get("data_dict", {})
+        grouping_state = state.get("grouping_state", None)
+        if grouping_state is not None:
+            self.grouping.restore_state(grouping_state)
+
+        self.seriesname = selected_filename.replace("_db.pkl", "").replace(".pkl", "")
+        print(f"Loaded dataset from {db_path}.")
+
+        return True
+
+    def save_state(self, savedir=None):
         import pickle
         """Saves the current state of data service and grouping serivice for faster reloading later."""
-        pickle_path = os.path.join(self.file_dir, f"{self.seriesname}_state.pkl")
+        if savedir is None:
+            savedir = self.file_dir
+        pickle_path = os.path.join(savedir, f"{self.seriesname}_state.pkl")
         state = {
             "data_dict": self.data.data_dict,
             "grouping_state": self.grouping.get_state(),

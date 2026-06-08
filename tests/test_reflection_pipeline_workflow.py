@@ -182,6 +182,74 @@ def test_align_to_reference_removes_injected_offset():
         )
 
 
+def _recover_n_with_subsample_offset(tmpdir, offset_ps, subsample_correction):
+    """Build a sample whose second reflection is offset by a (sub-sample) amount,
+    run align + invert with the correction on/off, return mean n in band."""
+    theta_int = float(np.real(core.snell_refracted_angle(np.deg2rad(THETA_EXT_DEG), 1.0, N_SIO2)))
+    r_air = core.fresnel_reflection_s(N_SIO2, 1.0, theta_int)
+    r_sample = core.fresnel_reflection_s(N_SIO2, N_SAMPLE_TRUTH, theta_int)
+    _write_second_only_acc(
+        os.path.join(tmpdir, "reference_sio2_set_0.acc"),
+        "reference_sio2_set_0", SECOND_PS, float(r_air.real),
+    )
+    _write_second_only_acc(
+        os.path.join(tmpdir, SAMP_NAME),
+        "sample_film-1_set_0", SECOND_PS + offset_ps, float(r_sample.real),
+    )
+
+    dataset = DataSet(tmpdir)
+    dataset.load_all_data(case_insensitive=True)
+    dataset.group_files(keywords=["type"])
+    thz.align_to_reference(dataset, ref_type="reference", subsample_correction=subsample_correction)
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}})
+    thz.fft_spectrum(dataset)
+    thz.transfer_function(dataset, ref_type="reference")
+    thz.invert_nk_reflection(
+        dataset, geometry="window", theta_deg=THETA_EXT_DEG, n_window=N_SIO2,
+    )
+    pd_ = dataset.data[SAMP_NAME].processing_dict
+    f_thz = pd_["fft_freq"] * 1e-12
+    n = pd_["n"]
+    band = (f_thz > 0.5) & (f_thz < 3.0) & np.isfinite(n)
+    return float(np.nanmean(n[band]))
+
+
+def test_subsample_correction_beats_integer_only_for_half_sample_offset():
+    """A half-sample (0.025 ps at dt=0.05) offset is pure sub-sample: integer-only
+    alignment can't remove it, the spectral phase ramp can. The correction must
+    recover n=3 cleanly and beat the uncorrected case."""
+    offset_ps = 0.025  # exactly half of the 0.05 ps sampling step
+    with tempfile.TemporaryDirectory() as tmp_on:
+        n_corrected = _recover_n_with_subsample_offset(tmp_on, offset_ps, True)
+    with tempfile.TemporaryDirectory() as tmp_off:
+        n_uncorrected = _recover_n_with_subsample_offset(tmp_off, offset_ps, False)
+
+    error_corrected = abs(n_corrected - N_SAMPLE_TRUTH)
+    error_uncorrected = abs(n_uncorrected - N_SAMPLE_TRUTH)
+    assert error_corrected < 0.05, f"corrected n={n_corrected:.4f}, expected ~3.0"
+    assert error_corrected < error_uncorrected, (
+        f"sub-sample correction ({error_corrected:.4f}) should beat integer-only "
+        f"({error_uncorrected:.4f})"
+    )
+
+
+def test_subsample_correction_is_a_clean_noop_when_disabled_via_toggle():
+    """With correction off, the residual is recorded but applied_residual is 0 and
+    no phase ramp is applied — the H result equals the integer-only pipeline."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _recover_n_with_subsample_offset(tmpdir, 0.025, False)
+        # Re-run to inspect the stored metadata directly.
+        dataset = DataSet(tmpdir)
+        dataset.load_all_data(case_insensitive=True)
+        dataset.group_files(keywords=["type"])
+        thz.align_to_reference(dataset, ref_type="reference", subsample_correction=False)
+        pd_ = dataset.data[SAMP_NAME].processing_dict
+        assert pd_["subsample_correction_enabled"] is False
+        assert pd_["subsample_shift_seconds"] == 0.0
+        # The measured residual is still recorded for transparency/diagnostics.
+        assert abs(pd_["subsample_shift_measured_seconds"]) > 0.0
+
+
 def _run_all():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failures = 0

@@ -492,7 +492,7 @@ class THzData:
             time = data_view[:, 0] * _S_TO_PS
 
         mean_amplitude = data_view[:, 1]
-        std_error = data_view[:, 2]
+        std_error = data_view[:, 2] if data_view.shape[1] >= 3 else np.zeros_like(mean_amplitude)
 
         if normalise:
             max_amp = np.max(np.abs(mean_amplitude))

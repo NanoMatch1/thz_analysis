@@ -20,8 +20,61 @@ _HZ_TO_THZ = 1e-12
 _S_TO_PS = 1e12
 
 # ---------------------------------------------------------------------------
+# Single-line toggle for the sub-sample (fractional) timing correction.
+#
+# align_to_reference splits its cross-correlation shift into a whole-sample part
+# (slid on the time axis) and a sub-sample residual. When this is True the
+# residual is applied EXACTLY as a spectral phase ramp in transfer_function
+# (Fourier shift theorem — no time-domain interpolation). Flip to False to
+# disable it and re-run, e.g. to see how much the residual actually matters.
+# A per-call `subsample_correction=` argument on align_to_reference overrides
+# this default when you want to set it explicitly.
+# ---------------------------------------------------------------------------
+SUBSAMPLE_TIMING_CORRECTION = True
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+def normalise(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
+    """Normalise each trace in the dataset by its max absolute amplitude."""
+    config = config or {}
+    bounds = config.get('bounds', None)
+    show_graph = config.get('show_graph', show_graph) # default to kwarg if not in config
+
+    for filename, data_obj in dataset.data.items():
+        t = data_obj.data[:, 0]
+        y = data_obj.data[:, 1]
+        if bounds is not None:
+            mask = (t >= bounds[0]/_S_TO_PS) & (t <= bounds[1]/_S_TO_PS)
+            if not mask.any():
+                print(f"Warning: '{filename}' has no samples in normalisation bounds {bounds}, skipping normalisation.")
+                continue
+        else:
+            mask = slice(None)  # all samples
+        
+        max_amp = np.max(np.abs(y[mask]))
+        if max_amp == 0:
+            print(f"Warning: '{filename}' has zero max amplitude, skipping normalisation.")
+            continue
+        norm_y = y / max_amp
+        if data_obj.data.shape[1] >= 3:
+            norm_err = data_obj.data[:, 2] / max_amp
+            data_obj.data = np.column_stack((t, norm_y, norm_err))
+        else:
+            data_obj.data = np.column_stack((t, norm_y))
+        data_obj.processing_dict['normalisation_factor'] = max_amp
+
+        if show_graph:
+            plt.plot(t, norm_y, label='{} (normalised)'.format(filename))
+            plt.plot(t, y, label='{} (pre-normalisation)'.format(filename), linestyle='--', lw=1, alpha=0.5)
+        
+    if show_graph:
+        plt.legend()
+        plt.xlabel('Time (s)')
+        plt.title('Normalised Traces')
+        plt.show()
+    return dataset
 
 def _time_amplitude_array(data_obj) -> np.ndarray:
     """Extract (N, 2) [time_s, mean_amplitude] from a THzData object."""
@@ -134,12 +187,55 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: 
 
     return dataset
 
+def global_truncate(dataset, show_graph=False):
+    '''Takes the min and max value of the time axis across all samples and truncates all samples to that common range.'''
+    min_t = max(float(np.nanmin(data_obj.data[:, 0])) for data_obj in dataset.data.values())
+    max_t = min(float(np.nanmax(data_obj.data[:, 0])) for data_obj in dataset.data.values())
+    for filename, data_obj in dataset.data.items():
+        mask = (data_obj.data[:, 0] >= min_t) & (data_obj.data[:, 0] <= max_t)
+        data_obj.data = data_obj.data[mask, :]
+        if show_graph:
+            plt.plot(data_obj.data[:, 0], data_obj.data[:, 1], label=filename)
+    print(f"Globally truncated all samples to common time range ")
+    if show_graph:
+        plt.legend()
+        plt.xlabel('Time (s)')
+        plt.title('Globally Truncated Traces')
+        plt.show()
 
-def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple = None) -> DataSet:
-    """Aligns all acquisitions in the dataset on their main peak."""
+    
+
+def pre_window_align_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple = None, recalibrate=False) -> DataSet:
+    """Aligns all acquisitions in the dataset on their main peak. Used for pre-aligning the main pulse before windowing such that the window operates at the same T0 distance from edge of the window."""
 
     data_dict = _build_data_dict(dataset)
     aligned = core.align_on_peak(data_dict, auto_range=auto_range)
+
+    if recalibrate:
+        print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
+        print(" Select which file's time axis to use:")
+        while True:
+            for i, filename in enumerate(aligned.keys()):
+                print(f"  {i}: {filename}")
+            selection = input(f"Enter a number from 0 to {len(aligned)-1}: ")
+            try:            
+                idx = int(selection)
+                if idx < 0 or idx >= len(aligned):
+                    print("Must be a valid number from the list.")
+                    continue
+                selected_filename = list(aligned.keys())[idx]
+                break
+            except ValueError:
+                print("Must be a valid number from the list.")
+        print(f"Selected '{selected_filename}' as the T0 reference. Recalibrating all files to share its time axis.")
+
+        ref_data = aligned[selected_filename]
+        ref_axis = ref_data[:, 0]
+
+        for filename, data in aligned.items():
+            if filename == selected_filename:
+                continue
+            aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
 
     if show_graph:
         import matplotlib.pyplot as plt
@@ -349,6 +445,7 @@ def align_to_reference(
     ref_type: str = 'reference',
     roi: tuple | None = None,
     max_lag_ps: float | None = None,
+    subsample_correction: bool | None = None,
     show_graph: bool = False,
 ) -> DataSet:
     """Shift each sample in time so it shares its reference's T0 (cross-correlation).
@@ -356,7 +453,7 @@ def align_to_reference(
     Calibration step: removes the bulk instrumental timing offset between a
     sample and its reference by cross-correlating their time-domain pulses (with
     sub-sample, parabolic precision) and shifting the SAMPLE onto the reference's
-    time axis. The reference is the T0 anchor and is left untouched.
+    time axis. The reference is the T0 anchor and is left untouched. The shift is a pure time translation of the sample's time axis, no resampling or interpolation of the Y values.
 
     Cross-correlation maximises |correlation|, so it aligns correctly even when
     the sample pulse is sign-flipped relative to the reference (e.g. a
@@ -376,9 +473,18 @@ def align_to_reference(
     max_lag_ps : float | None
         Optional cap on the search lag in ps. Default None uses ``align_time``'s
         default (a quarter of the trace length).
+    subsample_correction : bool | None
+        Override for the module-level ``SUBSAMPLE_TIMING_CORRECTION`` toggle. When
+        the effective value is True, only the whole-sample part of the measured
+        shift is slid on the time axis; the sub-sample residual is carried to
+        ``transfer_function`` and applied there as an exact spectral phase ramp
+        (no time-domain interpolation). When False, the residual is dropped — the
+        legacy integer-only behaviour. Default None defers to the module toggle.
     show_graph : bool
         If True, plot reference + sample before/after alignment per sample.
     """
+    if subsample_correction is None:
+        subsample_correction = SUBSAMPLE_TIMING_CORRECTION
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
             continue
@@ -402,21 +508,39 @@ def align_to_reference(
         _, _, metrics = core.align_time(ref_t, ref_y, samp_t, samp_y, {'align': align_cfg})
         shift = float(metrics['values']['applied_shift_seconds'])
 
-        # Apply the same shift to every sample column, on the reference grid.
-        new_columns = [ref_t]
-        for col_idx in range(1, data_obj.data.shape[1]):
-            col_on_ref = np.interp(ref_t, samp_t, data_obj.data[:, col_idx])
-            new_columns.append(
-                np.interp(ref_t - shift, ref_t, col_on_ref, left=0.0, right=0.0)
-            )
-        data_obj.processing_dict['pre_align'] = np.column_stack((samp_t, samp_y))
+        # Split the measured shift into a whole-sample part and a sub-sample
+        # residual. The whole-sample part is slid on the time axis: it is exactly
+        # representable on the grid and is picked up by pad_to_common_grid as an
+        # integer offset. The residual (|.| <= dt/2) is NOT representable as a grid
+        # slide — if left in the axis, pad_to_common_grid would silently round it
+        # away, leaving a residual linear phase error in H that biases n. We carry
+        # it to transfer_function and apply it there as an exact spectral phase
+        # ramp (Fourier shift theorem), so the time-domain Y is never resampled.
+        dt = float(np.median(np.diff(samp_t)))
+        integer_samples = int(round(shift / dt))
+        integer_shift = integer_samples * dt
+        subsample_residual = shift - integer_shift
+        applied_residual = subsample_residual if subsample_correction else 0.0
+
+        # Y values are unchanged — only the time axis slides, by a whole number of
+        # samples. No resampling, no interpolation, no zero-padding here.
+        data_obj.processing_dict['pre_align'] = data_obj.data.copy()
         data_obj.processing_dict['align_metrics'] = metrics
-        data_obj.data = np.column_stack(new_columns)
+        data_obj.processing_dict['subsample_shift_seconds'] = applied_residual
+        data_obj.processing_dict['subsample_shift_measured_seconds'] = subsample_residual
+        data_obj.processing_dict['subsample_correction_enabled'] = bool(subsample_correction)
+        shifted_data = data_obj.data.copy()
+        shifted_data[:, 0] = samp_t + integer_shift
+        data_obj.data = shifted_data
 
         corr = metrics['values'].get('corr_peak', float('nan'))
+        state = 'ON' if subsample_correction else 'OFF'
         print(
             f"Aligned '{filename}' to '{ref_obj.filename}': "
-            f"shift {shift * _S_TO_PS:+.4f} ps (corr {corr:.3f})"
+            f"shift {shift * _S_TO_PS:+.4f} ps = "
+            f"{integer_samples:+d} samp ({integer_shift * _S_TO_PS:+.4f} ps grid) + "
+            f"{subsample_residual * _S_TO_PS:+.4f} ps sub-sample "
+            f"[correction {state}] (corr {corr:.3f})"
         )
 
     if show_graph:
@@ -431,8 +555,8 @@ def align_to_reference(
                         color='0.5', lw=1, label='reference')
             if pre is not None:
                 ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], '--', lw=1, alpha=0.7,
-                        label='sample (before)')
-            ax.plot(data_obj.data[:, 0] * _S_TO_PS, data_obj.data[:, 1], lw=1.4,
+                        label='sample (before)')            
+                ax.plot(data_obj.data[:, 0] * _S_TO_PS, data_obj.data[:, 1], lw=1.4,
                     label='sample (aligned)')
             ax.set_xlabel('Time (ps)')
             ax.set_ylabel('Amplitude')
@@ -567,6 +691,19 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
         Y_ref = ref_obj.processing_dict['fft_spectrum']
 
         H, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
+
+        # Apply the sub-sample timing residual left over by align_to_reference, as
+        # an exact spectral phase ramp (Fourier shift theorem). This completes the
+        # T0 alignment to sub-sample precision without ever interpolating the
+        # time-domain trace. It is a no-op (residual = 0) when alignment was not
+        # run, or when the SUBSAMPLE_TIMING_CORRECTION toggle was off.
+        subsample_shift = data_obj.processing_dict.get('subsample_shift_seconds', 0.0)
+        if subsample_shift:
+            H = H * np.exp(-1j * 2.0 * np.pi * freq * subsample_shift)
+            print(
+                f"[sub-sample] '{filename}': applied spectral phase ramp for "
+                f"{subsample_shift * _S_TO_PS:+.4f} ps residual timing."
+            )
 
         data_obj.processing_dict['transfer_H'] = H
         data_obj.processing_dict['transfer_metrics'] = tf_metrics
@@ -729,6 +866,11 @@ def invert_nk_reflection(
         )
     else:
         raise ValueError(f"Unknown geometry '{geometry}'. Use 'gold' or 'window'.")
+
+    print("---- Angles ----")
+    print(f"External angle = {np.rad2deg(theta_external_rad):.2f} deg")
+    print(f"Internal angle = {np.rad2deg(theta_internal_rad):.2f} deg")
+
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):

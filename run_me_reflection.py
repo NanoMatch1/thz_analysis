@@ -28,44 +28,30 @@ from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
 
 
-# ── configuration ───────────────────────────────────────────────────────────
-FILE_DIR = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing"
-
-INTERACTIVE = True          # True -> SpanSelector per file; False -> GATES below
-SHOW_GRAPHS = False          # set True when running with a GUI to see each stage
-
-THETA_EXTERNAL_DEG = 45.0    # external incidence angle (refracts inside the window)
-N_SIO2 = 1.95                # fused-silica THz index (supplied; extraction deferred)
-POLARIZATION = "s"
-
-# Headless gates in ps (first reflection ~153.4 ps, second reflection ~164.3 ps;
-# window 151-169). The GaP detection-crystal echo at ~158.7 ps is excluded.
-GATES = {
-    "first_reflection": (151.2, 158.5),
-    "second_reflection": (159.5, 168.8),
-}
 
 
-def segment(file_dir=FILE_DIR, interactive=INTERACTIVE, show_graphs=SHOW_GRAPHS):
+
+def segment(dataset, config):
     """Phase 1: crop the first + second reflections to separate .acc files.
 
     Returns the segmented root dir; the second reflections land in
     ``<root>/second_reflection/`` with the original filenames.
     """
-    dataset = DataSet(file_dir)
-    dataset.load_all_data(case_insensitive=True)
+    # dataset = DataSet(file_dir)
+    # dataset.load_all_data(case_insensitive=True)
+    show_graphs = config.get("show_graphs", False)
+    interactive = config.get("interactive", False)
+    gates = config.get("gates", None)
 
-    segments = None if interactive else GATES
+    segments = None if interactive else gates
     thz.segment_reflections(
         dataset, segments=segments, show_graph=show_graphs,
     )
-    return os.path.join(file_dir, "segmented")
+    return os.path.join(config["file_dir"], "segmented")
 
 
-def process(component_dir, show_graphs=False):
+def process(dataset, config, show_graphs=False):
     """Phase 2: the normal transmission-style chain on the second reflections."""
-    dataset = DataSet(component_dir)
-    dataset.load_all_data(case_insensitive=True)
 
     # Pair sample <-> SiO2 reference. keywords=['type'] keeps the differing
     # descriptor tokens (sio2 vs CNT-s-1) out of the match criteria so the two
@@ -76,6 +62,7 @@ def process(component_dir, show_graphs=False):
     # Calibrate: shift each sample to its reference T0 (removes the instrumental
     # timing offset; cross-correlation, sub-sample, handles the sign flip).
     thz.align_to_reference(dataset, ref_type="reference")
+    # thz.pre_window_align_peak(dataset, show_graph=show_graphs, recalibrate=True)  #, auto_range=(40,60))
 
     thz.window_time(dataset, config={"window": {"type": "Hann", "alpha": 0.1}}, show_graph=show_graphs)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graphs)
@@ -92,9 +79,9 @@ def process(component_dir, show_graphs=False):
     thz.invert_nk_reflection(
         dataset,
         geometry="window",
-        theta_deg=THETA_EXTERNAL_DEG,
-        polarization=POLARIZATION,
-        n_window=N_SIO2,
+        theta_deg=config["theta_external_deg"],
+        polarization=config["polarization"],
+        n_window=config["n_sio2"],
     )
     thz.derive_eps_sigma(dataset)
     return dataset
@@ -132,11 +119,35 @@ def report(dataset, band_thz=(0.5, 3.0)):
 
 
 if __name__ == "__main__":
-    INTERACTIVE = True          # True -> SpanSelector per file; False -> GATES below
-    # segmented_root = segment()
-    show_graphs = True
-    segmented_root = os.path.join(FILE_DIR, "segmented")
 
-    ds = process(os.path.join(segmented_root, "second_reflection"), show_graphs=show_graphs)
+    # --- CONFIG ---
+    config = {
+        "file_dir": r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing\segmented\second_reflection",
+        # "file_dir": r"C:\Users\Samuel\Data\THz\Sam\2026-06-08_CNT-paper\export",
+        # "file_dir": r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\segmented\second_reflection",
+        "interactive": True,
+        "show_graphs": True,
+        "theta_external_deg": 45.0,
+        "n_sio2": 1.95,
+        "polarization": "s",
+        "gates": {
+            "first_reflection": (151.2, 158.5),
+            "second_reflection": (159.5, 168.8),
+        },
+    }
+    # import acquisition_editor
+    # acquisition_editor.process_directory(config["file_dir"])
+
+    # --- LOAD  ---
+    dataset = DataSet(config['file_dir'])
+    dataset.load_database()  # optional .db file with pre-parsed metadata; skip if you want to re-parse from the raw files
+    dataset.load_all_data(case_insensitive=True)
+    # dataset.load_state()  # optional .state file with pre-computed processing results; skip if you want to re-run the chain from scratch
+    # segmented_root = segment(dataset, config)
+    show_graphs = True
+
+    # --- PROCESS + REPORT ---
+    ds = process(dataset, config, show_graphs=show_graphs)
     report(ds)
     thz.result_viewer(ds)
+    dataset.save_database()
