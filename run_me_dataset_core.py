@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
     # acquisition_editor(fileDir)
     dataset = DataSet(fileDir)
-    show_graph = False
+    show_graph = True
     dataset.load_all_data(case_insensitive=True)
     dataset.plot_current()
         
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     dataset.group_files(keywords=['type', 'seri'])
     dataset.grouping.show_matches()
 
-    # thz.align_to_reference(dataset, ref_type="reference", show_graph=show_graph)
+    thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=show_graph)
     # dataset.plot_current()
     # dataset.load_database('CNT_interp_norm_2_db.pkl')
     # thz.segment_reflections(dataset, show_graph=show_graph)
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     # dataset.save_database()
     # print("Stop after pre-processing and alignment.")
     # breakpoint()
-    thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.2}}, show_graph=show_graph)
+    thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.3}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 1.5,
