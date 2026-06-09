@@ -64,6 +64,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-08_CNT-paper"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\CNT"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
     # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
@@ -80,6 +81,13 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
     import sys
+
+    def filter_dataset(dataset, keyword, set_current=True):
+        """Filter the dataset to include only files that contain the specified keyword in their filename."""
+        data_dict = {filename: data_obj for filename, data_obj in dataset.data_dict.items() if keyword in filename}
+        if set_current:
+            dataset.set_current_files(data_dict.keys())
+        return data_dict
 
     def acquisition_editor(fileDir):
         import acquisition_editor
@@ -115,7 +123,6 @@ if __name__ == "__main__":
     ### --- Config Setup ---
 
     ### --- Acquisition editing ---
-
    
     def preprocess(dataset):
         dataset.load_all_data(case_insensitive=True)
@@ -140,12 +147,20 @@ if __name__ == "__main__":
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
     dataset.plot_current()
-        
+
+    filtered_data = filter_dataset(dataset, "reference")
+    dataset.plot_current()
+
     ### --- Pre-processing and segmentation ---
     # preprocess(dataset)
     thz.subtract_baseline(dataset, show_graph=show_graph)
     dataset.group_files(keywords=['type', 'seri'])
     dataset.grouping.show_matches()
+
+    for filename, data_obj in dataset.data_dict.items():
+        if data_obj.is_reference:
+            print(f"Reference file: {filename}")
+        breakpoint()
 
     thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=show_graph)
     # dataset.plot_current()
@@ -182,7 +197,7 @@ if __name__ == "__main__":
     # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='log')
     # thz.plot_fft(dataset)
 
-    # thz.phase_correction(dataset, source='transfer')
+    thz.phase_correction(dataset, source='transfer')
 
     # dataset.save_state()
     # thz.invert_nk(dataset, thickness_m=1e-3)

@@ -118,6 +118,9 @@ class DataService:
         current_filenames = self.grouping.get_current_data_list()
         return {key: self._data_dict[key] for key in current_filenames if key in self._data_dict}
 
+    def set_current_files(self, filenames):
+        self.grouping.set_current_data_list(list(filenames))
+
     def update_filelist(self, filelist):
         self.grouping.update(filelist=filelist)
 
@@ -480,6 +483,11 @@ class DataSet:
     def plot_current(self, **kwargs) -> None:
         '''Plots the current data for all data objects in the dataset.'''
         for name, data_object in self.data.items():
+            if kwargs.get('filenames', None) is not None:
+                filter_kw = kwargs['filenames']
+                if filter_kw not in name:
+                    continue
+
             figure_obj = self._generate_figure_object('main')
             data_object.plot_current(figure_obj=figure_obj, **kwargs)
         
