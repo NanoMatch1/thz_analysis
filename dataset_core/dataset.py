@@ -617,8 +617,14 @@ class DataSet:
 
         print(f"Saved dataset to database at {db_path}.")
 
-    def load_database(self, seriesname=None, database_dir=r"C:\Users\Samuel\Data\database"):
-        '''Loads a dataset from the database directory. Displays a chronologically ordered list (latest last), optionally filtered by a search query, and prompts the user to select one.'''
+    def load_database(self, seriesname=None, index=None, database_dir=r"C:\Users\Samuel\Data\database"):
+        '''Loads a dataset from the database directory. Displays a chronologically ordered list (latest last), optionally filtered by a search query, and prompts the user to select one.
+        
+        Shortcuts:
+          seriesname : str  — used as a search filter; auto-selects if only one match.
+          index      : int or str — directly selects from the full ordered list by 1-based position
+                       (same numbering shown in the printed list). Negative indices count from the end.
+        '''
         import pickle
         if not (os.path.exists(database_dir) and os.path.isdir(database_dir)):
             print(f"Database directory '{database_dir}' does not exist.")
@@ -647,36 +653,53 @@ class DataSet:
 
         ordered_entries = list(existing_entries)
 
-        if seriesname is not None:
-            query = seriesname.strip()
-        else:
-            query = input("Enter a search query to filter datasets (or press Enter to show all): ").strip()
-
-        filtered_entries = [
-            (fname, notes) for fname, notes in ordered_entries
-            if query.lower() in fname.lower() or query.lower() in notes.lower()
-        ] if query else ordered_entries
-        if not filtered_entries:
-            print(f"No datasets matching '{query}'.")
-            return
-
-        print("\nAvailable datasets (latest first):")
-        for i, (fname, notes) in enumerate(filtered_entries):
-            print(f"  [{i + 1}] {fname}")
-            if notes:
-                print(f"       {notes}")
-
-        selection = input("\nEnter the number of the dataset to load: ").strip()
-        try:
-            selection_index = int(selection) - 1
-            if selection_index < 0 or selection_index >= len(filtered_entries):
-                print("Invalid selection.")
+        # Direct index shortcut: bypass search and selection entirely.
+        if index is not None:
+            try:
+                idx = int(index)
+                # Convert 1-based positive index; negative indices work naturally.
+                if idx > 0:
+                    idx -= 1
+                selected_filename = ordered_entries[idx][0]
+            except (ValueError, IndexError):
+                print(f"Invalid index '{index}'. Must be an integer within the list range.")
                 return
-        except ValueError:
-            print("Invalid input. Please enter a number.")  
-            return
+            print(f"Auto-selected [{int(index)}]: {selected_filename}")
+        else:
+            if seriesname is not None:
+                query = seriesname.strip()
+            else:
+                query = input("Enter a search query to filter datasets (or press Enter to show all): ").strip()
 
-        selected_filename = filtered_entries[selection_index][0]
+            filtered_entries = [
+                (fname, notes) for fname, notes in ordered_entries
+                if query.lower() in fname.lower() or query.lower() in notes.lower()
+            ] if query else ordered_entries
+            if not filtered_entries:
+                print(f"No datasets matching '{query}'.")
+                return
+
+            if len(filtered_entries) == 1:
+                selected_filename = filtered_entries[0][0]
+                print(f"Auto-selected: {selected_filename}")
+            else:
+                print("\nAvailable datasets (latest first):")
+                for i, (fname, notes) in enumerate(filtered_entries):
+                    print(f"  [{i + 1}] {fname}")
+                    if notes:
+                        print(f"       {notes}")
+
+                selection = input("\nEnter the number of the dataset to load: ").strip()
+                try:
+                    selection_index = int(selection) - 1
+                    if selection_index < 0 or selection_index >= len(filtered_entries):
+                        print("Invalid selection.")
+                        return
+                except ValueError:
+                    print("Invalid input. Please enter a number.")
+                    return
+
+                selected_filename = filtered_entries[selection_index][0]
 
         db_path = os.path.join(database_dir, selected_filename)
 

@@ -120,7 +120,7 @@ def _plot_with_snr_mask(
     y: np.ndarray,
     mask: np.ndarray | None,
     *,
-    colour=None,
+    color=None,
     label: str | None = None,
     full_alpha: float = 0.9,
     masked_alpha: float = 0.2,
@@ -136,23 +136,23 @@ def _plot_with_snr_mask(
     If ``mask`` is all False, plots a single dimmed line tagged "(low SNR)".
     """
     if mask is None:
-        line, = ax.plot(x, y, color=colour, label=label, alpha=full_alpha, **plot_kwargs)
+        line, = ax.plot(x, y, color=color, label=label, alpha=full_alpha, **plot_kwargs)
         return line
 
     mask_arr = np.asarray(mask, dtype=bool)
     if mask_arr.all():
-        line, = ax.plot(x, y, color=colour, label=label, alpha=full_alpha, **plot_kwargs)
+        line, = ax.plot(x, y, color=color, label=label, alpha=full_alpha, **plot_kwargs)
         return line
     if not mask_arr.any():
         dim_label = f"{label} (low SNR)" if label else None
-        line, = ax.plot(x, y, color=colour, label=dim_label, alpha=masked_alpha, **plot_kwargs)
+        line, = ax.plot(x, y, color=color, label=dim_label, alpha=masked_alpha, **plot_kwargs)
         return line
 
-    full_line, = ax.plot(x, y, color=colour, alpha=masked_alpha, **plot_kwargs)
-    actual_colour = full_line.get_color()
+    full_line, = ax.plot(x, y, color=color, alpha=masked_alpha, **plot_kwargs)
+    actual_color = full_line.get_color()
     y_trusted = np.where(mask_arr, y, np.nan)
     trusted_line, = ax.plot(
-        x, y_trusted, color=actual_colour, label=label, alpha=full_alpha, **plot_kwargs,
+        x, y_trusted, color=actual_color, label=label, alpha=full_alpha, **plot_kwargs,
     )
     return trusted_line
 
@@ -1558,7 +1558,7 @@ class ResultViewer:
         self._all_names = [fn for fn in dataset.data.keys()]
         self._visible = {fn: True for fn in self._sample_names}
 
-        # Assign a stable colour per sample for consistency across views
+        # Assign a stable color per sample for consistency across views
         cmap = plt.cm.get_cmap('tab10')
         self._colours = {
             fn: cmap(i % 10) for i, fn in enumerate(self._sample_names)
@@ -1730,7 +1730,7 @@ class ResultViewer:
             masked_alpha = 0.2 if is_sample else 0.1
             _plot_with_snr_mask(
                 ax, freq * _HZ_TO_THZ, np.abs(spec), self._spec_mask(fn),
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
                 full_alpha=full_alpha, masked_alpha=masked_alpha,
             )
         ax.set_xlabel('Frequency (THz)')
@@ -1753,7 +1753,7 @@ class ResultViewer:
             masked_alpha = 0.2 if is_sample else 0.1
             _plot_with_snr_mask(
                 ax, freq * _HZ_TO_THZ, phase, self._spec_mask(fn),
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
                 full_alpha=full_alpha, masked_alpha=masked_alpha,
             )
         ax.set_xlabel('Frequency (THz)')
@@ -1770,7 +1770,7 @@ class ResultViewer:
                 continue
             _plot_with_snr_mask(
                 ax, freq * _HZ_TO_THZ, np.abs(H), self._trusted_mask(fn),
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|H(f)|')
@@ -1787,7 +1787,7 @@ class ResultViewer:
             phase = np.unwrap(np.angle(H))
             _plot_with_snr_mask(
                 ax, freq * _HZ_TO_THZ, phase, self._trusted_mask(fn),
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('Phase (rad)')
@@ -1805,11 +1805,11 @@ class ResultViewer:
             mask = self._trusted_mask(fn)
             _plot_with_snr_mask(
                 ax_n, freq * _HZ_TO_THZ, n, mask,
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
             _plot_with_snr_mask(
                 ax_k, freq * _HZ_TO_THZ, k, mask,
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
         ax_n.set_ylabel('n')
         ax_n.set_title('Refractive Index')
@@ -1829,11 +1829,11 @@ class ResultViewer:
             mask = self._trusted_mask(fn)
             _plot_with_snr_mask(
                 ax_r, freq * _HZ_TO_THZ, eps.real, mask,
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
             _plot_with_snr_mask(
                 ax_i, freq * _HZ_TO_THZ, eps.imag, mask,
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
         ax_r.set_ylabel(r'$\varepsilon_r$')
         ax_r.set_title(r'Permittivity — Real ($n^2 - k^2$)')
@@ -1853,11 +1853,11 @@ class ResultViewer:
             mask = self._trusted_mask(fn)
             _plot_with_snr_mask(
                 ax_r, freq * _HZ_TO_THZ, sigma.real, mask,
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
             _plot_with_snr_mask(
                 ax_i, freq * _HZ_TO_THZ, sigma.imag, mask,
-                colour=self._colours[fn], label=self._short(fn),
+                color=self._colours[fn], label=self._short(fn),
             )
         ax_r.set_ylabel(r'$\sigma_r$ (S/m)')
         ax_r.set_title('Optical Conductivity — Real')

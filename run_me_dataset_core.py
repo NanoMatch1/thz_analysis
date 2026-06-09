@@ -67,8 +67,11 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-08_CNT-paper"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\CNT"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10A"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10A\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10B"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10B\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\A\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
     # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
@@ -127,7 +130,7 @@ if __name__ == "__main__":
 
     ### --- Acquisition editing ---
    
-    def preprocess(dataset, show_graph=False):
+    def preprocess(dataset, show_graph=True):
         dataset.load_all_data(case_insensitive=True)
         # dataset.plot_current()
         # --- For reflection data ---
@@ -140,8 +143,8 @@ if __name__ == "__main__":
         thz.align_to_reference(dataset, ref_type="reference", roi=(152, 156), subsample_correction=True, show_graph=show_graph)
         # dataset.plot_current()
 
-        # thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158), 'second_reflection': (161.4, 167.4)})
+        thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
+        thz.segment_reflections(dataset, show_graph=True)#, segments={'first_reflection': (151, 158), 'second_reflection': (161.4, 167.4)})
         print("Pre-processing complete.")
         sys.exit()
 
@@ -153,7 +156,7 @@ if __name__ == "__main__":
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
     dataset.plot_current()
-    # preprocess(dataset)
+    preprocess(dataset)
 
     # filtered_data = filter_dataset(dataset, "reference", set_current=True)
     # dataset.plot_current(filenames=[filename for filename in dataset.data_dict if "reference" in filename])
@@ -163,24 +166,11 @@ if __name__ == "__main__":
     ### --- Pre-processing and segmentation ---
     # preprocess(dataset)
     thz.subtract_baseline(dataset, show_graph=show_graph)
-
-    # for filename, data_obj in dataset.data_dict.items():
-    #     print(f"{filename}")
-    #     dataX = data_obj.raw_data[:, 0]
-    #     dataY = data_obj.raw_data[:, 1]
-        
-    #     mask_range = (152, 156)
-    #     data_mask = (dataX >= mask_range[0]) & (dataX <= mask_range[1])
-    #     breakpoint()
-    #     plt.plot(dataX[data_mask], dataY[data_mask])
-    #     plt.title(f"Zoomed-in view of {filename} around {mask_range[0]}-{mask_range[1]} ps")
-    #     plt.show()
-    #     norm_data = dataY / np.max(dataY)
-
     dataset.group_files(keywords=['type'])
     dataset.grouping.show_matches()
 
-    # thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=show_graph)
+    # thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
+    # thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=False)
     # dataset.plot_current()
     # dataset.load_database('CNT_interp_norm_2_db.pkl')
     # thz.segment_reflections(dataset, show_graph=show_graph)
@@ -190,8 +180,8 @@ if __name__ == "__main__":
     # thz.pre_window_align_peak(dataset, show_graph=show_graph)
     # thz.plot_current(dataset)
     # thz.pre_window_align_peak(dataset,show_graph=show_graph)
-    # thz.global_truncate(dataset)
-    # dataset.plot_current()
+    thz.global_truncate(dataset)
+    dataset.plot_current()
     # breakpoint()
 
     # dataset.save_state()
@@ -202,9 +192,9 @@ if __name__ == "__main__":
     # print("Stop after pre-processing and alignment.")
     # breakpoint()
     thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.3}}, show_graph=show_graph)
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
-    thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 1.5,
+    thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
                                                  "tail_fraction": 0.25,
                                                  "min_contiguous_bins": 3}})
     thz.transfer_function(dataset, config={"transfer": {"apply_snr_mask": True}}, ref_type='reference')
