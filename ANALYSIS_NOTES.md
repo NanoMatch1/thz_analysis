@@ -316,3 +316,38 @@ reflection delay, or a gap?
   fit for quantitative n,k despite imperfect contact.
 - **Open / offered:** prototype the de-embedding + a synthetic test (smooth gap →
   exact r2 recovery; Gaussian d-distribution → high-f |x| roll-off).
+
+## 10. Artificial time-shift sweep (qualitative phase exploration)  (2026-06-09)
+Tool to scrub an artificial sub-sample T0 shift on a chosen sample and watch where
+n/k/σ land — for testing "which shift reproduces the expected (Drude-like) shape".
+- **Implementation:** `thz_adapter.sweep_time_shift` (array result),
+  `time_shift_slider` (blitting interactive), `time_shift_waterfall` (static map).
+  The shift is applied EXACTLY as a spectral phase ramp `H·exp(-i·2πf·Δt)`
+  (`core.phase_ramp`) — **no time-domain interpolation** (which would low-pass the
+  very shape being assessed). Each step is exact to float precision; sub-sample
+  steps are arbitrary-fine. No integer/fractional split needed here (the split in
+  `align_to_reference` is only to keep the *plotted* trace visually aligned).
+- **Cheap by construction:** |H| and the SNR mask are invariant under a phase ramp,
+  so they're computed once; the slider pre-sweeps the whole range, then each frame
+  is an array lookup + `set_ydata` + blit. Reflection inversion is closed-form
+  (no iteration) → per-frame cost is negligible; rendering is the only limiter.
+- **★ Methodological caveat (confirmation bias).** Sweeping Δt is manually
+  exercising the phase-calibration degree of freedom; you *can* dial n over a wide
+  range and coax a Drude-looking σ at more than one shift. "It matches at Δt=X" is a
+  hypothesis, not proof. Honest cross-check: the Δt↔n mapping is closed-form (a
+  shift adds a known linear phase; the window inversion is analytic), so
+  back-calculate the Δt that *should* give the expected n at a reference frequency
+  and confirm it agrees with the slider landing — if not, the "expected shape" came
+  from somewhere the shift can't legitimately reach.
+- **Display scaling ★ (gotcha).** The reflection inversion spikes 1–2 orders of
+  magnitude at low-SNR band edges (the `|1+r|→0` conditioning limit, §6b): for
+  CNT-10A `a-12.6_cnt-s`, σ₁ median ≈74 but 1200–1644 at 3.5–4.2 THz. Auto-scaling
+  to min/max then flattens the real sub-1 THz structure to an invisible line/flat
+  colour (this read as "no data" / "nothing above 0.5 THz"). Fix: robust
+  percentile limits — slider y-limits 1–99 %, waterfall colour 2–98 %
+  (`_robust_limits`). `band_thz=` overrides the SNR mask for exploration past the
+  trusted band (data there is real but below SNR — interpret accordingly).
+- **Slider rendering:** uses `set_ydata` + `draw_idle` (not manual blitting, which
+  fought the Slider widget and left the curve undrawn); fast enough for the
+  few-hundred-point curves. An initial `update()` draws the curve immediately.
+- Tests: `tests/test_time_shift_sweep.py` (6); `test_phase_ramp.py` (2, thz-core).

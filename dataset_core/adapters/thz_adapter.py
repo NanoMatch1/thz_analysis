@@ -703,7 +703,7 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
         # run, or when the SUBSAMPLE_TIMING_CORRECTION toggle was off.
         subsample_shift = data_obj.processing_dict.get('subsample_shift_seconds', 0.0)
         if subsample_shift:
-            H = H * np.exp(-1j * 2.0 * np.pi * freq * subsample_shift)
+            H = H * core.phase_ramp(freq, subsample_shift)
             print(
                 f"[sub-sample] '{filename}': applied spectral phase ramp for "
                 f"{subsample_shift * _S_TO_PS:+.4f} ps residual timing."
@@ -800,6 +800,28 @@ def invert_nk(dataset: DataSet, thickness_m: float, config: dict | None = None) 
     return dataset
 
 
+def _resolve_reflection_geometry(
+    geometry: str,
+    theta_external_rad: float,
+    r_reference: complex,
+    n_window: complex | np.ndarray,
+) -> tuple:
+    """Resolve (n_incident, theta_internal_rad, r_reference_value) for a geometry.
+
+    Single source of truth for the 'gold' vs 'window' reflection model, shared by
+    ``invert_nk_reflection`` and ``sweep_time_shift`` so the two never diverge.
+    """
+    if geometry == 'gold':
+        return 1.0, theta_external_rad, r_reference
+    if geometry == 'window':
+        theta_internal_rad = float(
+            np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window))
+        )
+        r_reference_value = core.fresnel_reflection_s(n_window, 1.0, theta_internal_rad)
+        return n_window, theta_internal_rad, r_reference_value
+    raise ValueError(f"Unknown geometry '{geometry}'. Use 'gold' or 'window'.")
+
+
 def invert_nk_reflection(
     dataset: DataSet,
     *,
@@ -856,20 +878,9 @@ def invert_nk_reflection(
     config = config or {}
     theta_external_rad = np.deg2rad(theta_deg)
 
-    if geometry == 'gold':
-        n_incident = 1.0
-        theta_internal_rad = theta_external_rad
-        r_reference_value = r_reference
-    elif geometry == 'window':
-        n_incident = n_window
-        theta_internal_rad = float(
-            np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window))
-        )
-        r_reference_value = core.fresnel_reflection_s(
-            n_window, 1.0, theta_internal_rad,
-        )
-    else:
-        raise ValueError(f"Unknown geometry '{geometry}'. Use 'gold' or 'window'.")
+    n_incident, theta_internal_rad, r_reference_value = _resolve_reflection_geometry(
+        geometry, theta_external_rad, r_reference, n_window,
+    )
 
     print("---- Angles ----")
     print(f"External angle = {np.rad2deg(theta_external_rad):.2f} deg")
@@ -1067,6 +1078,333 @@ def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:
         ))
 
     return dataset
+
+
+# ---------------------------------------------------------------------------
+# Artificial time-shift sweep (qualitative phase-calibration exploration)
+# ---------------------------------------------------------------------------
+
+def _select_sample(dataset: DataSet, sample: str | None):
+    """Resolve a sample to (filename, data_obj): explicit name, substring, or first."""
+    names = [fn for fn, _ in dataset.data.items() if not dataset.data.is_reference(fn)]
+    if not names:
+        raise ValueError("Dataset has no non-reference samples.")
+    if sample is None:
+        return names[0], dataset.data[names[0]]
+    if sample in names:
+        return sample, dataset.data[sample]
+    matches = [fn for fn in names if sample.lower() in fn.lower()]
+    if len(matches) == 1:
+        return matches[0], dataset.data[matches[0]]
+    if not matches:
+        raise ValueError(f"No sample matching '{sample}'. Available: {names}")
+    raise ValueError(f"Ambiguous sample '{sample}' matches {matches}.")
+
+
+def sweep_time_shift(
+    dataset: DataSet,
+    shifts_seconds,
+    *,
+    sample: str | None = None,
+    band_thz: tuple | None = None,
+    geometry: str = 'window',
+    theta_deg: float = 45.0,
+    polarization: str = 's',
+    r_reference: complex = -1.0 + 0.0j,
+    n_window: complex | np.ndarray = 1.95,
+    config: dict | None = None,
+) -> dict:
+    """Apply a series of artificial sub-sample time shifts and re-invert each.
+
+    Reuses the already-computed transfer function H (run the pipeline through
+    ``transfer_function`` first). Each shift is applied EXACTLY as a spectral phase
+    ramp ``H*exp(-i*2*pi*f*dt)`` (no time-domain interpolation), then the standard
+    reflection inversion + eps/sigma derivation runs on the shifted H. Only the
+    phase-derived quantities (n, k, sigma) change — |H| and the SNR mask are
+    invariant under a pure phase ramp, so they are computed once.
+
+    Parameters
+    ----------
+    shifts_seconds : array-like
+        Artificial time shifts (seconds), applied on top of the current H.
+    sample : str | None
+        Sample filename (or unique substring). Default: first non-reference sample.
+    band_thz : (float, float) | None
+        Override the inversion band. By default the SNR ``transfer_mask`` is used,
+        which for weak reflections can top out well below the Nyquist range. Pass a
+        ``(lo, hi)`` THz window to invert over all finite bins in that range instead
+        (useful for *qualitative* exploration past the trusted band — interpret the
+        extra reach with the SNR caveat in mind).
+    geometry, theta_deg, polarization, r_reference, n_window :
+        Same reflection geometry parameters as ``invert_nk_reflection``.
+
+    Returns
+    -------
+    dict with keys ``sample``, ``shifts`` (s), ``freq`` (Hz), ``mask``,
+    ``n``, ``k``, ``sigma1``, ``sigma2`` (each shape ``(n_shifts, n_freq)``),
+    plus ``theta_internal_rad`` and ``r_reference``.
+    """
+    config = config or {}
+    filename, data_obj = _select_sample(dataset, sample)
+    proc = data_obj.processing_dict
+    H = proc.get('transfer_H')
+    mask = proc.get('transfer_mask')
+    freq = proc.get('fft_freq')
+    if H is None or mask is None or freq is None:
+        raise ValueError(
+            f"'{filename}' has no transfer function; run the pipeline through "
+            f"transfer_function before sweeping."
+        )
+    H = np.asarray(H)
+    freq = np.asarray(freq)
+    mask = np.asarray(mask)
+
+    if band_thz is not None:
+        freq_thz = freq * _HZ_TO_THZ
+        mask = (
+            (freq_thz >= band_thz[0]) & (freq_thz <= band_thz[1])
+            & np.isfinite(H) & (freq > 0.0)
+        )
+
+    theta_external_rad = np.deg2rad(theta_deg)
+    n_incident, theta_internal_rad, r_reference_value = _resolve_reflection_geometry(
+        geometry, theta_external_rad, r_reference, n_window,
+    )
+
+    shifts = np.asarray(shifts_seconds, dtype=float)
+    n_freq = freq.size
+    n_arr = np.full((shifts.size, n_freq), np.nan)
+    k_arr = np.full((shifts.size, n_freq), np.nan)
+    sigma1 = np.full((shifts.size, n_freq), np.nan)
+    sigma2 = np.full((shifts.size, n_freq), np.nan)
+
+    for i, shift in enumerate(shifts):
+        H_shifted = H * core.phase_ramp(freq, float(shift))
+        r_sample = r_reference_value * H_shifted
+        n, k, _ = core.invert_nk_reflection(
+            freq, r_sample, mask, config,
+            theta_rad=theta_internal_rad, polarization=polarization,
+            n_incident=n_incident,
+        )
+        eps, sigma, _ = core.derive_eps_sigma(freq, n, k, config)
+        n_arr[i] = n
+        k_arr[i] = k
+        sigma1[i] = np.real(sigma)
+        sigma2[i] = np.imag(sigma)
+
+    return {
+        'sample': filename,
+        'shifts': shifts,
+        'freq': freq,
+        'mask': mask,
+        'n': n_arr,
+        'k': k_arr,
+        'sigma1': sigma1,
+        'sigma2': sigma2,
+        'theta_internal_rad': theta_internal_rad,
+        'r_reference': r_reference_value,
+    }
+
+
+_SWEEP_PANELS = {
+    'sigma': (('sigma1', 'σ₁ (S/m)'), ('sigma2', 'σ₂ (S/m)')),
+    'nk': (('n', 'n'), ('k', 'k')),
+}
+
+
+def _robust_limits(values: np.ndarray, lo_pct: float, hi_pct: float) -> tuple:
+    """Percentile limits over finite values, robust to ill-conditioning blow-up.
+
+    The reflection inversion can spike by 1-2 orders of magnitude at low-SNR
+    band edges (the |1+r|->0 conditioning limit). Auto-scaling to min/max then
+    squashes the meaningful mid-band structure into a flat line/colour, so axes
+    and colour ranges are set from percentiles instead.
+    """
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return None, None
+    lo, hi = np.percentile(finite, [lo_pct, hi_pct])
+    if hi <= lo:
+        lo, hi = float(finite.min()), float(finite.max())
+        if hi <= lo:
+            hi = lo + 1.0
+    return float(lo), float(hi)
+
+
+def time_shift_waterfall(
+    result: dict,
+    *,
+    quantity: str = 'sigma1',
+    freq_range_thz: tuple | None = None,
+    ax=None,
+    cmap: str = 'viridis',
+    vmin: float | None = None,
+    vmax: float | None = None,
+):
+    """Static 2D map of a swept quantity: x = frequency, y = artificial shift.
+
+    ``result`` is the dict from ``sweep_time_shift``. ``quantity`` is one of
+    ``'n'``, ``'k'``, ``'sigma1'``, ``'sigma2'``. The colour range defaults to the
+    2-98th percentile of the displayed values (robust to the high-frequency
+    ill-conditioning blow-up); override with ``vmin``/``vmax``.
+    """
+    import matplotlib.pyplot as plt
+
+    freq_thz = result['freq'] * _HZ_TO_THZ
+    shifts_ps = result['shifts'] * _S_TO_PS
+    values = result[quantity]
+
+    if freq_range_thz is not None:
+        band = (freq_thz >= freq_range_thz[0]) & (freq_thz <= freq_range_thz[1])
+    else:
+        band = np.ones(freq_thz.size, dtype=bool)
+
+    displayed = values[:, band]
+    auto_lo, auto_hi = _robust_limits(displayed, 2.0, 98.0)
+    vmin = auto_lo if vmin is None else vmin
+    vmax = auto_hi if vmax is None else vmax
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 5), layout='constrained')
+    mesh = ax.pcolormesh(
+        freq_thz[band], shifts_ps, displayed, cmap=cmap, shading='auto',
+        vmin=vmin, vmax=vmax,
+    )
+    ax.figure.colorbar(mesh, ax=ax, label=quantity)
+    ax.set_xlabel('Frequency (THz)')
+    ax.set_ylabel('Artificial shift (ps)')
+    ax.set_title(f"{result['sample']} — {quantity} vs artificial time shift")
+    return ax
+
+
+def time_shift_slider(
+    dataset: DataSet,
+    *,
+    sample: str | None = None,
+    shift_range_ps: tuple = (-0.05, 0.05),
+    n_steps: int = 101,
+    quantity: str = 'sigma',
+    expected: dict | None = None,
+    freq_range_thz: tuple | None = None,
+    band_thz: tuple | None = None,
+    geometry: str = 'window',
+    theta_deg: float = 45.0,
+    polarization: str = 's',
+    r_reference: complex = -1.0 + 0.0j,
+    n_window: complex | np.ndarray = 1.95,
+    config: dict | None = None,
+    show: bool = True,
+    block: bool = True,
+) -> dict:
+    """Interactive slider over an artificial sub-sample time shift.
+
+    Pre-sweeps the whole shift range once (``sweep_time_shift``), so each slider
+    frame is just an array lookup + ``set_ydata`` + a ``draw_idle`` (the canonical
+    matplotlib widget pattern — fast and smooth for the few-hundred-point curves
+    here, and robust, unlike manual blitting which fights the Slider's own redraws).
+    Two stacked panels show the swept quantity pair (σ₁/σ₂ for ``quantity='sigma'``;
+    n/k for ``'nk'``). y-limits are fixed from the full sweep so the view is stable.
+
+    ``band_thz`` overrides the SNR mask so you can explore past the trusted band
+    (n/k/σ are NaN outside the inversion mask, which is why a weak reflection shows
+    nothing above its SNR cut-off by default). ``freq_range_thz`` only sets the
+    x-view; it does not widen the inversion.
+
+    ``expected`` overlays fixed reference curves: a dict mapping a panel key
+    (``'sigma1'``/``'sigma2'``/``'n'``/``'k'``) to ``(freq_thz, values)``.
+
+    Returns a dict with the figure, the slider, the precomputed ``result``, and an
+    ``update`` callable (so the view can be driven headlessly in tests).
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.widgets import Slider
+
+    if quantity not in _SWEEP_PANELS:
+        raise ValueError(f"quantity must be one of {list(_SWEEP_PANELS)}.")
+
+    shifts = np.linspace(
+        shift_range_ps[0] * 1e-12, shift_range_ps[1] * 1e-12, int(n_steps),
+    )
+    result = sweep_time_shift(
+        dataset, shifts, sample=sample, band_thz=band_thz, geometry=geometry,
+        theta_deg=theta_deg, polarization=polarization, r_reference=r_reference,
+        n_window=n_window, config=config,
+    )
+
+    freq_thz = result['freq'] * _HZ_TO_THZ
+    shifts_ps = result['shifts'] * _S_TO_PS
+    if freq_range_thz is not None:
+        band = (freq_thz >= freq_range_thz[0]) & (freq_thz <= freq_range_thz[1])
+    else:
+        band = np.ones(freq_thz.size, dtype=bool)
+    freq_plot = freq_thz[band]
+
+    panels = _SWEEP_PANELS[quantity]
+    initial_index = int(np.argmin(np.abs(shifts_ps)))  # shift closest to 0
+
+    fig, axes = plt.subplots(
+        len(panels), 1, figsize=(9, 7), sharex=True, layout='constrained',
+    )
+    if len(panels) == 1:
+        axes = [axes]
+
+    dynamic_lines = []
+    for ax, (key, label) in zip(axes, panels):
+        data = result[key][:, band]
+        # Robust y-limits over the whole sweep: percentiles, not min/max, so the
+        # high-frequency ill-conditioning blow-up doesn't flatten the real curve.
+        lo, hi = _robust_limits(data, 1.0, 99.0)
+        if lo is not None:
+            pad = 0.08 * (hi - lo or 1.0)
+            ax.set_ylim(lo - pad, hi + pad)
+        if expected is not None and key in expected:
+            ef, ev = expected[key]
+            ax.plot(ef, ev, '--', color='0.4', lw=1.6, label='expected')
+        (line,) = ax.plot(
+            freq_plot, data[initial_index], color='C0', lw=1.6, label='swept',
+        )
+        dynamic_lines.append((ax, line, data))
+        ax.axhline(0.0, color='0.85', lw=0.8, zorder=0)
+        ax.set_ylabel(label)
+        ax.legend(loc='best', fontsize=8)
+    axes[-1].set_xlabel('Frequency (THz)')
+
+    slider_ax = fig.add_axes([0.15, 0.005, 0.7, 0.03])
+    step_ps = float(shifts_ps[1] - shifts_ps[0]) if shifts_ps.size > 1 else 0.0
+    slider = Slider(
+        slider_ax, 'shift (ps)', shifts_ps[0], shifts_ps[-1],
+        valinit=shifts_ps[initial_index], valstep=step_ps or None,
+    )
+
+    title = fig.suptitle(
+        f"{result['sample']} — shift {shifts_ps[initial_index]:+.4f} ps"
+    )
+
+    def _index_for(val):
+        return int(np.clip(round((val - shifts_ps[0]) / step_ps), 0, shifts_ps.size - 1)) \
+            if step_ps else 0
+
+    def update(val):
+        i = _index_for(val)
+        title.set_text(f"{result['sample']} — shift {shifts_ps[i]:+.4f} ps")
+        for _ax, line, data in dynamic_lines:
+            line.set_ydata(data[i])
+        fig.canvas.draw_idle()
+        return i
+
+    slider.on_changed(update)
+    update(shifts_ps[initial_index])  # draw the initial curve immediately
+
+    if show:
+        plt.show(block=block)
+
+    return {
+        'figure': fig,
+        'slider': slider,
+        'result': result,
+        'update': update,
+        'lines': [line for _, line, _ in dynamic_lines],
+    }
 
 
 # ---------------------------------------------------------------------------

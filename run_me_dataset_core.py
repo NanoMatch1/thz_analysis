@@ -71,7 +71,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10B\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\A\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B\segmented\second_reflection"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
     # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
@@ -153,10 +153,10 @@ if __name__ == "__main__":
 
     # acquisition_editor(fileDir)
     dataset = DataSet(fileDir)
-    show_graph = True
+    show_graph = False
     dataset.load_all_data(case_insensitive=True)
-    dataset.plot_current()
-    preprocess(dataset)
+    # dataset.plot_current()
+    # preprocess(dataset)
 
     # filtered_data = filter_dataset(dataset, "reference", set_current=True)
     # dataset.plot_current(filenames=[filename for filename in dataset.data_dict if "reference" in filename])
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     # thz.plot_current(dataset)
     # thz.pre_window_align_peak(dataset,show_graph=show_graph)
     thz.global_truncate(dataset)
-    dataset.plot_current()
+    # dataset.plot_current()
     # breakpoint()
 
     # dataset.save_state()
@@ -192,13 +192,17 @@ if __name__ == "__main__":
     # print("Stop after pre-processing and alignment.")
     # breakpoint()
     thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.3}}, show_graph=show_graph)
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 4.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
                                                  "tail_fraction": 0.25,
                                                  "min_contiguous_bins": 3}})
     thz.transfer_function(dataset, config={"transfer": {"apply_snr_mask": True}}, ref_type='reference')
     # dataset.save_state()
+    # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="sample_a-33.6_cnt-s.acc", quantity='sigma')
+    thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="sample_a-42_cnt-p.acc", quantity='nk')
+    # breakpoint()
+
     # dataset.save_database()
 
     # thz.extend_grid
