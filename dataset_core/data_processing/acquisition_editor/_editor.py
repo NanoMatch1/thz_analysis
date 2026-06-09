@@ -11,7 +11,7 @@ from typing import Mapping
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.widgets import Button, Slider
+from matplotlib.widgets import Button, Slider, TextBox
 
 
 def _edit_single_array(
@@ -40,6 +40,11 @@ def _edit_single_array(
 
     work_raw = np.array(raw, copy=True)
 
+    crop_state = {
+        "xmin": float(time.min()),
+        "xmax": float(time.max()),
+    }
+
     active = {idx: True for idx in acq_indices}
     selected_idx = acq_indices[0]
 
@@ -50,6 +55,8 @@ def _edit_single_array(
     ax     = fig.add_axes([L, 0.44, PW, 0.50])                # main plot
     ax_std = fig.add_axes([L, 0.26, PW, 0.14])                # std dev plot
     ax_sel = fig.add_axes([L + 0.11, 0.15, PW - 0.11, 0.03])  # slider
+    ax_xmin_tb = fig.add_axes([L + 0.09, 0.07, 0.17, 0.04])   # X min textbox
+    ax_xmax_tb = fig.add_axes([L + 0.38, 0.07, 0.17, 0.04])   # X max textbox
 
     # ── Right column: buttons, list panels, page sliders, save ──
     R, RW = 0.70, 0.25
@@ -134,6 +141,9 @@ def _edit_single_array(
     btn_toggle = Button(ax_btn, "Toggle selected (include/exclude)")
     btn_patch_point = Button(ax_patch_btn, "Toggle point patch")
     btn_save = Button(ax_save_btn, "Save changes")
+
+    tb_xmin = TextBox(ax_xmin_tb, "X min", initial=f'{crop_state["xmin"]:.6g}')
+    tb_xmax = TextBox(ax_xmax_tb, "X max", initial=f'{crop_state["xmax"]:.6g}')
 
     ax.text(
         0.01,
@@ -271,9 +281,10 @@ def _edit_single_array(
         selected_point_marker.set_data([time[selected_point_idx]], [y_value])
 
     def _build_output_array() -> np.ndarray:
+        mask = (time >= crop_state["xmin"]) & (time <= crop_state["xmax"])
         kept = [idx for idx in acq_indices if active.get(idx, False)]
-        cols = [time] + [work_raw[:, idx] for idx in kept]
-        return np.column_stack(cols) if cols else work_raw[:, [0]]
+        cols = [time[mask]] + [work_raw[mask, idx] for idx in kept]
+        return np.column_stack(cols) if cols else work_raw[mask, :][:, [0]]
 
     def apply_styling():
         nonlocal selected_idx
@@ -341,6 +352,9 @@ def _edit_single_array(
         _render_list(
             ax_excl, "Excluded", get_excluded(), excl_page, excl_text_artists, "excl"
         )
+
+        ax.set_xlim(crop_state["xmin"], crop_state["xmax"])
+        ax_std.set_xlim(crop_state["xmin"], crop_state["xmax"])
 
         fig.canvas.draw_idle()
 
@@ -422,6 +436,35 @@ def _edit_single_array(
         plt.close(fig)
 
     btn_save.on_clicked(on_save)
+
+    def on_xmin_submit(text):
+        try:
+            val = float(text)
+        except ValueError:
+            tb_xmin.set_val(f'{crop_state["xmin"]:.6g}')
+            return
+        val = float(np.clip(val, time.min(), time.max()))
+        if val >= crop_state["xmax"]:
+            tb_xmin.set_val(f'{crop_state["xmin"]:.6g}')
+            return
+        crop_state["xmin"] = val
+        apply_styling()
+
+    def on_xmax_submit(text):
+        try:
+            val = float(text)
+        except ValueError:
+            tb_xmax.set_val(f'{crop_state["xmax"]:.6g}')
+            return
+        val = float(np.clip(val, time.min(), time.max()))
+        if val <= crop_state["xmin"]:
+            tb_xmax.set_val(f'{crop_state["xmax"]:.6g}')
+            return
+        crop_state["xmax"] = val
+        apply_styling()
+
+    tb_xmin.on_submit(on_xmin_submit)
+    tb_xmax.on_submit(on_xmax_submit)
 
     def on_main_click(event):
         nonlocal selected_point_idx

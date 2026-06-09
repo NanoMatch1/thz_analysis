@@ -20,8 +20,61 @@ _HZ_TO_THZ = 1e-12
 _S_TO_PS = 1e12
 
 # ---------------------------------------------------------------------------
+# Single-line toggle for the sub-sample (fractional) timing correction.
+#
+# align_to_reference splits its cross-correlation shift into a whole-sample part
+# (slid on the time axis) and a sub-sample residual. When this is True the
+# residual is applied EXACTLY as a spectral phase ramp in transfer_function
+# (Fourier shift theorem — no time-domain interpolation). Flip to False to
+# disable it and re-run, e.g. to see how much the residual actually matters.
+# A per-call `subsample_correction=` argument on align_to_reference overrides
+# this default when you want to set it explicitly.
+# ---------------------------------------------------------------------------
+SUBSAMPLE_TIMING_CORRECTION = True
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+def normalise(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
+    """Normalise each trace in the dataset by its max absolute amplitude."""
+    config = config or {}
+    bounds = config.get('bounds', None)
+    show_graph = config.get('show_graph', show_graph) # default to kwarg if not in config
+
+    for filename, data_obj in dataset.data.items():
+        t = data_obj.data[:, 0]
+        y = data_obj.data[:, 1]
+        if bounds is not None:
+            mask = (t >= bounds[0]/_S_TO_PS) & (t <= bounds[1]/_S_TO_PS)
+            if not mask.any():
+                print(f"Warning: '{filename}' has no samples in normalisation bounds {bounds}, skipping normalisation.")
+                continue
+        else:
+            mask = slice(None)  # all samples
+        
+        max_amp = np.max(np.abs(y[mask]))
+        if max_amp == 0:
+            print(f"Warning: '{filename}' has zero max amplitude, skipping normalisation.")
+            continue
+        norm_y = y / max_amp
+        if data_obj.data.shape[1] >= 3:
+            norm_err = data_obj.data[:, 2] / max_amp
+            data_obj.data = np.column_stack((t, norm_y, norm_err))
+        else:
+            data_obj.data = np.column_stack((t, norm_y))
+        data_obj.processing_dict['normalisation_factor'] = max_amp
+
+        if show_graph:
+            plt.plot(t, norm_y, label='{} (normalised)'.format(filename))
+            plt.plot(t, y, label='{} (pre-normalisation)'.format(filename), linestyle='--', lw=1, alpha=0.5)
+        
+    if show_graph:
+        plt.legend()
+        plt.xlabel('Time (s)')
+        plt.title('Normalised Traces')
+        plt.show()
+    return dataset
 
 def _time_amplitude_array(data_obj) -> np.ndarray:
     """Extract (N, 2) [time_s, mean_amplitude] from a THzData object."""
@@ -34,6 +87,74 @@ def _build_data_dict(dataset: DataSet) -> dict:
         filename: _time_amplitude_array(data_obj)
         for filename, data_obj in dataset.data.items()
     }
+
+
+def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
+    """Store per-spectrum SNR masks and SNR arrays on sample and reference objects.
+
+    The reference's mask reflects only its own dynamic range (ref_snr_db >= thresh),
+    independent of the sample. The sample's mask is just the sample's own DR.
+    The intersection (combined + segment-cleaned) lives on the sample as
+    'transfer_mask' and is what downstream inversion consumes.
+    """
+    values = mask_metrics.get('values', {})
+    snr_thresh = values.get('snr_thresh_db')
+    samp_snr = values.get('samp_snr_db')
+    ref_snr = values.get('ref_snr_db')
+    if snr_thresh is None or samp_snr is None or ref_snr is None:
+        return
+
+    samp_snr_arr = np.asarray(samp_snr)
+    ref_snr_arr = np.asarray(ref_snr)
+
+    samp_obj.processing_dict['snr_db'] = samp_snr_arr
+    samp_obj.processing_dict['snr_mask'] = samp_snr_arr >= snr_thresh
+    if ref_obj is not None:
+        ref_obj.processing_dict['snr_db'] = ref_snr_arr
+        ref_obj.processing_dict['snr_mask'] = ref_snr_arr >= snr_thresh
+
+
+def _plot_with_snr_mask(
+    ax,
+    x: np.ndarray,
+    y: np.ndarray,
+    mask: np.ndarray | None,
+    *,
+    colour=None,
+    label: str | None = None,
+    full_alpha: float = 0.9,
+    masked_alpha: float = 0.2,
+    **plot_kwargs,
+):
+    """Plot a trace with the trusted region at full alpha and the rest dimmed.
+
+    Strategy: draw the full trace at ``masked_alpha`` (dimmed background), then
+    overlay the trusted portion at ``full_alpha``. The legend label attaches to
+    the overlay so only the trusted line shows up in the legend.
+
+    If ``mask`` is None or all True, plots a single line at ``full_alpha``.
+    If ``mask`` is all False, plots a single dimmed line tagged "(low SNR)".
+    """
+    if mask is None:
+        line, = ax.plot(x, y, color=colour, label=label, alpha=full_alpha, **plot_kwargs)
+        return line
+
+    mask_arr = np.asarray(mask, dtype=bool)
+    if mask_arr.all():
+        line, = ax.plot(x, y, color=colour, label=label, alpha=full_alpha, **plot_kwargs)
+        return line
+    if not mask_arr.any():
+        dim_label = f"{label} (low SNR)" if label else None
+        line, = ax.plot(x, y, color=colour, label=dim_label, alpha=masked_alpha, **plot_kwargs)
+        return line
+
+    full_line, = ax.plot(x, y, color=colour, alpha=masked_alpha, **plot_kwargs)
+    actual_colour = full_line.get_color()
+    y_trusted = np.where(mask_arr, y, np.nan)
+    trusted_line, = ax.plot(
+        x, y_trusted, color=actual_colour, label=label, alpha=full_alpha, **plot_kwargs,
+    )
+    return trusted_line
 
 
 # ---------------------------------------------------------------------------
@@ -66,12 +187,55 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: 
 
     return dataset
 
+def global_truncate(dataset, show_graph=False):
+    '''Takes the min and max value of the time axis across all samples and truncates all samples to that common range.'''
+    min_t = max(float(np.nanmin(data_obj.data[:, 0])) for data_obj in dataset.data.values())
+    max_t = min(float(np.nanmax(data_obj.data[:, 0])) for data_obj in dataset.data.values())
+    for filename, data_obj in dataset.data.items():
+        mask = (data_obj.data[:, 0] >= min_t) & (data_obj.data[:, 0] <= max_t)
+        data_obj.data = data_obj.data[mask, :]
+        if show_graph:
+            plt.plot(data_obj.data[:, 0], data_obj.data[:, 1], label=filename)
+    print(f"Globally truncated all samples to common time range ")
+    if show_graph:
+        plt.legend()
+        plt.xlabel('Time (s)')
+        plt.title('Globally Truncated Traces')
+        plt.show()
 
-def align_on_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple = None) -> DataSet:
-    """Aligns all acquisitions in the dataset on their main peak."""
+    
+
+def pre_window_align_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple = None, recalibrate=False) -> DataSet:
+    """Aligns all acquisitions in the dataset on their main peak. Used for pre-aligning the main pulse before windowing such that the window operates at the same T0 distance from edge of the window."""
 
     data_dict = _build_data_dict(dataset)
     aligned = core.align_on_peak(data_dict, auto_range=auto_range)
+
+    if recalibrate:
+        print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
+        print(" Select which file's time axis to use:")
+        while True:
+            for i, filename in enumerate(aligned.keys()):
+                print(f"  {i}: {filename}")
+            selection = input(f"Enter a number from 0 to {len(aligned)-1}: ")
+            try:            
+                idx = int(selection)
+                if idx < 0 or idx >= len(aligned):
+                    print("Must be a valid number from the list.")
+                    continue
+                selected_filename = list(aligned.keys())[idx]
+                break
+            except ValueError:
+                print("Must be a valid number from the list.")
+        print(f"Selected '{selected_filename}' as the T0 reference. Recalibrating all files to share its time axis.")
+
+        ref_data = aligned[selected_filename]
+        ref_axis = ref_data[:, 0]
+
+        for filename, data in aligned.items():
+            if filename == selected_filename:
+                continue
+            aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
 
     if show_graph:
         import matplotlib.pyplot as plt
@@ -119,15 +283,330 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
 
     return dataset
 
-def plot_current(dataset: DataSet) -> None:
-    """Plot the current time-domain traces for all files in the dataset."""
+def _span_select_bounds(t_ps: np.ndarray, y: np.ndarray, title: str) -> tuple:
+    """Open a SpanSelector and return the dragged (xmin, xmax) in ps.
+
+    Thin interactive shell for picking gate bounds; for headless/repeat analysis
+    supply the bounds directly to segment_reflections instead of opening this
+    window.
+    """
+    from matplotlib.widgets import SpanSelector
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(t_ps, y, lw=1)
+    # Frame the axis to the data extent. This also disables x-autoscale, so the
+    # interactive SpanSelector's rectangle patch (initialised near x=0) can no
+    # longer stretch the view back to 0.
+    ax.set_xlim(float(np.nanmin(t_ps)), float(np.nanmax(t_ps)))
+    ax.margins(x=0)
+    ax.set_xlabel('Time (ps)')
+    ax.set_ylabel('Amplitude')
+    ax.set_title(title)
+    selected = {}
+
+    def _onselect(xmin, xmax):
+        if xmax < xmin:
+            xmin, xmax = xmax, xmin
+        selected['bounds'] = (float(xmin), float(xmax))
+        ax.axvspan(xmin, xmax, alpha=0.2, color='tab:orange')
+        fig.canvas.draw_idle()
+        print(f"  selected {title}: {xmin:.2f}–{xmax:.2f} ps")
+
+    span = SpanSelector(
+        ax, onselect=_onselect, direction='horizontal',
+        useblit=True, interactive=True, props=dict(alpha=0.2), minspan=0.0,
+    )
+    _ = span  # keep alive until window closes
+    ax.text(
+        0.01, 0.99, f"Drag to select the {title} region, then close the window.",
+        transform=ax.transAxes, va='top', ha='left', fontsize=9,
+        bbox=dict(boxstyle='round,pad=0.3', alpha=0.2),
+    )
+    plt.show()
+
+    if 'bounds' not in selected:
+        raise RuntimeError(f"No span selected for '{title}'.")
+    return selected['bounds']
+
+
+def segment_reflections(
+    dataset: DataSet,
+    *,
+    segments: dict | None = None,
+    components: tuple = ('first_reflection', 'second_reflection'),
+    output_dir: str | None = None,
+    bounds_units: str = 'ps',
+    show_graph: bool = False,
+) -> list[str]:
+    """Crop each trace into named reflection components and save them as .acc files.
+
+    A clean splitter, nothing more. For every loaded file it crops the raw
+    (multi-scan) trace to each component's time gate — no zero-padding, no
+    apodisation — and writes the result as a ``.acc`` file in the same format
+    as the source. It does NOT modify the in-memory dataset or run any
+    downstream processing: reload the written files and process as normal.
+
+    Components are written into per-name subfolders of ``output_dir`` keeping
+    the original filenames, e.g.::
+
+        <output_dir>/first_reflection/<original>.acc
+        <output_dir>/second_reflection/<original>.acc
+
+    so pointing a fresh ``DataSet`` at ``second_reflection/`` groups and pairs
+    exactly like the originals (no filename suffixes, no pairing ambiguity).
+    All files are written, references included.
+
+    Parameters
+    ----------
+    segments : None | dict
+        - ``None``  → interactive SpanSelector per file: drag one span per name
+          in ``components`` (a window opens per component).
+        - ``{component: (start, stop)}`` → shared bounds for every file.
+        - ``{filename: {component: (start, stop)}}`` → per-file bounds.
+        Bounds are in ``bounds_units`` (default 'ps').
+    components : tuple[str]
+        Component names to extract (also the subfolder names), in selection order.
+    output_dir : str | None
+        Destination root. Defaults to ``<dataset.file_dir>/segmented``.
+    bounds_units : {'ps', 's'}
+        Units of the supplied/selected bounds. The source time axis is in ps;
+        's' bounds are converted to ps before cropping.
+    show_graph : bool
+        If True, plot each trace with the selected gates shaded for verification.
+
+    Returns
+    -------
+    list[str]
+        Paths of the written .acc files.
+    """
+    import os
+    from acquisition_editor import save_acc
+
+    if bounds_units not in ('ps', 's'):
+        raise ValueError("bounds_units must be 'ps' or 's'.")
+    to_ps = (lambda v: float(v)) if bounds_units == 'ps' else (lambda v: float(v) * _S_TO_PS)
+
+    base_out = output_dir or os.path.join(dataset.file_dir, 'segmented')
+    per_file = bool(segments) and all(isinstance(v, dict) for v in segments.values())
+
+    written: list[str] = []
+    for filename, data_obj in dataset.data.items():
+        raw = np.asarray(data_obj.raw_data)        # [time_ps, scan1, scan2, ...]
+        time_ps = raw[:, 0]
+        mean_y = raw[:, 1:].mean(axis=1) if raw.shape[1] > 1 else raw[:, 1]
+        scan_headers = [obj.headers for obj in data_obj.data_list]
+
+        if segments is None:
+            bounds_ps = {
+                name: _span_select_bounds(time_ps, mean_y, title=f"{filename} — {name}")
+                for name in components
+            }
+        else:
+            source = segments[filename] if per_file else segments
+            bounds_ps = {
+                name: (to_ps(source[name][0]), to_ps(source[name][1]))
+                for name in components if name in source
+            }
+
+        for name, (start, stop) in bounds_ps.items():
+            mask = (time_ps >= start) & (time_ps <= stop)
+            if np.count_nonzero(mask) < 2:
+                raise ValueError(
+                    f"Gate '{name}' [{start}, {stop}] ps selects <2 samples of "
+                    f"'{filename}'."
+                )
+            cropped = raw[mask, :]
+            dest = os.path.join(base_out, name, filename)
+            save_acc(
+                {'data': cropped, 'scan_headers': scan_headers, 'header': data_obj.headers},
+                dest,
+            )
+            written.append(dest)
+
+        if show_graph:
+            fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+            ax.plot(time_ps, mean_y, color='0.4', lw=1)
+            ax.set_xlim(float(np.nanmin(time_ps)), float(np.nanmax(time_ps)))
+            for name, (start, stop) in bounds_ps.items():
+                ax.axvspan(start, stop, alpha=0.2, label=name)
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Amplitude')
+            ax.set_title(f'Segments — {filename}')
+            ax.legend()
+            plt.show()
+
+    print(f"Wrote {len(written)} segmented .acc files under '{base_out}'.")
+    return written
+
+
+def align_to_reference(
+    dataset: DataSet,
+    *,
+    ref_type: str = 'reference',
+    roi: tuple | None = None,
+    max_lag_ps: float | None = None,
+    subsample_correction: bool | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Shift each sample in time so it shares its reference's T0 (cross-correlation).
+
+    Calibration step: removes the bulk instrumental timing offset between a
+    sample and its reference by cross-correlating their time-domain pulses (with
+    sub-sample, parabolic precision) and shifting the SAMPLE onto the reference's
+    time axis. The reference is the T0 anchor and is left untouched. The shift is a pure time translation of the sample's time axis, no resampling or interpolation of the Y values.
+
+    Cross-correlation maximises |correlation|, so it aligns correctly even when
+    the sample pulse is sign-flipped relative to the reference (e.g. a
+    higher-index sample at a window interface). It removes a constant group delay
+    only, preserving the sample's genuine (non-linear) reflection phase.
+
+    Run in the processing phase before window_time/FFT, on the traces you intend
+    to ratio (e.g. the segmented second reflections).
+
+    Parameters
+    ----------
+    ref_type : str
+        Reference type to align to (passed to ``dataset.get_reference``).
+    roi : tuple[float, float] | None
+        Optional ``(start_ps, stop_ps)`` restricting the correlation to the
+        pulse region. Default None uses the whole trace.
+    max_lag_ps : float | None
+        Optional cap on the search lag in ps. Default None uses ``align_time``'s
+        default (a quarter of the trace length).
+    subsample_correction : bool | None
+        Override for the module-level ``SUBSAMPLE_TIMING_CORRECTION`` toggle. When
+        the effective value is True, only the whole-sample part of the measured
+        shift is slid on the time axis; the sub-sample residual is carried to
+        ``transfer_function`` and applied there as an exact spectral phase ramp
+        (no time-domain interpolation). When False, the residual is dropped — the
+        legacy integer-only behaviour. Default None defers to the module toggle.
+    show_graph : bool
+        If True, plot reference + sample before/after alignment per sample.
+    """
+    if subsample_correction is None:
+        subsample_correction = SUBSAMPLE_TIMING_CORRECTION
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        ref_obj = dataset.get_reference(filename, ref_type=ref_type)
+        if ref_obj is None:
+            print(f"Warning: no '{ref_type}' reference for '{filename}', skipping alignment.")
+            continue
+
+        ref_t = ref_obj.data[:, 0]
+        ref_y = ref_obj.data[:, 1]
+        samp_t = data_obj.data[:, 0]
+        samp_y = data_obj.data[:, 1]
+
+        align_cfg: dict = {}
+        if roi is not None:
+            align_cfg['roi'] = (roi[0] / _S_TO_PS, roi[1] / _S_TO_PS)
+        if max_lag_ps is not None:
+            dt = float(np.median(np.diff(ref_t)))
+            align_cfg['max_lag_samples'] = int(round((max_lag_ps / _S_TO_PS) / dt))
+
+        _, _, metrics = core.align_time(ref_t, ref_y, samp_t, samp_y, {'align': align_cfg})
+        shift = float(metrics['values']['applied_shift_seconds'])
+
+        # Split the measured shift into a whole-sample part and a sub-sample
+        # residual. The whole-sample part is slid on the time axis: it is exactly
+        # representable on the grid and is picked up by pad_to_common_grid as an
+        # integer offset. The residual (|.| <= dt/2) is NOT representable as a grid
+        # slide — if left in the axis, pad_to_common_grid would silently round it
+        # away, leaving a residual linear phase error in H that biases n. We carry
+        # it to transfer_function and apply it there as an exact spectral phase
+        # ramp (Fourier shift theorem), so the time-domain Y is never resampled.
+        dt = float(np.median(np.diff(samp_t)))
+        integer_samples = int(round(shift / dt))
+        integer_shift = integer_samples * dt
+        subsample_residual = shift - integer_shift
+        applied_residual = subsample_residual if subsample_correction else 0.0
+
+        # Y values are unchanged — only the time axis slides, by a whole number of
+        # samples. No resampling, no interpolation, no zero-padding here.
+        data_obj.processing_dict['pre_align'] = data_obj.data.copy()
+        data_obj.processing_dict['align_metrics'] = metrics
+        data_obj.processing_dict['subsample_shift_seconds'] = applied_residual
+        data_obj.processing_dict['subsample_shift_measured_seconds'] = subsample_residual
+        data_obj.processing_dict['subsample_correction_enabled'] = bool(subsample_correction)
+        shifted_data = data_obj.data.copy()
+        shifted_data[:, 0] = samp_t + integer_shift
+        data_obj.data = shifted_data
+
+        corr = metrics['values'].get('corr_peak', float('nan'))
+        state = 'ON' if subsample_correction else 'OFF'
+        print(
+            f"Aligned '{filename}' to '{ref_obj.filename}': "
+            f"shift {shift * _S_TO_PS:+.4f} ps = "
+            f"{integer_samples:+d} samp ({integer_shift * _S_TO_PS:+.4f} ps grid) + "
+            f"{subsample_residual * _S_TO_PS:+.4f} ps sub-sample "
+            f"[correction {state}] (corr {corr:.3f})"
+        )
+
+    if show_graph:
+        for filename, data_obj in dataset.data.items():
+            if dataset.data.is_reference(filename):
+                continue
+            pre = data_obj.processing_dict.get('pre_align')
+            ref_obj = dataset.get_reference(filename, ref_type=ref_type)
+            fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+            if ref_obj is not None:
+                ax.plot(ref_obj.data[:, 0] * _S_TO_PS, ref_obj.data[:, 1],
+                        color='0.5', lw=1, label='reference')
+            if pre is not None:
+                ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], '--', lw=1, alpha=0.7,
+                        label='sample (before)')            
+                ax.plot(data_obj.data[:, 0] * _S_TO_PS, data_obj.data[:, 1], lw=1.4,
+                    label='sample (aligned)')
+            ax.set_xlabel('Time (ps)')
+            ax.set_ylabel('Amplitude')
+            ax.set_title(f'Align to reference — {filename}')
+            ax.legend()
+            plt.show()
+
+    return dataset
+
+
+def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
+    """Plot the current time-domain traces for all files in the dataset.
+
+    Parameters
+    ----------
+    error_style : {'shaded', 'bars', 'none'}
+        Visualisation of the per-acquisition std error (column 2 of ``data``):
+        - 'shaded' (default): translucent fill_between band of ±1 std error.
+        - 'bars': sparse errorbars (~50 across the axis to keep it readable).
+        - 'none': line only, no uncertainty shown.
+    """
     import matplotlib.pyplot as plt
+
+    if error_style not in ('shaded', 'bars', 'none'):
+        raise ValueError(
+            f"error_style must be 'shaded', 'bars', or 'none', got {error_style!r}."
+        )
 
     fig, ax = plt.subplots(figsize=(10, 5), layout='constrained')
     for filename, data_obj in dataset.data.items():
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
-        ax.plot(t * _S_TO_PS, y, label=filename)
+        t_ps = t * _S_TO_PS
+        has_err = data_obj.data.shape[1] > 2 and error_style != 'none'
+
+        if error_style == 'bars' and has_err:
+            err = data_obj.data[:, 2]
+            errorevery = max(1, t_ps.size // 50)
+            ax.errorbar(
+                t_ps, y, yerr=err, label=filename,
+                errorevery=errorevery, capsize=0, lw=1.0, alpha=0.9,
+            )
+        else:
+            line, = ax.plot(t_ps, y, label=filename)
+            if has_err:
+                err = data_obj.data[:, 2]
+                ax.fill_between(
+                    t_ps, y - err, y + err,
+                    alpha=0.25, color=line.get_color(), linewidth=0,
+                )
 
     ax.set_xlabel('Time (ps)')
     ax.set_ylabel('Amplitude')
@@ -184,15 +663,25 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     return dataset
 
 
-def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
-    """Compute H(f) = Y_sample / Y_reference for each sample-reference pair."""
+def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: str = 'substrate') -> DataSet:
+    """Compute H(f) = Y_sample / Y_reference for each sample-reference pair.
+
+    Also applies an SNR-based trusted-band mask by default (intersection of
+    reference and sample dynamic range, with short-segment cleanup). Disable
+    via ``config['transfer']['apply_snr_mask'] = False`` to fall back to the
+    permissive finite-only mask.
+
+    Per-spectrum SNR masks are stored on both sample and reference objects as
+    ``processing_dict['snr_mask']`` for use by frequency-domain visualizations.
+    """
     config = config or {}
+    apply_snr_mask = config.get('transfer', {}).get('apply_snr_mask', True)
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
             continue
 
-        ref_obj = dataset.get_reference(filename, ref_type='substrate')
+        ref_obj = dataset.get_reference(filename, ref_type=ref_type)
         if ref_obj is None:
             print(f"Warning: no reference found for '{filename}', skipping transfer function.")
             continue
@@ -201,12 +690,41 @@ def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
         Y_samp = data_obj.processing_dict['fft_spectrum']
         Y_ref = ref_obj.processing_dict['fft_spectrum']
 
-        H, valid_mask, metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
+        H, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
+
+        # Apply the sub-sample timing residual left over by align_to_reference, as
+        # an exact spectral phase ramp (Fourier shift theorem). This completes the
+        # T0 alignment to sub-sample precision without ever interpolating the
+        # time-domain trace. It is a no-op (residual = 0) when alignment was not
+        # run, or when the SUBSAMPLE_TIMING_CORRECTION toggle was off.
+        subsample_shift = data_obj.processing_dict.get('subsample_shift_seconds', 0.0)
+        if subsample_shift:
+            H = H * np.exp(-1j * 2.0 * np.pi * freq * subsample_shift)
+            print(
+                f"[sub-sample] '{filename}': applied spectral phase ramp for "
+                f"{subsample_shift * _S_TO_PS:+.4f} ps residual timing."
+            )
 
         data_obj.processing_dict['transfer_H'] = H
-        data_obj.processing_dict['transfer_mask'] = valid_mask
-        data_obj.processing_dict['transfer_metrics'] = metrics
+        data_obj.processing_dict['transfer_metrics'] = tf_metrics
         data_obj.reference_filename = ref_obj.filename
+
+        if apply_snr_mask:
+            try:
+                snr_mask_combined, mask_metrics = core.trusted_band_mask(
+                    freq, Y_ref, Y_samp, H, config,
+                )
+                data_obj.processing_dict['transfer_mask'] = snr_mask_combined
+                data_obj.processing_dict['mask_metrics'] = mask_metrics
+                _write_snr_masks(data_obj, ref_obj, mask_metrics)
+            except Exception as exc:
+                print(
+                    f"Warning: SNR mask failed for '{filename}' ({exc}); "
+                    f"falling back to finite-only mask."
+                )
+                data_obj.processing_dict['transfer_mask'] = finite_mask
+        else:
+            data_obj.processing_dict['transfer_mask'] = finite_mask
 
         data_obj.data = np.column_stack((
             freq,
@@ -218,10 +736,12 @@ def transfer_function(dataset: DataSet, config: dict | None = None) -> DataSet:
 
 
 def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
-    """Compute SNR-based trusted-band mask for each sample-reference pair.
+    """Recompute the SNR-based trusted-band mask with explicit config.
 
-    Must be called after transfer_function and before invert_nk.
-    Replaces the finite-only 'transfer_mask' with a tighter SNR-filtered mask.
+    ``transfer_function`` now applies this by default, so this standalone is
+    only needed when overriding the threshold or other mask parameters after
+    the fact. It overwrites the existing 'transfer_mask' and refreshes the
+    per-spectrum 'snr_mask' arrays on both sample and reference.
     """
     config = config or {}
 
@@ -245,6 +765,7 @@ def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
 
         data_obj.processing_dict['transfer_mask'] = mask
         data_obj.processing_dict['mask_metrics'] = metrics
+        _write_snr_masks(data_obj, ref_obj, metrics)
 
     return dataset
 
@@ -266,6 +787,114 @@ def invert_nk(dataset: DataSet, thickness_m: float, config: dict | None = None) 
         freq = data_obj.processing_dict['fft_freq']
         n, k, metrics = core.invert_nk(freq, H, thickness_m, mask, config)
 
+        data_obj.processing_dict['n'] = n
+        data_obj.processing_dict['k'] = k
+        data_obj.processing_dict['invert_metrics'] = metrics
+
+        data_obj.data = np.column_stack((freq, n, k))
+
+    return dataset
+
+
+def invert_nk_reflection(
+    dataset: DataSet,
+    *,
+    geometry: str = 'gold',
+    theta_deg: float = 0.0,
+    polarization: str = 's',
+    r_reference: complex = -1.0 + 0.0j,
+    n_window: complex | np.ndarray = 1.95,
+    config: dict | None = None,
+) -> DataSet:
+    """Reflection-mode n,k for each sample (single-interface, semi-infinite).
+
+    Pulls the measured ratio H = Y_samp / Y_ref from
+    ``processing_dict['transfer_H']`` (computed by ``transfer_function`` on the
+    gated second-reflection spectra) and converts it to a true sample
+    reflection coefficient, then inverts with the Fresnel closed form.
+
+    Geometry selects the incident medium, the angle handling, and the reference
+    model:
+
+    - ``'gold'`` (external reflection in air): the sample is a flat surface in
+      air referenced to a gold mirror. ``r_sample = r_reference * H`` with
+      ``r_reference = -1`` for an ideal mirror, incident medium = air,
+      incidence angle = ``theta_deg``.
+    - ``'window'`` (internal reflection through a window): the wave reflects at
+      a window/sample interface accessed through a window of index
+      ``n_window`` (e.g. SiO2 ~1.95). ``theta_deg`` is the EXTERNAL angle; the
+      internal angle is found by Snell's law, the reference is the computed
+      window→air Fresnel coefficient r_{window→air}, and the incident medium is
+      the window. Because H = r_{window→sample}/r_{window→air} (the SiO2-only
+      second reflection cancels the window path), ``r_sample = r_{window→air} * H``
+      recovers the true window→sample reflection.
+
+    Reflection measurements are phase-sensitive — run
+    ``phase_correction(dataset, source='transfer')`` first to null any residual
+    timing offset before calling this function.
+
+    Parameters
+    ----------
+    geometry : {'gold', 'window'}
+        Reference/incidence model (see above).
+    theta_deg : float
+        Angle of incidence in degrees. For 'gold' this is the in-air incidence
+        angle; for 'window' it is the EXTERNAL angle before refraction.
+    polarization : {'s', 'p'}
+        Only 's' implemented for now; 'p' raises NotImplementedError.
+    r_reference : complex
+        Reference reflection coefficient for the 'gold' geometry (-1 = mirror).
+        Ignored for 'window' (computed from n_window).
+    n_window : complex or np.ndarray
+        Window refractive index for the 'window' geometry (scalar, or a
+        per-frequency n_SiO2(f) array). Ignored for 'gold'.
+    """
+    config = config or {}
+    theta_external_rad = np.deg2rad(theta_deg)
+
+    if geometry == 'gold':
+        n_incident = 1.0
+        theta_internal_rad = theta_external_rad
+        r_reference_value = r_reference
+    elif geometry == 'window':
+        n_incident = n_window
+        theta_internal_rad = float(
+            np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window))
+        )
+        r_reference_value = core.fresnel_reflection_s(
+            n_window, 1.0, theta_internal_rad,
+        )
+    else:
+        raise ValueError(f"Unknown geometry '{geometry}'. Use 'gold' or 'window'.")
+
+    print("---- Angles ----")
+    print(f"External angle = {np.rad2deg(theta_external_rad):.2f} deg")
+    print(f"Internal angle = {np.rad2deg(theta_internal_rad):.2f} deg")
+
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+
+        H = data_obj.processing_dict.get('transfer_H')
+        mask = data_obj.processing_dict.get('transfer_mask')
+        if H is None or mask is None:
+            print(f"Warning: no transfer function for '{filename}', skipping reflection inversion.")
+            continue
+
+        freq = data_obj.processing_dict['fft_freq']
+        r_sample = r_reference_value * np.asarray(H)
+
+        n, k, metrics = core.invert_nk_reflection(
+            freq, r_sample, mask, config,
+            theta_rad=theta_internal_rad, polarization=polarization,
+            n_incident=n_incident,
+        )
+
+        data_obj.processing_dict['reflection_r'] = r_sample
+        data_obj.processing_dict['reflection_geometry'] = geometry
+        data_obj.processing_dict['theta_internal_rad'] = theta_internal_rad
+        data_obj.processing_dict['r_reference'] = r_reference_value
         data_obj.processing_dict['n'] = n
         data_obj.processing_dict['k'] = k
         data_obj.processing_dict['invert_metrics'] = metrics
@@ -367,10 +996,12 @@ def _grid_invert_substrate_only(dataset, config):
             continue
 
         H, _valid_mask, _tf_metrics = core.transfer_function(freq, Y_sub, Y_air, config)
-        mask, _mask_metrics = core.trusted_band_mask(freq, Y_air, Y_sub, H, config)
+        mask, mask_metrics = core.trusted_band_mask(freq, Y_air, Y_sub, H, config)
 
         data_obj.processing_dict['transfer_H'] = H
         data_obj.processing_dict['transfer_mask'] = mask
+        data_obj.processing_dict['mask_metrics'] = mask_metrics
+        _write_snr_masks(data_obj, air_obj, mask_metrics)
 
         n, k, metrics = core.invert_nk_grid(freq, H, mask, config)
         _store_nk_grid(data_obj, freq, n, k, metrics)
@@ -535,20 +1166,36 @@ def _sample_items(dataset: DataSet):
             yield filename, data_obj
 
 
-def plot_fft(dataset: DataSet, freq_range: tuple | None = None, normalise: bool = False) -> None:
-    """Plot FFT magnitude for every file (samples and references)."""
+def plot_fft(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    normalise: bool = False,
+    show_snr_mask: bool = True,
+    **kwargs,
+) -> None:
+    """Plot FFT magnitude for every file (samples and references).
+
+    When ``show_snr_mask`` is True and per-spectrum SNR masks have been
+    computed (i.e. ``transfer_function`` has run), regions below each
+    spectrum's own SNR threshold are dimmed.
+    """
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
+    if kwargs.get('scale', None) == 'log':
+        ax.set_yscale('log')
+
     for filename, data_obj in dataset.data.items():
         freq = data_obj.processing_dict.get('fft_freq')
         spectrum = data_obj.processing_dict.get('fft_spectrum')
         if freq is None or spectrum is None:
             continue
-        # ax.semilogy(freq * _HZ_TO_THZ, np.abs(spectrum), label=filename)
-        norm = np.abs(spectrum).max() if normalise else 1.0
-        ax.plot(freq * _HZ_TO_THZ, np.abs(spectrum) / norm, label=filename)
-
+        norm_range = np.where((freq >= (freq_range[0] / _HZ_TO_THZ if freq_range else 0)) &
+                              (freq <= (freq_range[1] / _HZ_TO_THZ if freq_range else np.inf)))
+        norm = np.abs(spectrum[norm_range]).max() if normalise else 1.0
+        mag = np.abs(spectrum) / norm
+        snr_mask = data_obj.processing_dict.get('snr_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -560,8 +1207,12 @@ def plot_fft(dataset: DataSet, freq_range: tuple | None = None, normalise: bool 
     plt.show()
 
 
-def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) -> None:
-    """Plot transfer function magnitude for each sample."""
+def plot_transfer_function(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
+    """Plot transfer function magnitude for each sample, dimming low-SNR bins."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -570,7 +1221,8 @@ def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) ->
         freq = data_obj.processing_dict.get('fft_freq')
         if H is None or freq is None:
             continue
-        ax.plot(freq * _HZ_TO_THZ, np.abs(H), label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, np.abs(H), mask, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -582,7 +1234,11 @@ def plot_transfer_function(dataset: DataSet, freq_range: tuple | None = None) ->
     plt.show()
 
 
-def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_transfer_phase(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot unwrapped phase of the transfer function for each sample."""
     import matplotlib.pyplot as plt
 
@@ -593,7 +1249,8 @@ def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> No
         if H is None or freq is None:
             continue
         phase = np.unwrap(np.angle(H))
-        ax.plot(freq * _HZ_TO_THZ, phase, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, phase, mask, label=filename)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -605,7 +1262,11 @@ def plot_transfer_phase(dataset: DataSet, freq_range: tuple | None = None) -> No
     plt.show()
 
 
-def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_nk(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot refractive index n and extinction coefficient k for each sample."""
     import matplotlib.pyplot as plt
 
@@ -616,8 +1277,9 @@ def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
         k = data_obj.processing_dict.get('k')
         if freq is None or n is None or k is None:
             continue
-        ax_n.plot(freq * _HZ_TO_THZ, n, label=filename)
-        ax_k.plot(freq * _HZ_TO_THZ, k, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax_n, freq * _HZ_TO_THZ, n, mask, label=filename)
+        _plot_with_snr_mask(ax_k, freq * _HZ_TO_THZ, k, mask, label=filename)
 
     if freq_range is not None:
         ax_n.set_xlim(freq_range)
@@ -632,7 +1294,11 @@ def plot_nk(dataset: DataSet, freq_range: tuple | None = None) -> None:
     plt.show()
 
 
-def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_permittivity(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot real and imaginary parts of the complex permittivity."""
     import matplotlib.pyplot as plt
 
@@ -642,8 +1308,9 @@ def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None
         eps = data_obj.processing_dict.get('eps')
         if freq is None or eps is None:
             continue
-        ax_r.plot(freq * _HZ_TO_THZ, eps.real, label=filename)
-        ax_i.plot(freq * _HZ_TO_THZ, eps.imag, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, eps.real, mask, label=filename)
+        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, eps.imag, mask, label=filename)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -658,7 +1325,11 @@ def plot_permittivity(dataset: DataSet, freq_range: tuple | None = None) -> None
     plt.show()
 
 
-def plot_conductivity(dataset: DataSet, freq_range: tuple | None = None) -> None:
+def plot_conductivity(
+    dataset: DataSet,
+    freq_range: tuple | None = None,
+    show_snr_mask: bool = True,
+) -> None:
     """Plot real and imaginary parts of the optical conductivity."""
     import matplotlib.pyplot as plt
 
@@ -668,8 +1339,9 @@ def plot_conductivity(dataset: DataSet, freq_range: tuple | None = None) -> None
         sigma = data_obj.processing_dict.get('sigma')
         if freq is None or sigma is None:
             continue
-        ax_r.plot(freq * _HZ_TO_THZ, sigma.real, label=filename)
-        ax_i.plot(freq * _HZ_TO_THZ, sigma.imag, label=filename)
+        mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, sigma.real, mask, label=filename)
+        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, sigma.imag, mask, label=filename)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -867,12 +1539,13 @@ class ResultViewer:
         'Conductivity',
     ]
 
-    def __init__(self, dataset: DataSet):
+    def __init__(self, dataset: DataSet, show_snr_mask: bool = True):
         import matplotlib.pyplot as plt
         from matplotlib.widgets import RadioButtons, CheckButtons, TextBox
 
         self._plt = plt
         self._dataset = dataset
+        self._show_snr_mask = bool(show_snr_mask)
 
         # Collect sample filenames (ordered) and reference filenames
         self._sample_names = [
@@ -1029,9 +1702,18 @@ class ResultViewer:
             if self._visible.get(fn, False):
                 yield fn
 
+    def _spec_mask(self, fn: str):
+        """Per-spectrum SNR mask (sample or reference) for FFT-domain plots."""
+        return self._get(fn, 'snr_mask') if self._show_snr_mask else None
+
+    def _trusted_mask(self, fn: str):
+        """Combined trusted-band mask for transfer-derived plots (H, n, k, eps, sigma)."""
+        return self._get(fn, 'transfer_mask') if self._show_snr_mask else None
+
     def _draw_fft(self):
         ax = self._ax_top
-        # Plot references too (grey)
+        ax.set_yscale('log')
+        # Samples at higher alpha, references at lower alpha; SNR mask dims further.
         for fn in self._all_names:
             freq = self._get(fn, 'fft_freq')
             spec = self._get(fn, 'fft_spectrum')
@@ -1040,8 +1722,13 @@ class ResultViewer:
             is_sample = fn in self._sample_names
             if is_sample and not self._visible.get(fn, False):
                 continue
-            ax.semilogy(freq * _HZ_TO_THZ, np.abs(spec), color=self._colours[fn],
-                        label=self._short(fn), alpha=0.9 if is_sample else 0.4)
+            full_alpha = 0.9 if is_sample else 0.4
+            masked_alpha = 0.2 if is_sample else 0.1
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, np.abs(spec), self._spec_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+                full_alpha=full_alpha, masked_alpha=masked_alpha,
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|FFT|')
         ax.set_title('FFT Magnitude')
@@ -1058,8 +1745,13 @@ class ResultViewer:
             if is_sample and not self._visible.get(fn, False):
                 continue
             phase = np.unwrap(np.angle(spec))
-            ax.plot(freq * _HZ_TO_THZ, phase, color=self._colours[fn],
-                    label=self._short(fn), alpha=0.9 if is_sample else 0.4)
+            full_alpha = 0.9 if is_sample else 0.4
+            masked_alpha = 0.2 if is_sample else 0.1
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, phase, self._spec_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+                full_alpha=full_alpha, masked_alpha=masked_alpha,
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('Phase (rad)')
         ax.set_title('FFT Phase (unwrapped)')
@@ -1072,7 +1764,10 @@ class ResultViewer:
             freq = self._get(fn, 'fft_freq')
             if H is None or freq is None:
                 continue
-            ax.plot(freq * _HZ_TO_THZ, np.abs(H), color=self._colours[fn], label=self._short(fn))
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, np.abs(H), self._trusted_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('|H(f)|')
         ax.set_title('Transfer Function Magnitude')
@@ -1086,7 +1781,10 @@ class ResultViewer:
             if H is None or freq is None:
                 continue
             phase = np.unwrap(np.angle(H))
-            ax.plot(freq * _HZ_TO_THZ, phase, color=self._colours[fn], label=self._short(fn))
+            _plot_with_snr_mask(
+                ax, freq * _HZ_TO_THZ, phase, self._trusted_mask(fn),
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax.set_xlabel('Frequency (THz)')
         ax.set_ylabel('Phase (rad)')
         ax.set_title('Transfer Function Phase (unwrapped)')
@@ -1100,8 +1798,15 @@ class ResultViewer:
             k = self._get(fn, 'k')
             if freq is None or n is None or k is None:
                 continue
-            ax_n.plot(freq * _HZ_TO_THZ, n, color=self._colours[fn], label=self._short(fn))
-            ax_k.plot(freq * _HZ_TO_THZ, k, color=self._colours[fn], label=self._short(fn))
+            mask = self._trusted_mask(fn)
+            _plot_with_snr_mask(
+                ax_n, freq * _HZ_TO_THZ, n, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
+            _plot_with_snr_mask(
+                ax_k, freq * _HZ_TO_THZ, k, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax_n.set_ylabel('n')
         ax_n.set_title('Refractive Index')
         ax_n.legend(fontsize=7, loc='upper right')
@@ -1117,8 +1822,15 @@ class ResultViewer:
             eps = self._get(fn, 'eps')
             if freq is None or eps is None:
                 continue
-            ax_r.plot(freq * _HZ_TO_THZ, eps.real, color=self._colours[fn], label=self._short(fn))
-            ax_i.plot(freq * _HZ_TO_THZ, eps.imag, color=self._colours[fn], label=self._short(fn))
+            mask = self._trusted_mask(fn)
+            _plot_with_snr_mask(
+                ax_r, freq * _HZ_TO_THZ, eps.real, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
+            _plot_with_snr_mask(
+                ax_i, freq * _HZ_TO_THZ, eps.imag, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax_r.set_ylabel(r'$\varepsilon_r$')
         ax_r.set_title(r'Permittivity — Real ($n^2 - k^2$)')
         ax_r.legend(fontsize=7, loc='upper right')
@@ -1134,8 +1846,15 @@ class ResultViewer:
             sigma = self._get(fn, 'sigma')
             if freq is None or sigma is None:
                 continue
-            ax_r.plot(freq * _HZ_TO_THZ, sigma.real, color=self._colours[fn], label=self._short(fn))
-            ax_i.plot(freq * _HZ_TO_THZ, sigma.imag, color=self._colours[fn], label=self._short(fn))
+            mask = self._trusted_mask(fn)
+            _plot_with_snr_mask(
+                ax_r, freq * _HZ_TO_THZ, sigma.real, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
+            _plot_with_snr_mask(
+                ax_i, freq * _HZ_TO_THZ, sigma.imag, mask,
+                colour=self._colours[fn], label=self._short(fn),
+            )
         ax_r.set_ylabel(r'$\sigma_r$ (S/m)')
         ax_r.set_title('Optical Conductivity — Real')
         ax_r.legend(fontsize=7, loc='upper right')
@@ -1145,9 +1864,13 @@ class ResultViewer:
         ax_i.legend(fontsize=7, loc='upper right')
 
 
-def result_viewer(dataset: DataSet) -> ResultViewer:
-    """Launch the interactive result viewer GUI."""
-    return ResultViewer(dataset)
+def result_viewer(dataset: DataSet, show_snr_mask: bool = True) -> ResultViewer:
+    """Launch the interactive result viewer GUI.
+
+    Pass ``show_snr_mask=False`` to plot all bins at full alpha (useful when
+    you want to inspect noise-dominated regions explicitly).
+    """
+    return ResultViewer(dataset, show_snr_mask=show_snr_mask)
 
 def validate_thz(dataset: DataSet, verbose=True, label: str = "Validation") -> dict:
     """Check if dataset has the required structure for THz processing."""
