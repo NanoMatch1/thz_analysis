@@ -68,6 +68,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\CNT"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10A"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10A\segmented\second_reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
     # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
@@ -152,7 +153,7 @@ if __name__ == "__main__":
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
     dataset.plot_current()
-    preprocess(dataset)
+    # preprocess(dataset)
 
     # filtered_data = filter_dataset(dataset, "reference", set_current=True)
     # dataset.plot_current(filenames=[filename for filename in dataset.data_dict if "reference" in filename])
@@ -179,7 +180,7 @@ if __name__ == "__main__":
     dataset.group_files(keywords=['type'])
     dataset.grouping.show_matches()
 
-    thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=show_graph)
+    # thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=show_graph)
     # dataset.plot_current()
     # dataset.load_database('CNT_interp_norm_2_db.pkl')
     # thz.segment_reflections(dataset, show_graph=show_graph)
@@ -214,7 +215,7 @@ if __name__ == "__main__":
     # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='log')
     # thz.plot_fft(dataset)
 
-    thz.phase_correction(dataset, source='transfer')
+    # thz.phase_correction(dataset, source='transfer')
 
     # dataset.save_state()
     # thz.invert_nk(dataset, thickness_m=1e-3)
@@ -234,5 +235,6 @@ if __name__ == "__main__":
     # )
     thz.derive_eps_sigma(dataset)
 
+    dataset.save_database()
     thz.result_viewer(dataset)
     thz.export_results(dataset)
