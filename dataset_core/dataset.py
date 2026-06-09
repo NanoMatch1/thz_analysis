@@ -484,8 +484,8 @@ class DataSet:
         '''Plots the current data for all data objects in the dataset.'''
         for name, data_object in self.data.items():
             if kwargs.get('filenames', None) is not None:
-                filter_kw = kwargs['filenames']
-                if filter_kw not in name:
+                filenames = kwargs['filenames']
+                if name not in filenames:
                     continue
 
             figure_obj = self._generate_figure_object('main')

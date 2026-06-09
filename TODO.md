@@ -8,18 +8,25 @@
 
 ## thz-core
 
-- [ ] **SNR-anchored phase unwrap** in `invert.py` (and reuse in `kramers_kronig.py`).
-  Currently the unwrap anchors at the *lowest finite positive-frequency bin*
-  (`invert.py:278-284`). That bin can sit in a low-SNR region where the phase is
-  noisy, so a single corrupted sample early in the span propagates a 2π error
-  through the rest of the unwrap. Instead: anchor the unwrap at the **highest-SNR
-  bin** (peak |H| or peak reference spectrum, within the trusted band) and unwrap
-  **outward in both directions** from there — toward DC and toward high f — so the
-  branch is set by the most reliable phase and never seeded from noise.
-  - Keep the low-frequency absolute-branch anchoring goal (don't lose the wrap
-    count for thick samples); the high-SNR start fixes *which* bin seeds the
-    branch, the existing logic fixes the *absolute* offset — reconcile the two.
-  - Make it a shared helper (e.g. `unwrap_from_anchor(phase, weights, anchor_idx)`)
-    so both `invert_nk` and the KK estimator use the same robust unwrap.
-  - Add a test: inject noise into low-frequency bins and confirm n is unchanged
-    vs the clean case (the current low-anchor version would fail this).
+- [x] **SNR-guided phase unwrap** — `thz_core/unwrap.py::robust_unwrap` (2026-06-09).
+  Shared helper used by `invert_nk` (new `snr_weights=` kwarg) and the KK estimator
+  (`estimate_misplacement` / `correct_reflection_phase`, new `snr_weights=`).
+  - **Key correction to the original idea:** merely *starting* `np.unwrap` from a
+    high-SNR bin does **not** help — each ±2π decision is step-local and
+    direction-independent, so the same steps are crossed and decided identically
+    regardless of where you start. The real failure is a *run* of low-SNR bins
+    whose noisy phase random-walks across ±π; `np.unwrap` integrates that into a
+    net spurious wrap that offsets everything after it.
+  - **What was built:** a quality-guided unwrap that *excludes* low-SNR bins from
+    the wrap decisions entirely (unwrap across trusted bins only, then snap the
+    rest onto that branch). Absolute branch anchored at the lowest *trusted* bin.
+  - With `weights=None` it is byte-for-byte `np.unwrap` (no regression). Robustness
+    is opt-in via weights; `snr_floor` fraction drops a low-amplitude tail.
+  - **Caveat for thick samples:** excluding the low-f bins loses the absolute wrap
+    count, so weights must keep enough low-f bins for thick/dispersive transmission.
+    The exclusion is safe for reflection/thin samples (phase < π, no real wraps).
+  - Tests: `test_robust_unwrap.py` (8), `test_invert_unwrap.py::test_low_frequency_noise_excluded_by_snr_weights`.
+  - **Follow-up:** wire a real SNR proxy (reference spectral magnitude / dynamic
+    range from `trusted_band_mask`) through the adapter into `invert_nk(snr_weights=)`
+    and the KK calls, so the robustness is on by default in the pipeline rather than
+    opt-in at the core API.

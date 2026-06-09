@@ -242,3 +242,77 @@ Newest material appended at the bottom of each section.
   straight from the Fresnel coefficient) — which is why Si2 reflection n was
   robust while Chris transmission n needed the fix.
 - The legacy `silicon_test.csv` n~1e9 was likely a severe version of this bug.
+
+### 7b. SNR-guided unwrap — `robust_unwrap` (2026-06-09)
+- **Motivation:** §7 fixes the *thick-sample* wrap-count (where to start the span).
+  A second failure is *noise*: a run of low-SNR bins whose phase random-walks
+  across ±π gets integrated by `np.unwrap` into a net spurious wrap that offsets
+  every later bin by 2π.
+- **Key insight (non-obvious, drove the whole design):** "just start the unwrap at
+  a high-SNR bin" does **not** help. `np.unwrap` = cumsum of principal-value
+  differences between *consecutive* samples; each ±2π decision is step-local and
+  direction-independent, so starting the walk elsewhere crosses the same steps and
+  decides them identically. (A first bidirectional-from-anchor implementation was
+  provably equal to `np.unwrap` up to a constant — no robustness, and it broke the
+  absolute branch.) Also: a *single* outlier only spikes (its two steps cancel) —
+  it is *runs* that persist.
+- **What works:** `thz_core/unwrap.py::robust_unwrap` *excludes* low-SNR bins from
+  the wrap decisions — unwrap across trusted bins only, then snap the rest onto
+  that branch. `weights=None` ⇒ byte-for-byte `np.unwrap` (robustness is opt-in);
+  `snr_floor` drops a low-amplitude tail.
+- **Caveat:** excluding low-f bins discards the absolute wrap count, so it is only
+  safe for reflection/thin samples (|φ|<π, no real wraps). Thick transmission must
+  keep its low-f bins trusted. Shared by `invert_nk(snr_weights=)` and the KK
+  estimator. Tests: `test_robust_unwrap.py` (8) + an `invert_nk` noise regression.
+- **Follow-up (open):** thread a real SNR proxy (reference |spectrum| / dynamic
+  range from `trusted_band_mask`) through the adapter so it is on by default.
+
+## 9. Sample contact gap (window reflection)  ★ conceptual / not yet implemented (2026-06-09)
+Context: re-pressed CNT-on-glass under gentle force still showed a T0 shift of
+0.155–0.18 ps, changing with 90° rotation. Question raised: is this an intrinsic
+reflection delay, or a gap?
+
+- **It is geometric, not intrinsic.** Intrinsic reflection group delay (`τ=−dφ/dω`)
+  is tiny: a lossless dielectric interface is real & frequency-flat ⇒ τ≈0 (a π flip
+  is a sign, not a delay); a metal is ~skin-depth/c ≈ sub-fs; a Drude/CNT conductor
+  is at most ~its scattering time (tens of fs) **and frequency-dependent** (phase
+  curvature, not a flat ramp). None give a flat 0.18 ps shift. Glass→metal→CNT
+  ladder: ≈0 → ≈0 → tens of fs.
+- **0.18 ps ⇒ a ~35–40 µm air gap.** `Δt = 2·n_gap·d·cosθ_gap/c`; by Snell the gap
+  angle is 45° (cos=0.707): 0.18 ps→38 µm, 0.155 ps→33 µm, the rotation difference
+  ⇒ ~5 µm change. Plausible for a rough CNT mat under gentle force. Diagnostic: the
+  two reflections (window face + delayed CNT) are closer than the pulse width, so
+  they interfere into one *shifted* feature rather than resolving as two pulses.
+- **The gap negates the window's purpose.** With a gap the CNT sees air (n=1), not
+  SiO₂ (n=1.95), so we lose the incident-index conditioning advantage (§6b) *and*
+  add an etalon. Contact quality is the whole ballgame.
+- **Exact de-embedding (the right "informed background removal").** Naive
+  subtraction is wrong (it ignores the etalon's multiple bounces). The gap is a
+  Fabry–Pérot layer: `r_meas = (r1 + r2 e^{−2iβ})/(1 + r1 r2 e^{−2iβ})`,
+  `r1 = r_{SiO₂→air}` (known/measured), `β = (ω/c)·d·cosθ_gap`. Solve exactly for
+  the CNT term: **`x = r2·e^{−2iβ} = (r_meas − r1)/(1 − r1·r_meas)`**. Well
+  conditioned (denominator ≥0.56). Then `|x| = |r2|` exactly (lossless gap) and
+  `arg(x) = arg(r2) − 2β` where 2β is a *pure linear phase* ⇒ removed by the
+  existing T0/cross-correlation step. So for a *smooth single-valued* gap the
+  window-face reflection and the etalon are removable in closed form.
+- **Roughness is the binding limit (frequency-dependent).** A spot illuminates a
+  *distribution* of gap d. The phase spread per gap variation is `2·(2π/λ)·cosθ`;
+  for ±20 µm roughness that's ≈±0.6 rad at 1 THz (tolerable) but ≈±1.8 rad (~π) by
+  3 THz (coherent reflection washes out). So roughness is a Debye–Waller-like
+  high-pass damping on |r2| → **usable bandwidth ends where λ approaches the
+  roughness scale**. The exact de-embedding holds at low f and degrades at high f;
+  its |x| roll-off is itself a free coherence-bandwidth diagnostic.
+- **Pressure series** is analytically usable: parametrise each run by its measured
+  gap (from the delay) and either extrapolate r2 to d→0, or do a global fit with
+  shared r2(ω), per-run d, and an optional fitted roughness σ_d.
+- **Masking-a-small-patch idea:** the useful kernel is "a small patch presses
+  flatter" — so make the patch *larger than the beam* (no window component at all).
+  Progressive-aperture spatial unmixing is workable in principle but finicky at THz
+  (diffraction at aperture edges within a few λ); the algebraic de-embedding removes
+  the window contribution without touching the beam.
+- **Recommended order:** (1) better mechanical contact (small flat patch, firm
+  uniform pressure — restores §6b conditioning); (2) implement the de-embedding step
+  (exact for the smooth part, free roughness diagnostic); (3) pressure-series global
+  fit for quantitative n,k despite imperfect contact.
+- **Open / offered:** prototype the de-embedding + a synthetic test (smooth gap →
+  exact r2 recovery; Gaussian d-distribution → high-f |x| roll-off).

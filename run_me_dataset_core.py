@@ -40,6 +40,8 @@ def decompose_acc_file(filepath):
 
 
 if __name__ == "__main__":
+    import sys
+
     fileDir = r"C:\Users\Samuel\matchbook\thz\dataset_core\example_data"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-02-23_MINTS"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2"
@@ -65,6 +67,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-08_CNT-paper"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\CNT"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10A"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
     # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
@@ -80,7 +83,6 @@ if __name__ == "__main__":
 
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
     # fileDir = r"C:\Users\Samuel\Data\Chris"
-    import sys
 
     def filter_dataset(dataset, keyword, set_current=True):
         """Filter the dataset to include only files that contain the specified keyword in their filename."""
@@ -124,7 +126,7 @@ if __name__ == "__main__":
 
     ### --- Acquisition editing ---
    
-    def preprocess(dataset):
+    def preprocess(dataset, show_graph=False):
         dataset.load_all_data(case_insensitive=True)
         # dataset.plot_current()
         # --- For reflection data ---
@@ -134,10 +136,13 @@ if __name__ == "__main__":
         # --- initial pre-processing steps ---
 
         # --- alignment step, different protocols
-        thz.align_to_reference(dataset, ref_type="reference", roi=(152, 156))
+        thz.align_to_reference(dataset, ref_type="reference", roi=(152, 156), subsample_correction=True, show_graph=show_graph)
+        # dataset.plot_current()
 
-        thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True)
+        # thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
+        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158), 'second_reflection': (161.4, 167.4)})
+        print("Pre-processing complete.")
+        sys.exit()
 
         # dataset.save_state()
 
@@ -147,20 +152,32 @@ if __name__ == "__main__":
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
     dataset.plot_current()
+    preprocess(dataset)
 
-    filtered_data = filter_dataset(dataset, "reference")
-    dataset.plot_current()
+    # filtered_data = filter_dataset(dataset, "reference", set_current=True)
+    # dataset.plot_current(filenames=[filename for filename in dataset.data_dict if "reference" in filename])
+    # dataset.plot_current()
+
 
     ### --- Pre-processing and segmentation ---
     # preprocess(dataset)
     thz.subtract_baseline(dataset, show_graph=show_graph)
-    dataset.group_files(keywords=['type', 'seri'])
-    dataset.grouping.show_matches()
 
-    for filename, data_obj in dataset.data_dict.items():
-        if data_obj.is_reference:
-            print(f"Reference file: {filename}")
-        breakpoint()
+    # for filename, data_obj in dataset.data_dict.items():
+    #     print(f"{filename}")
+    #     dataX = data_obj.raw_data[:, 0]
+    #     dataY = data_obj.raw_data[:, 1]
+        
+    #     mask_range = (152, 156)
+    #     data_mask = (dataX >= mask_range[0]) & (dataX <= mask_range[1])
+    #     breakpoint()
+    #     plt.plot(dataX[data_mask], dataY[data_mask])
+    #     plt.title(f"Zoomed-in view of {filename} around {mask_range[0]}-{mask_range[1]} ps")
+    #     plt.show()
+    #     norm_data = dataY / np.max(dataY)
+
+    dataset.group_files(keywords=['type'])
+    dataset.grouping.show_matches()
 
     thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=show_graph)
     # dataset.plot_current()

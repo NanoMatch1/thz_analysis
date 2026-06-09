@@ -391,8 +391,11 @@ def segment_reflections(
 
     written: list[str] = []
     for filename, data_obj in dataset.data.items():
-        raw = np.asarray(data_obj.raw_data)        # [time_ps, scan1, scan2, ...]
-        time_ps = raw[:, 0]
+        raw = np.asarray(data_obj.raw_data)        # [time_original_ps, scan1, scan2, ...]
+        # Use the aligned time axis from the current working data, not raw_data.
+        # align_to_reference shifts data_obj.data[:, 0] (SI seconds); raw_data is
+        # never modified and retains the original unshifted picosecond axis.
+        time_ps = data_obj.data[:, 0] * _S_TO_PS
         mean_y = raw[:, 1:].mean(axis=1) if raw.shape[1] > 1 else raw[:, 1]
         scan_headers = [obj.headers for obj in data_obj.data_list]
 
@@ -415,7 +418,8 @@ def segment_reflections(
                     f"Gate '{name}' [{start}, {stop}] ps selects <2 samples of "
                     f"'{filename}'."
                 )
-            cropped = raw[mask, :]
+            cropped = raw[mask, :].copy()
+            cropped[:, 0] = time_ps[mask]  # write aligned time axis into the cropped array
             dest = os.path.join(base_out, name, filename)
             save_acc(
                 {'data': cropped, 'scan_headers': scan_headers, 'header': data_obj.headers},
