@@ -1,5 +1,5 @@
 import numpy as np
-import thz_core as core
+import thz_core.thz_core as core
 import matplotlib.pyplot as plt
 from dataset_core.dataset import DataSet, DataService
 """Used to bridge the DataSet manager and the thz analysis library.
@@ -65,6 +65,11 @@ def normalise(dataset: DataSet, config: dict | None = None, show_graph: bool = F
             data_obj.data = np.column_stack((t, norm_y))
         data_obj.processing_dict['normalisation_factor'] = max_amp
 
+        # Apply the same scalar to every individual scan so the per-scan working
+        # matrix stays consistent with the normalised averaged trace.
+        scan_matrix = _ensure_scan_matrix(data_obj)
+        scan_matrix[:, 1:] /= max_amp
+
         if show_graph:
             plt.plot(t, norm_y, label='{} (normalised)'.format(filename))
             plt.plot(t, y, label='{} (pre-normalisation)'.format(filename), linestyle='--', lw=1, alpha=0.5)
@@ -87,6 +92,44 @@ def _build_data_dict(dataset: DataSet) -> dict:
         filename: _time_amplitude_array(data_obj)
         for filename, data_obj in dataset.data.items()
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-scan working matrix (preserves statistical power through preprocessing)
+#
+# data_obj.data is the AVERAGED [time_s, mean, stderr] trace that the pipeline
+# mutates. To keep every individual acquisition available for segmentation we
+# carry a parallel matrix [time_s, scan1, ..., scanN] that the linear
+# preprocessing steps (baseline subtract, alignment x-shift, normalise scalar)
+# transform IN LOCKSTEP with data. Because all three ops are linear/shared, the
+# mean of the scan columns equals data_obj.data[:, 1] at every stage, so the
+# averaged pipeline is unchanged while the per-scan scatter survives to the
+# segmented .acc files.
+# ---------------------------------------------------------------------------
+_SCAN_MATRIX_KEY = 'working_scans'
+
+
+def _ensure_scan_matrix(data_obj) -> np.ndarray:
+    """Return the per-scan working matrix ``[time_s, scan1, ..., scanN]``.
+
+    Created lazily from ``raw_data`` (source ps time converted to SI seconds to
+    match ``data_obj.data``) on first use and cached in ``processing_dict``.
+    Subsequent calls return the same array so in-place transforms by the
+    preprocessing steps accumulate. Falls back to the averaged trace as a single
+    "scan" if no multi-scan ``raw_data`` is present.
+    """
+    matrix = data_obj.processing_dict.get(_SCAN_MATRIX_KEY)
+    if matrix is not None:
+        return matrix
+    raw = np.asarray(data_obj.raw_data, dtype=float)
+    if raw.ndim == 2 and raw.shape[1] >= 2:
+        time_seconds = raw[:, 0] / _S_TO_PS  # ps -> s, matching data_obj.data
+        matrix = np.column_stack((time_seconds, raw[:, 1:]))
+    else:
+        averaged = np.asarray(data_obj.data, dtype=float)
+        matrix = np.column_stack((averaged[:, 0], averaged[:, 1]))
+    data_obj.processing_dict[_SCAN_MATRIX_KEY] = matrix
+    return matrix
 
 
 def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
@@ -167,6 +210,7 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: 
 
     data_dict = _build_data_dict(dataset)
     corrected, metrics = core.subtract_baseline(data_dict, config)
+    n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
 
     if show_graph:
         fig, ax = plt.subplots(2, 1, layout='constrained')
@@ -184,6 +228,12 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: 
     for filename, data_obj in dataset.data.items():
         data_obj.data = corrected[filename]
         data_obj.processing_dict['baseline_metrics'] = metrics
+
+        # Mirror the baseline subtraction onto every individual scan so the
+        # per-scan working matrix stays consistent with the averaged trace.
+        scan_matrix = _ensure_scan_matrix(data_obj)
+        scan_columns = scan_matrix[:, 1:]
+        scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
 
     return dataset
 
@@ -257,7 +307,8 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
     for filename, data_obj in dataset.data.items():       
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
-        windowed_y, metrics = core.window_time(t, y, config)
+        windowed_y, metrics, global_window = core.window_time(t, y, config)
+        # display_window = 
 
         new_data = np.column_stack((t, windowed_y))
         if data_obj.data.shape[1] > 2:
@@ -270,12 +321,15 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
     if show_graph:
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(2, 1, layout='constrained')
+        
         for filename, data_obj in dataset.data.items():
             data_pre = data_obj.processing_dict.get('pre-window')
             ax[0].plot(data_pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
             ax[1].plot(data_obj.data[:, 1], label='{} (windowed)'.format(filename))
-        # ax[0].legend()
-        # ax[1].legend()
+            breakpoint()
+        ax[0].plot(global_window, label='Window Function', alpha=0.5, lw=1)
+        ax[0].legend()
+        ax[1].legend()
         ax[0].set_title('Original Traces')
         ax[1].set_title('Windowed Traces')
         ax[1].set_xlabel('Time Point Index')    
@@ -391,10 +445,23 @@ def segment_reflections(
 
     written: list[str] = []
     for filename, data_obj in dataset.data.items():
-        data = np.asarray(data_obj.data)        # [time_original_ps, scan1, scan2, ...]
-        # use modified not raw data, so as to carry through the baselining and normalisation into the segmented files
-        time_ps = data[:, 0] * _S_TO_PS
-        mean_y = data[:, 1:].mean(axis=1) if data.shape[1] > 1 else data[:, 1]
+        # Crop the per-scan working matrix [time_s, scan1, ..., scanN] so every
+        # individual acquisition is preserved in the segmented files (statistical
+        # power), with the baseline / alignment / normalisation carried through
+        # exactly as applied to the averaged trace.
+        scan_matrix = np.asarray(_ensure_scan_matrix(data_obj), dtype=float)
+        if scan_matrix.shape[0] != np.asarray(data_obj.data).shape[0]:
+            print(
+                f"Warning: '{filename}' scan matrix ({scan_matrix.shape[0]} rows) "
+                f"is out of sync with the averaged trace "
+                f"({np.asarray(data_obj.data).shape[0]} rows); a row-count-changing "
+                f"step ran before segmentation. Falling back to the averaged trace."
+            )
+            averaged = np.asarray(data_obj.data, dtype=float)
+            scan_matrix = np.column_stack((averaged[:, 0], averaged[:, 1]))
+        time_ps = scan_matrix[:, 0] * _S_TO_PS
+        scans = scan_matrix[:, 1:]
+        mean_y = scans.mean(axis=1)
         scan_headers = [obj.headers for obj in data_obj.data_list]
 
         if segments is None:
@@ -416,8 +483,9 @@ def segment_reflections(
                     f"Gate '{name}' [{start}, {stop}] ps selects <2 samples of "
                     f"'{filename}'."
                 )
-            cropped = data[mask, :].copy()
-            cropped[:, 0] = time_ps[mask]  # write aligned time axis into the cropped array
+            # [time_ps, scan1, ..., scanN] for the gated window — one column per
+            # acquisition, so save_acc writes every scan back out.
+            cropped = np.column_stack((time_ps[mask], scans[mask, :]))
             dest = os.path.join(base_out, name, filename)
             save_acc(
                 {'data': cropped, 'scan_headers': scan_headers, 'header': data_obj.headers},
@@ -534,6 +602,11 @@ def align_to_reference(
         shifted_data = data_obj.data.copy()
         shifted_data[:, 0] = samp_t + integer_shift
         data_obj.data = shifted_data
+
+        # Slide the per-scan working matrix by the same whole-sample shift so the
+        # individual acquisitions share the sample's aligned time axis.
+        scan_matrix = _ensure_scan_matrix(data_obj)
+        scan_matrix[:, 0] = scan_matrix[:, 0] + integer_shift
 
         corr = metrics['values'].get('corr_peak', float('nan'))
         state = 'ON' if subsample_correction else 'OFF'

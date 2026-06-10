@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import matplotlib
 matplotlib.use("Agg")
 
-import thz_core as core
+import thz_core.thz_core as core
 from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
 

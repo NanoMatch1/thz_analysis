@@ -73,7 +73,9 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-14\A"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-14\A\segmented\second_reflection"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A\segmented\second_reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\B\segmented\second_reflection"
@@ -142,7 +144,7 @@ if __name__ == "__main__":
         # dataset.plot_current()
 
         thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.8), 'second_reflection': (163, 172)})
+        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.8), 'second_reflection': (163, 170)})
         print("Pre-processing complete.")
         sys.exit()
 
@@ -152,7 +154,7 @@ if __name__ == "__main__":
     # acquisition_editor(fileDir)
     ### --- Pre-processing and segmentation ---
     dataset = DataSet(fileDir)
-    show_graph = True
+    show_graph = False
     dataset.load_all_data(case_insensitive=True)
     # dataset.plot_current()
     # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
@@ -166,7 +168,7 @@ if __name__ == "__main__":
     thz.plot_current(dataset)
     thz.global_truncate(dataset)
 
-    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.5}}, show_graph=show_graph)
+    thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.3}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
@@ -174,7 +176,7 @@ if __name__ == "__main__":
                                                  "min_contiguous_bins": 3}})
     thz.transfer_function(dataset, config={"transfer": {"apply_snr_mask": True}}, ref_type='reference')
     # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
-    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=False, scale='')
+    thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=False, scale='')
 # 
     # thz.phase_correction(dataset, source='fft')
 

@@ -8,7 +8,7 @@ from dataset_core.data_structures.thz import THzData, BaseTHzData
 from dataset_core.services.grouping import GroupingService
 from dataset_core.services.database import DatabaseService
 
-import thz_core as thz  
+import thz_core.thz_core as thz  
 
 from pathlib import Path
 
