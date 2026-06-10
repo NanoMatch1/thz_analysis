@@ -391,12 +391,10 @@ def segment_reflections(
 
     written: list[str] = []
     for filename, data_obj in dataset.data.items():
-        raw = np.asarray(data_obj.raw_data)        # [time_original_ps, scan1, scan2, ...]
-        # Use the aligned time axis from the current working data, not raw_data.
-        # align_to_reference shifts data_obj.data[:, 0] (SI seconds); raw_data is
-        # never modified and retains the original unshifted picosecond axis.
-        time_ps = data_obj.data[:, 0] * _S_TO_PS
-        mean_y = raw[:, 1:].mean(axis=1) if raw.shape[1] > 1 else raw[:, 1]
+        data = np.asarray(data_obj.data)        # [time_original_ps, scan1, scan2, ...]
+        # use modified not raw data, so as to carry through the baselining and normalisation into the segmented files
+        time_ps = data[:, 0] * _S_TO_PS
+        mean_y = data[:, 1:].mean(axis=1) if data.shape[1] > 1 else data[:, 1]
         scan_headers = [obj.headers for obj in data_obj.data_list]
 
         if segments is None:
@@ -418,7 +416,7 @@ def segment_reflections(
                     f"Gate '{name}' [{start}, {stop}] ps selects <2 samples of "
                     f"'{filename}'."
                 )
-            cropped = raw[mask, :].copy()
+            cropped = data[mask, :].copy()
             cropped[:, 0] = time_ps[mask]  # write aligned time axis into the cropped array
             dest = os.path.join(base_out, name, filename)
             save_acc(
@@ -1807,6 +1805,14 @@ def phase_correction(dataset: DataSet, source: str = 'transfer') -> DataSet:
         # so that the residual phase is only dispersion.
         correction = np.polyval(selection['coeffs'], freq_thz)
         corrected_unwrapped = unwrapped - correction
+
+        plt.plot(freq_thz, unwrapped, color='steelblue', alpha=0.5, label='original')
+        plt.plot(freq_thz, corrected_unwrapped, color='darkorange', label='corrected')
+        plt.legend()
+        plt.title(f'{filename} — unwrapped phase before/after correction')
+        plt.xlabel('Frequency (THz)')
+        plt.ylabel('Phase (rad)')
+        plt.show()
 
         # Rebuild corrected complex spectrum (preserve magnitude)
         corrected_wrapped = np.angle(np.exp(1j * corrected_unwrapped))

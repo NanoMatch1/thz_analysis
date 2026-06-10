@@ -71,15 +71,13 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-10\CNT-10B\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\A\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B\segmented\second_reflection"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-11\B"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing"
-    # fileDir = r"C:\Users\Samuel\Data\THz\CNTs\CNT-5"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\reflection_testing\all_comp\Si"
-    # fileDir = r"C:\Users\Samuel\Data\THz\M-HHTP_Crossover_Tdep\2026-04-21_Co_HHTP_Tdep_TDS"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-04_OPTP-M-HHTP"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\export"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-03_OPTP-M-HHTP"
-    # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-05-08_noise"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A\segmented\second_reflection"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\B\segmented\second_reflection"
+
 
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
@@ -130,7 +128,7 @@ if __name__ == "__main__":
 
     ### --- Acquisition editing ---
    
-    def preprocess(dataset, show_graph=True):
+    def preprocess(dataset, show_graph=False):
         dataset.load_all_data(case_insensitive=True)
         # dataset.plot_current()
         # --- For reflection data ---
@@ -144,7 +142,7 @@ if __name__ == "__main__":
         # dataset.plot_current()
 
         thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True)#, segments={'first_reflection': (151, 158), 'second_reflection': (161.4, 167.4)})
+        thz.segment_reflections(dataset, show_graph=False, segments={'first_reflection': (151, 158.8), 'second_reflection': (163, 172)})
         print("Pre-processing complete.")
         sys.exit()
 
@@ -152,66 +150,34 @@ if __name__ == "__main__":
 
 
     # acquisition_editor(fileDir)
+    ### --- Pre-processing and segmentation ---
     dataset = DataSet(fileDir)
     show_graph = False
     dataset.load_all_data(case_insensitive=True)
     # dataset.plot_current()
-    # preprocess(dataset)
+    # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
+    preprocess(dataset)
+    # ---
 
-    # filtered_data = filter_dataset(dataset, "reference", set_current=True)
-    # dataset.plot_current(filenames=[filename for filename in dataset.data_dict if "reference" in filename])
-    # dataset.plot_current()
-
-
-    ### --- Pre-processing and segmentation ---
-    # preprocess(dataset)
     thz.subtract_baseline(dataset, show_graph=show_graph)
     dataset.group_files(keywords=['type'])
     dataset.grouping.show_matches()
 
-    # thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-    # thz.align_to_reference(dataset, ref_type="reference", subsample_correction=True, show_graph=False)
-    # dataset.plot_current()
-    # dataset.load_database('CNT_interp_norm_2_db.pkl')
-    # thz.segment_reflections(dataset, show_graph=show_graph)
-
-    # dataset.group_files(keywords=['type'])
-
-    # thz.pre_window_align_peak(dataset, show_graph=show_graph)
-    # thz.plot_current(dataset)
-    # thz.pre_window_align_peak(dataset,show_graph=show_graph)
+    thz.plot_current(dataset)
     thz.global_truncate(dataset)
-    # dataset.plot_current()
-    # breakpoint()
 
-    # dataset.save_state()
-    # show_graph = False
-    # dataset.load_database()  # optional .db file with pre-parsed metadata; skip if you want to re-parse from the raw files
-    # thz.result_viewer(dataset)
-    # dataset.save_database()
-    # print("Stop after pre-processing and alignment.")
-    # breakpoint()
     thz.window_time(dataset, config={"window": {"type": "hann", "length": 0.3}}, show_graph=show_graph)
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 4.0}}, show_graph=show_graph)
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
     thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
                                                  "tail_fraction": 0.25,
                                                  "min_contiguous_bins": 3}})
     thz.transfer_function(dataset, config={"transfer": {"apply_snr_mask": True}}, ref_type='reference')
-    # dataset.save_state()
-    # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="sample_a-33.6_cnt-s.acc", quantity='sigma')
-    thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="sample_a-42_cnt-p.acc", quantity='nk')
-    # breakpoint()
+    # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
+    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=False, scale='')
+# 
+    # thz.phase_correction(dataset, source='fft')
 
-    # dataset.save_database()
-
-    # thz.extend_grid
-    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=True, scale='log')
-    # thz.plot_fft(dataset)
-
-    # thz.phase_correction(dataset, source='transfer')
-
-    # dataset.save_state()
     # thz.invert_nk(dataset, thickness_m=1e-3)
     thz.invert_nk_reflection(
         dataset,
