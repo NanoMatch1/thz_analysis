@@ -161,24 +161,66 @@ if __name__ == "__main__":
     dataset.load_all_data(case_insensitive=True)
     # dataset.plot_current()
 
-    new_dict = {}
-    for filename, data_obj in dataset.data.items():
-        # breakpoint()
-        dataX = data_obj.raw_data[:, 0]
-        # plt.plot()
-        mask = [True if (x > 154) and (x < 158) else False for x in dataX]
-        breakpoint()
-        for index in range(data_obj.raw_data.shape[1]):
-            if index == 0:
-                last_trace = np.zeros_like(dataX[mask])
-                continue
-            dataY = data_obj.raw_data[mask, index]
-            difference = dataY - last_trace
-            deviation = np.std(difference) # gen deviation metric
-            last_trace = np.copy(dataY)
-            # new_dict
+    def purging_analysis(dataset):
+        """Analyzes the effect of purging on the THz signal by comparing scans taken at different times since purging start. Computes a deviation metric based on the standard deviation of the difference between consecutive scans and plots it over time to visualize any trends.
+        
+        Final output is the decay exponential fit parameters for each file, which can be used to compare the purging dynamics across different samples or conditions."""
+
+        from scipy.optimize import curve_fit
+        def exp_decay(t, a, b):
+            return a * np.exp(-b * t)
+
+        dev_dict = {}
+        decays = []
+        for filename, data_obj in dataset.data.items():
+            # breakpoint()
+            dataX = data_obj.raw_data[:, 0]
+            # plt.plot()
+            dev_list = []
+            mask = [True if (x > 154) and (x < 158) else False for x in dataX]
+            timestamps = data_obj.resolve_timestamps()
+            normalised_time = np.array([(t - timestamps[0]).total_seconds() for t in timestamps]) if timestamps is not None else None
+            for index in range(data_obj.raw_data.shape[1]):
+                timestamp = normalised_time[index-1] if index > 0 else None
+                if index == 0:
+                    last_trace = np.zeros_like(dataX[mask])
+                    continue
+                dataY = data_obj.raw_data[mask, index]
+                difference = dataY - last_trace
+                deviation = np.std(difference) # gen deviation metric
+                last_trace = np.copy(dataY)
+                dev_list.append([timestamp, deviation])
+            dev_dict[filename] = dev_list
+
+        for filename, dev_list in dev_dict.items():
+            data = np.array(dev_list)
+            plt.scatter(data[:, 0], data[:, 1], label=filename)
             
+            # Fit exponential decay        
+            try:
+                popt, _ = curve_fit(exp_decay, data[:, 0], data[:, 1], p0=[data[0, 1], 0.1], maxfev=10000)
+                t_fit = np.linspace(data[:, 0].min(), data[:, 0].max(), 100)
+                y_fit = exp_decay(t_fit, *popt)
+                plt.plot(t_fit, y_fit, label=f'{filename} (fit: a={popt[0]:.2e}, b={popt[1]:.2e})', linestyle='--')
+
+                # print(f"{filename}: Fitted exponential decay parameters: a = {popt[0]:.2e}, b = {popt[1]:.2e}")
+                decays = decays + [(filename, popt[0], popt[1])]
+            except:
+                pass
+
+        sorted_decays = sorted(decays, key=lambda x: x[2])[::-1]  # sort by decay rate (b)
+        print("Purging analysis complete. Decay parameters (sorted by decay rate, fastest first):")
+        for filename, a, b in sorted_decays:
+            print(f"{filename}: a = {a:.2e}, b = {b:.2e}")
             
+        plt.legend()
+        plt.title("Deviation Metric Over Time")
+        plt.xlabel("Timestamp")
+        plt.ylabel("Standard Deviation of Difference from Previous Trace")
+        plt.show()
+
+            
+    purging_analysis(dataset)
                 
 
     # dataset.plot_current()
