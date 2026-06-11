@@ -81,11 +81,82 @@ real-data repeat-consistency numbers (§3) for the headline.
 
 ---
 
+---
+
+## B. The measured drift D = Y1_sample / Y1_reference
+
+**Script:** `fig_drift_structure.py` → `fig_drift_structure.png`
+
+D = Y1_sample/Y1_reference is the front-pulse ratio between the sample and
+reference acquisitions. Since the front reflection never reaches the sample,
+D ≡ 1 ideally; any deviation is pure mount-to-mount alignment drift. This is
+the quantity self-referencing cancels.
+
+**Takeaways for the talk:**
+- Shows the amplitude and phase structure of the actual drift on CNT-13/D data.
+- The 0°-orientation repeats show the trace-to-trace variability.
+- The 90°-rotated measurement may show a systematically different D,
+  illustrating why a shared reference is insufficient.
+
+---
+
+## C. H_old vs H_new — the fake features removed
+
+**Script:** `fig_H_comparison.py` → `fig_H_comparison.png`
+
+Runs the full spectral pipeline twice (with and without `self_reference`) on
+CNT-13/D data and overlays |H| and arg(H) for each sample. The structured
+oscillations in H_old — the drift artefacts — are absent in H_new.
+
+**Takeaways for the talk:**
+- Direct visual: "these wiggles are not sample physics, they're mount drift."
+- Both amplitude and phase are affected; self-referencing cleans both.
+- The feature wavelengths in H_old correspond to the drift echo timescales
+  seen in §B.
+
+---
+
+## D. Repeat consistency + anisotropy
+
+**Script:** `fig_repeat_consistency.py` → `fig_repeat_consistency.png`
+
+Runs the full pipeline through `invert_nk_reflection` for all four sample
+measurements (three 0°-orientation repeats + one 90°-rotated). Side-by-side:
+conventional (H_old) vs self-referenced (H_new) n(f). Reports the RMS spread
+across the parallel repeats.
+
+**Takeaways for the talk:**
+- The headline quantitative result: repeat spread σ(n) shrinks by ~3–4×.
+- After self-referencing the 90°-rotated trace is cleanly distinct from the
+  0° repeats — real optical anisotropy, previously buried under drift artefacts.
+
+---
+
+## E. Window index n_SiO₂(ω)
+
+**Script:** `fig_window_index.py` → `fig_window_index.png`
+
+Uses `characterise_window` to invert the intra-trace ratio W = Y2/Y1 of the
+bare-window reference for n_SiO₂(f) and k_SiO₂(f). Also shows |W| measured
+vs the forward model built from the extracted n — a round-trip consistency check.
+
+**Result** (CNT-13/D bare reference, 0.9 mm fused silica, 45° external):
+n_SiO₂ ≈ 1.963 ± 0.003 (flat, 0.25–2.75 THz), consistent with fused silica.
+
+**Takeaways for the talk:**
+- The window is isotropic fused silica (not birefringent) — the rotation
+  sensitivity is purely geometric (wedge/tilt under pressure).
+- n_SiO₂(f) can replace the nominal 1.95 scalar in the inversion as a
+  per-frequency array for a small systematic improvement.
+- Validates the window model used in the Fresnel inversion.
+
+---
+
 ## TODO for the report (build iteratively)
 
 - [x] A. Pulse-in-gate offset error (this section)
-- [ ] B. The drift itself: D = Y1_s/Y1_r magnitude/phase structure (real data)
-- [ ] C. H_old vs H_new on real samples (the fake features removed)
-- [ ] D. Repeat-consistency before/after + the anisotropy that emerges
-- [ ] E. Window index n_SiO₂(ω) from a single trace + time-domain prediction check
+- [x] B. The drift itself: D = Y1_s/Y1_r magnitude/phase structure (real data)
+- [x] C. H_old vs H_new on real samples (the fake features removed)
+- [x] D. Repeat-consistency before/after + the anisotropy that emerges
+- [x] E. Window index n_SiO₂(ω) from a single trace + time-domain prediction check
 - [ ] F. Leave-one-scan-out prediction noise floor

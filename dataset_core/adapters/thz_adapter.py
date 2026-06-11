@@ -1132,7 +1132,7 @@ def characterise_window(
     *,
     thickness_m: float,
     theta_deg: float = 45.0,
-    band_thz: tuple = (0.25, 2.75),
+    band_thz: tuple = (0.25, 3.5),
     n_initial: float = 1.95,
     fft_length: int = 8192,
     config: dict | None = None,
@@ -1186,6 +1186,7 @@ def characterise_window(
 
     def _load_segment(filepath):
         averaged = np.asarray(ACCLoader(filepath).load().data, dtype=float)
+        breakpoint()
         return averaged[:, 0], averaged[:, 1]
 
     time_first, amp_first = _load_segment(first_reflection_path)

@@ -136,18 +136,11 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\H2O_timing tests"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
-    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-06-10_humidity and purge\2026-06-09_CNT-paper\TESTING"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-15"
+    # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-06-10_humidity and purge\2026-06-09_CNT-paper\TESTING"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\B\segmented\second_reflection"
-
-
-    # import acquisition_editor
-    # acquisition_editor.process_directory(fileDir)
-    # acquisition_editor.convert_directory(fileDir)
-
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\MINTS_batch-2\export"
-    # fileDir = r"C:\Users\Samuel\Data\Chris"
 
 
 
@@ -188,10 +181,31 @@ if __name__ == "__main__":
         plt.show()
         return 
     
+    def window_characterisation(dataset):
+        '''Performs window characterisation using the first and second reflection segments of a reference scan to extract the true complex refractive index to improve accuracy of the subsequent inversion.'''
+
+        references = dataset.data.references
+        if len(references) == 0:
+            print("No reference files found for window characterisation.")
+            return
+        if len(references) > 1:
+            print("Multiple reference files found. Using the first one for window characterisation.")
+        reference_filename = next(iter(references.keys()))
+        print(f"Using reference file: {reference_filename}")
+
+        # result = thz.characterise_window(
+        first_refl = os.path.join(os.path.dirname(fileDir), "first_reflection", reference_filename)
+        second_refl = os.path.join(os.path.dirname(fileDir), "second_reflection", reference_filename)
+        result = thz.characterise_window(first_refl, second_refl, thickness_m=0.9e-3, theta_deg=45.0, band_thz=(0.2, 3.5), show_graph=True)
+
+        n_window_freq = result['n'] - 1j * result['k'] # Build the complex refractive index of the window material from the characterisation result.
+        return n_window_freq
 
     ### --- Config Setup ---
 
     ### --- Acquisition editing ---
+    # import acquisition_editor
+    # acquisition_editor.process_directory(fileDir)
    
     def preprocess(dataset, show_graph=True):
         dataset.load_all_data(case_insensitive=True)
@@ -229,8 +243,9 @@ if __name__ == "__main__":
 
     # dataset.plot_current()
     # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
-    # preprocess(dataset)
+    preprocess(dataset)
     # ---
+
 
     thz.subtract_baseline(dataset, show_graph=show_graph)
     dataset.group_files(keywords=['type'])
@@ -239,7 +254,7 @@ if __name__ == "__main__":
     # thz.plot_current(dataset)
     thz.global_truncate(dataset)
 
-    thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.2}}, show_graph=show_graph)
+    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.5}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
     # The SNR mask is built inside transfer_function (it needs H), so the mask
@@ -258,17 +273,21 @@ if __name__ == "__main__":
     )
     # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
 
+
     thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
 # 
     # thz.phase_correction(dataset, source='fft')
 
+
+    n_window_freq = window_characterisation(dataset)
     # thz.invert_nk(dataset, thickness_m=1e-3)
     thz.invert_nk_reflection(
         dataset,
         geometry="window",
         theta_deg=45,
         polarization='s',
-        n_window=1.95,
+        # n_window=1.964,
+        n_window=n_window_freq,
     )
     # thz.invert_nk_reflection(
     #     dataset,
