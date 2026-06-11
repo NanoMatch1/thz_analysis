@@ -536,3 +536,62 @@ class THzData:
 
         if show_plot:
             plt.show()
+
+
+class THzDataReflection(THzData):
+    """THzData for window-coupled reflection measurements with two reflection gates.
+
+    Inherits ``THzData`` unchanged — the ``data`` property, all pipeline
+    operations, and the processing_dict always act on the second reflection
+    (sample/window interaction), so existing code is fully backwards compatible.
+
+    The ``first_segment`` attribute holds the front-face (window-only) reflection
+    as a plain ``THzData``.  Pipeline functions that know about this class call
+    ``all_segments()`` to process both gates in parallel.
+
+    Construction
+    ------------
+    Use the ``from_thzdata`` classmethod to promote two already-loaded
+    ``THzData`` objects (e.g. from a segmented acquisition directory) without
+    re-averaging the raw scans.
+    """
+
+    def __init__(
+        self,
+        data: list,
+        header: list,
+        *,
+        first_segment: THzData,
+        **kwargs,
+    ) -> None:
+        super().__init__(data, header, **kwargs)
+        self.first_segment = first_segment
+
+    @classmethod
+    def from_thzdata(cls, second: THzData, first: THzData) -> 'THzDataReflection':
+        """Promote two THzData objects into a THzDataReflection without re-averaging.
+
+        Copies the second-reflection object's state into the new instance so no
+        re-computation of averages or statistics is needed.
+        """
+        new_obj = object.__new__(cls)
+        new_obj.__dict__.update(second.__dict__)
+        new_obj.first_segment = first
+        return new_obj
+
+    def all_segments(self) -> list:
+        """Return all reflection segments as ``[(name, THzData), ...]``.
+
+        Pipeline functions iterate this to apply the same step to every segment.
+        The second reflection is listed last so it is always processed after the
+        first (no dependency either way, but keeps the canonical order).
+        """
+        return [('first_reflection', self.first_segment), ('second_reflection', self)]
+
+    def __repr__(self) -> str:
+        return (
+            f"\nTHzDataReflection:{self.filename}\n"
+            f"   -> Second-reflection scans: {len(self.data_list)}\n"
+            f"   -> First-reflection scans:  {len(self.first_segment.data_list)}\n"
+            f"   -> Data type: {self.data_type}\n"
+        )

@@ -11,7 +11,7 @@ from dataset_core.adapters import analysis_tools as tools
 
 # thisdir = os.path.dirname(os.path.abspath(__file__))
 
-def plot_sigma(dataset):
+def plot_sigma(dataset, title=""):
     fig_sigma, ax = plt.subplots()
     show_snr_mask = True
     cmap = plt.get_cmap('tab10')
@@ -32,10 +32,10 @@ def plot_sigma(dataset):
     plt.xlabel("Frequency (THz)")
     # plt.ylabel("Refractive Index / Extinction Coefficient")
     plt.ylabel("Conductivity (S/m)")
-    plt.title("Derived Conductivity")
+    plt.title("Derived Conductivity {}".format(title))
     return 
 
-def plot_nk(dataset):
+def plot_nk(dataset, title=""):
     fig_nk, ax = plt.subplots()
     show_snr_mask = True
     cmap = plt.get_cmap('tab10')
@@ -52,15 +52,24 @@ def plot_nk(dataset):
     plt.legend()
     plt.xlabel("Frequency (THz)")
     plt.ylabel("Refractive Index / Extinction Coefficient")
-    plt.title("Derived Optical Constants")
+    plt.title("Derived Optical Constants {}".format(title))
     # plt.show()
     return
 
 
 dataset = DataSet("C:/Users/Samuel/matchbook")
-dataset.load_database()
+dataset.load_database(index=35)
 # filtered_files = [file for file in dataset.data.keys() if "reference" not in file.lower()]
 
-plot_sigma(dataset)
-plot_nk(dataset)
+plot_sigma(dataset, title="non-self-referenced")
+plot_nk(dataset, title="non-self-referenced")
+
+# --- Self-referenced versions ---
+dataset = DataSet("C:/Users/Samuel/matchbook")
+dataset.load_database(index=33)
+plot_sigma(dataset, title="self-referenced")
+plot_nk(dataset, title="self-referenced")
+
+
+
 plt.show()

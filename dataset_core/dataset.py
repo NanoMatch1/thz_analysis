@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 import dataset_core.io.loaders   # auto-imports all loader modules
 from dataset_core.io import get_loader_for_extension
-from dataset_core.data_structures.thz import THzData, BaseTHzData
+from dataset_core.data_structures.thz import THzData, BaseTHzData, THzDataReflection
 from dataset_core.services.grouping import GroupingService
 from dataset_core.services.database import DatabaseService
 
@@ -425,19 +425,42 @@ class DataSet:
             return None
         return Loader(path).load()
 
-    def load_all_data(self, prefer_acc=True, file_lister=None, case_insensitive=False) -> DataService:
+    def load_all_data(self, prefer_acc=True, file_lister=None, case_insensitive=False, explicit_dir=False) -> DataService:
         '''Loads all files in the specified directory into the data service.
+
+        Reflection layout detection
+        ---------------------------
+        If ``file_dir`` contains both a ``first_reflection/`` and a
+        ``second_reflection/`` subdirectory, the method automatically loads the
+        dataset in reflection mode: each second-reflection file is paired with its
+        matching first-reflection counterpart and stored as a
+        ``THzDataReflection`` object.  If those subdirectories do not exist the
+        method falls back to loading all files in ``file_dir`` directly as plain
+        ``THzData`` objects (original behaviour).
+        ``explicit_dir`` forces the method to load from ``file_dir`` directly, even if the reflection subdirs are present. This is useful for rerunning the preprocessing, debugging, or non-reflection datasets in a reflection-style folder structure.
 
         Parameters
         ----------
         prefer_acc : bool
-            If True, acc files of the same name are loaded instead of dat files when both are present.
+            If True, acc files of the same name are loaded instead of dat files
+            when both are present.
         file_lister : callable or None
             Optional function(directory_path) -> list[str] of filenames.
             Defaults to os.listdir. Inject a replacement for testing.
         case_insensitive : bool
             If True, file matching is done in a case-insensitive manner.
         '''
+        first_subdir = os.path.join(self.file_dir, 'first_reflection')
+        second_subdir = os.path.join(self.file_dir, 'second_reflection')
+        if not explicit_dir and os.path.isdir(first_subdir) and os.path.isdir(second_subdir):
+            return self._load_reflection_layout(
+                first_subdir,
+                second_subdir,
+                prefer_acc=prefer_acc,
+                file_lister=file_lister,
+                case_insensitive=case_insensitive,
+            )
+
         if file_lister is None:
             file_lister = os.listdir
 
@@ -465,6 +488,84 @@ class DataSet:
             raise FileNotFoundError(f"No valid data files found in {self.file_dir}. Please check the directory and file formats.")
         self.data.update_filelist(filelist=filelist)
 
+        return self.data
+
+    def _load_reflection_layout(
+        self,
+        first_dir: str,
+        second_dir: str,
+        *,
+        prefer_acc: bool,
+        file_lister,
+        case_insensitive: bool,
+    ) -> DataService:
+        """Load a segmented reflection dataset from first_reflection/ + second_reflection/ subdirs.
+
+        Each second-reflection file that has a matching first-reflection file is
+        promoted to a ``THzDataReflection`` object.  Files with no match are
+        loaded as plain ``THzData`` objects with a warning.
+        """
+        if file_lister is None:
+            file_lister = os.listdir
+
+        second_raw = file_lister(second_dir)
+        if prefer_acc:
+            second_raw = [
+                f for f in second_raw
+                if not (f.endswith('.dat') and f[:-4] + '.acc' in second_raw)
+            ]
+
+        first_raw = file_lister(first_dir)
+        if prefer_acc:
+            first_raw = [
+                f for f in first_raw
+                if not (f.endswith('.dat') and f[:-4] + '.acc' in first_raw)
+            ]
+        first_lookup = {f.lower(): f for f in first_raw}
+
+        filelist = []
+        for filename in second_raw:
+            filepath = os.path.join(second_dir, filename)
+            if os.path.isdir(filepath):
+                continue
+            second_obj = self.load_any(filepath)
+            if second_obj is None:
+                continue
+
+            stored_name = filename.lower() if case_insensitive else filename
+            second_obj.filename = stored_name
+
+            first_match_key = filename.lower()
+            first_match = first_lookup.get(first_match_key)
+            if first_match is not None:
+                first_filepath = os.path.join(first_dir, first_match)
+                first_obj = self.load_any(first_filepath)
+                if first_obj is not None:
+                    first_obj.filename = stored_name
+                    second_obj = THzDataReflection.from_thzdata(second_obj, first_obj)
+                else:
+                    print(f"Warning: could not load first-reflection counterpart for '{filename}'.")
+            else:
+                print(f"Warning: no first-reflection counterpart found for '{filename}'; loaded as plain THzData.")
+
+            self.data.add_item(stored_name, second_obj)
+            filelist.append(stored_name)
+
+        if not filelist:
+            raise FileNotFoundError(
+                f"No valid data files found in {second_dir}. "
+                "Check that second_reflection/ contains .acc or .dat files."
+            )
+        self.data.update_filelist(filelist=filelist)
+
+        n_reflection = sum(
+            1 for obj in self.data.values()
+            if isinstance(obj, THzDataReflection)
+        )
+        print(
+            f"Loaded {len(filelist)} files from reflection layout "
+            f"({n_reflection} with paired first-reflection segments)."
+        )
         return self.data
     
     def load_constants(self, constants: Constants) -> None:

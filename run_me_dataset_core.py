@@ -133,10 +133,10 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A\segmented\second_reflection"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\H2O_timing tests"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-15"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\B"
     # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-06-10_humidity and purge\2026-06-09_CNT-paper\TESTING"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
@@ -207,8 +207,9 @@ if __name__ == "__main__":
     # import acquisition_editor
     # acquisition_editor.process_directory(fileDir)
    
-    def preprocess(dataset, show_graph=True):
-        dataset.load_all_data(case_insensitive=True)
+    def preprocess(fileDir, show_graph=True):
+        dataset = DataSet(fileDir)
+        dataset.load_all_data(case_insensitive=True, explicit_dir=True)
         # dataset.plot_current()
         # --- For reflection data ---
         dataset.group_files(keywords=['type'])
@@ -221,7 +222,7 @@ if __name__ == "__main__":
         # dataset.plot_current()
 
         thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.8), 'second_reflection': (162.2, 168.2)})
+        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.5), 'second_reflection': (162, 168)})
         print("Pre-processing complete.")
         sys.exit()
 
@@ -229,21 +230,16 @@ if __name__ == "__main__":
 
 # 15 mins for 6-aligned
 
-    # acquisition_editor(fileDir)
+    # acquisition_editor(fileDir)'
     ### --- Pre-processing and segmentation ---
+    # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
+    # preprocess(fileDir)
+    # --- Main analysis 
     dataset = DataSet(fileDir)
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
-    # dataset.plot_current()
-    # purging_analysis(dataset)
+    dataset.plot_current()
 
-
-            
-                
-
-    # dataset.plot_current()
-    # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
-    preprocess(dataset)
     # ---
 
 
@@ -253,8 +249,8 @@ if __name__ == "__main__":
 
     # thz.plot_current(dataset)
     thz.global_truncate(dataset)
-
-    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.5}}, show_graph=show_graph)
+    thz.pre_window_align_peak(dataset, show_graph=show_graph, recalibrate=False)  #, auto_range=(40,60))
+    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
     # The SNR mask is built inside transfer_function (it needs H), so the mask
@@ -279,7 +275,7 @@ if __name__ == "__main__":
     # thz.phase_correction(dataset, source='fft')
 
 
-    n_window_freq = window_characterisation(dataset)
+    # n_window_freq = window_characterisation(dataset)
     # thz.invert_nk(dataset, thickness_m=1e-3)
     thz.invert_nk_reflection(
         dataset,
@@ -287,7 +283,7 @@ if __name__ == "__main__":
         theta_deg=45,
         polarization='s',
         # n_window=1.964,
-        n_window=n_window_freq,
+        n_window=1.964,
     )
     # thz.invert_nk_reflection(
     #     dataset,

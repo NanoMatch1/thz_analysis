@@ -2,6 +2,7 @@ import numpy as np
 import thz_core.thz_core as core
 import matplotlib.pyplot as plt
 from dataset_core.dataset import DataSet, DataService
+from dataset_core.data_structures.thz import THzDataReflection
 """Used to bridge the DataSet manager and the thz analysis library.
 
 Unit convention
@@ -235,6 +236,13 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: 
         scan_columns = scan_matrix[:, 1:]
         scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
 
+        if isinstance(data_obj, THzDataReflection):
+            first_seg = data_obj.first_segment
+            first_data_dict = {filename: _time_amplitude_array(first_seg)}
+            first_corrected, first_metrics = core.subtract_baseline(first_data_dict, config)
+            first_seg.data = first_corrected[filename]
+            first_seg.processing_dict['baseline_metrics'] = first_metrics
+
     return dataset
 
 def global_truncate(dataset, show_graph=False):
@@ -304,11 +312,10 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
     """Apply a time-domain window to each trace in the dataset."""
     config = config or {}
 
-    for filename, data_obj in dataset.data.items():       
+    for filename, data_obj in dataset.data.items():
         t = data_obj.data[:, 0]
         y = data_obj.data[:, 1]
         windowed_y, metrics, global_window = core.window_time(t, y, config)
-        # display_window = 
 
         new_data = np.column_stack((t, windowed_y))
         if data_obj.data.shape[1] > 2:
@@ -317,6 +324,15 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
         data_obj.data = new_data
         data_obj.processing_dict['window_metrics'] = metrics
         data_obj.processing_dict['pre-window'] = np.column_stack((t, y))
+
+        if isinstance(data_obj, THzDataReflection):
+            first_seg = data_obj.first_segment
+            first_t = first_seg.data[:, 0]
+            first_y = first_seg.data[:, 1]
+            first_windowed_y, first_metrics, _ = core.window_time(first_t, first_y, config)
+            first_seg.data = np.column_stack((first_t, first_windowed_y))
+            first_seg.processing_dict['window_metrics'] = first_metrics
+            first_seg.processing_dict['pre-window'] = np.column_stack((first_t, first_y))
 
     if show_graph:
         import matplotlib.pyplot as plt
@@ -440,7 +456,7 @@ def segment_reflections(
         raise ValueError("bounds_units must be 'ps' or 's'.")
     to_ps = (lambda v: float(v)) if bounds_units == 'ps' else (lambda v: float(v) * _S_TO_PS)
 
-    base_out = output_dir or os.path.join(dataset.file_dir, 'segmented')
+    base_out = output_dir or dataset.file_dir
     per_file = bool(segments) and all(isinstance(v, dict) for v in segments.values())
 
     written: list[str] = []
@@ -722,6 +738,29 @@ def zero_pad(dataset: DataSet, config: dict | None = None, show_graph: bool = Fa
     return dataset
 
 
+def _compute_first_segment_fft(first_seg, freq: np.ndarray) -> None:
+    """Compute the FFT of a first-reflection segment on a pre-determined frequency grid.
+
+    The first-reflection gate is typically shorter than the second-reflection gate,
+    so it has fewer time-domain samples.  Using the second reflection's n_fft (via
+    ``len(freq)`` back-calculation) implicitly zero-pads the first-segment rfft to
+    the same length, ensuring W = Y2 / Y1 can be formed sample-by-sample.
+
+    The absolute-time phase reference (``exp(-i*2*pi*f*t0)``) is applied so the
+    first- and second-reflection spectra share a common experiment time origin.
+    """
+    first_t = first_seg.data[:, 0]
+    first_y = first_seg.data[:, 1]
+    # Back-calculate n_fft from the frequency grid produced by the second FFT.
+    # rfftfreq(n, dt) has length n//2 + 1, so n = 2*(len(freq)-1).
+    n_fft = 2 * (len(freq) - 1)
+    spectrum = np.fft.rfft(first_y - np.mean(first_y), n=n_fft)
+    spectrum *= np.exp(-2j * np.pi * freq * first_t[0])
+    first_seg.processing_dict['fft_freq'] = freq
+    first_seg.processing_dict['fft_spectrum'] = spectrum
+    first_seg.current_state = 'frequency_domain'
+
+
 def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     """Compute the FFT for each trace and switch data to frequency domain."""
     config = config or {}
@@ -746,6 +785,9 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
             np.angle(spectrum),
         ))
         data_obj.current_state = 'frequency_domain'
+
+        if isinstance(data_obj, THzDataReflection):
+            _compute_first_segment_fft(data_obj.first_segment, freq)
 
     return dataset
 
@@ -839,28 +881,51 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
     first_reflection_dir = None
     first_spectra_cache: dict = {}
     if self_reference:
-        first_reflection_dir = transfer_cfg.get('first_reflection_dir') or os.path.join(
-            os.path.dirname(dataset.file_dir), 'first_reflection'
-        )
-        if not os.path.isdir(first_reflection_dir):
-            raise FileNotFoundError(
-                f"Self-referencing needs the first-reflection segment folder, but "
-                f"'{first_reflection_dir}' does not exist. Run segment_reflections "
-                f"with a 'first_reflection' component, set "
-                f"config['transfer']['first_reflection_dir'] explicitly, or disable "
-                f"with config['transfer']['self_reference'] = False."
-            )
+        # Datasets loaded from the root dir (THzDataReflection objects) carry their
+        # first-segment spectra directly — no file path needed for those.
+        # The path is only required for the legacy mode (pointing at second_reflection/).
+        explicit_dir = transfer_cfg.get('first_reflection_dir')
+        if explicit_dir:
+            first_reflection_dir = explicit_dir
+        else:
+            # New root layout: first_reflection/ is a subdir of dataset.file_dir
+            candidate_subdir = os.path.join(dataset.file_dir, 'first_reflection')
+            # Legacy layout: first_reflection/ is a sibling of second_reflection/
+            candidate_sibling = os.path.join(os.path.dirname(dataset.file_dir), 'first_reflection')
+            if os.path.isdir(candidate_subdir):
+                first_reflection_dir = candidate_subdir
+            elif os.path.isdir(candidate_sibling):
+                first_reflection_dir = candidate_sibling
 
-    def _cached_first_spectrum(filename: str, freq: np.ndarray) -> np.ndarray:
-        if filename not in first_spectra_cache:
-            filepath = os.path.join(first_reflection_dir, filename)
+    def _get_first_spectrum(data_object, freq: np.ndarray) -> np.ndarray:
+        """Retrieve or compute the first-reflection spectrum for a data object.
+
+        Prefers ``first_segment.processing_dict['fft_spectrum']`` when the object
+        is a ``THzDataReflection`` (already computed by the pipeline). Falls back
+        to loading from disk via the legacy ``_first_reflection_spectrum`` path.
+        """
+        if isinstance(data_object, THzDataReflection):
+            stored = data_object.first_segment.processing_dict.get('fft_spectrum')
+            if stored is not None:
+                return stored
+        fname = data_object.filename
+        if fname not in first_spectra_cache:
+            if first_reflection_dir is None or not os.path.isdir(first_reflection_dir):
+                raise FileNotFoundError(
+                    f"Self-referencing needs the first-reflection segment folder, but "
+                    f"none was found and '{fname}' has no pre-computed first segment. "
+                    f"Either load the dataset from its root directory (which contains "
+                    f"first_reflection/ and second_reflection/ subdirs) or set "
+                    f"config['transfer']['first_reflection_dir'] explicitly."
+                )
+            filepath = os.path.join(first_reflection_dir, fname)
             if not os.path.exists(filepath):
                 raise FileNotFoundError(
-                    f"Self-referencing: no first-reflection file for '{filename}' "
+                    f"Self-referencing: no first-reflection file for '{fname}' "
                     f"in '{first_reflection_dir}'."
                 )
-            first_spectra_cache[filename] = _first_reflection_spectrum(filepath, freq)
-        return first_spectra_cache[filename]
+            first_spectra_cache[fname] = _first_reflection_spectrum(filepath, freq)
+        return first_spectra_cache[fname]
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -897,8 +962,8 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
 
         front_samp = front_ref = None
         if self_reference:
-            front_samp = _cached_first_spectrum(filename, freq)
-            front_ref = _cached_first_spectrum(ref_obj.filename, freq)
+            front_samp = _get_first_spectrum(data_obj, freq)
+            front_ref = _get_first_spectrum(ref_obj, freq)
             with np.errstate(divide='ignore', invalid='ignore'):
                 selfref_correction = front_ref / front_samp
             H = H * selfref_correction
@@ -1021,8 +1086,11 @@ def _resolve_reflection_geometry(
     if geometry == 'gold':
         return 1.0, theta_external_rad, r_reference
     if geometry == 'window':
+        # Theta is a single angle — use the scalar mean of n_window for Snell's law.
+        # r_reference is computed with the full (possibly per-frequency) n_window array.
+        n_window_scalar = float(np.real(np.mean(np.atleast_1d(n_window))))
         theta_internal_rad = float(
-            np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window))
+            np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window_scalar))
         )
         r_reference_value = core.fresnel_reflection_s(n_window, 1.0, theta_internal_rad)
         return n_window, theta_internal_rad, r_reference_value
@@ -1186,7 +1254,6 @@ def characterise_window(
 
     def _load_segment(filepath):
         averaged = np.asarray(ACCLoader(filepath).load().data, dtype=float)
-        breakpoint()
         return averaged[:, 0], averaged[:, 1]
 
     time_first, amp_first = _load_segment(first_reflection_path)
