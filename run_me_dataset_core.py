@@ -74,7 +74,11 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\A\segmented\second_reflection"
-    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\H2O_timing tests"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
+    fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-06-10_humidity and purge\2026-06-09_CNT-paper\TESTING"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-12\B\segmented\second_reflection"
 
@@ -128,7 +132,7 @@ if __name__ == "__main__":
 
     ### --- Acquisition editing ---
    
-    def preprocess(dataset, show_graph=False):
+    def preprocess(dataset, show_graph=True):
         dataset.load_all_data(case_insensitive=True)
         # dataset.plot_current()
         # --- For reflection data ---
@@ -142,18 +146,41 @@ if __name__ == "__main__":
         # dataset.plot_current()
 
         thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.8), 'second_reflection': (163, 172)})
+        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.8), 'second_reflection': (162.2, 168.2)})
         print("Pre-processing complete.")
         sys.exit()
 
         # dataset.save_state()
 
+# 15 mins for 6-aligned
 
     # acquisition_editor(fileDir)
     ### --- Pre-processing and segmentation ---
     dataset = DataSet(fileDir)
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
+    # dataset.plot_current()
+
+    new_dict = {}
+    for filename, data_obj in dataset.data.items():
+        # breakpoint()
+        dataX = data_obj.raw_data[:, 0]
+        # plt.plot()
+        mask = [True if (x > 154) and (x < 158) else False for x in dataX]
+        breakpoint()
+        for index in range(data_obj.raw_data.shape[1]):
+            if index == 0:
+                last_trace = np.zeros_like(dataX[mask])
+                continue
+            dataY = data_obj.raw_data[mask, index]
+            difference = dataY - last_trace
+            deviation = np.std(difference) # gen deviation metric
+            last_trace = np.copy(dataY)
+            # new_dict
+            
+            
+                
+
     # dataset.plot_current()
     # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
     # preprocess(dataset)
@@ -163,18 +190,29 @@ if __name__ == "__main__":
     dataset.group_files(keywords=['type'])
     dataset.grouping.show_matches()
 
-    thz.plot_current(dataset)
+    # thz.plot_current(dataset)
     thz.global_truncate(dataset)
 
-    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 0.5}}, show_graph=show_graph)
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 2.0}}, show_graph=show_graph)
+    thz.window_time(dataset, config={"window": {"type": "hann", "alpha": 0.2}}, show_graph=show_graph)
+    thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
-    thz.trusted_band_mask(dataset, config={"mask": {"snr_thresh_db": 2,
-                                                 "tail_fraction": 0.25,
-                                                 "min_contiguous_bins": 3}})
-    thz.transfer_function(dataset, config={"transfer": {"apply_snr_mask": True}}, ref_type='reference')
+    # The SNR mask is built inside transfer_function (it needs H), so the mask
+    # thresholds must travel with it — a standalone trusted_band_mask call before
+    # this point is a no-op (transfer_H not computed yet) and silently drops them.
+    # self_reference: front-pulse drift correction from the sibling
+    # first_reflection segment folder (ANALYSIS_NOTES §11). Set False to compare
+    # against the conventional bare-window reference.
+    thz.transfer_function(
+        dataset,
+        config={
+            "transfer": {"apply_snr_mask": True, "self_reference": True},
+            "mask": {"snr_thresh_db": 20, "tail_fraction": 0.25, "min_contiguous_bins": 3},
+        },
+        ref_type='reference',
+    )
     # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
-    # thz.plot_fft(dataset, freq_range=(0.3, 10), normalise=False, scale='')
+
+    thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
 # 
     # thz.phase_correction(dataset, source='fft')
 
@@ -197,4 +235,31 @@ if __name__ == "__main__":
 
     dataset.save_database()
     thz.result_viewer(dataset)
-    thz.export_results(dataset)
+    # thz.export_results(dataset)
+    def plot_sigma(dataset):
+        fig_sigma, ax = plt.subplots()
+        show_snr_mask = True
+        cmap = plt.get_cmap('tab10')
+        for index, (filename, data_obj) in enumerate(thz._sample_items(dataset)):
+            freq = data_obj.processing_dict.get('fft_freq')
+            # n = data_obj.processing_dict.get('n')
+            # k = data_obj.processing_dict.get('k')
+            sigma = data_obj.processing_dict.get('sigma')
+            real = sigma.real
+            imag = sigma.imag
+            if freq is None or real is None or imag is None:
+                continue
+            mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
+            thz._plot_with_snr_mask(ax, freq * thz._HZ_TO_THZ, real, mask, label="{} (real)".format(filename), color=cmap(index))
+            thz._plot_with_snr_mask(ax, freq * thz._HZ_TO_THZ, imag, mask, label="{} (imag)".format(filename), color=cmap(index), linestyle='dashed')
+        
+        plt.legend()
+        plt.xlabel("Frequency (THz)")
+        # plt.ylabel("Refractive Index / Extinction Coefficient")
+        plt.ylabel("Conductivity (S/m)")
+        plt.title("Derived Conductivity")
+        return 
+
+
+    plot_sigma(dataset)
+    plt.show()

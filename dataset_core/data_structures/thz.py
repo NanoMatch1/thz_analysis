@@ -299,6 +299,11 @@ class THzData:
     def __repr__(self):
         return f"\nTHzData:{self.filename}\n   -> Scans: {len(self.data_list)}\n   -> Data type: {self.data_type}\n" 
     
+    def resolve_timestamps(self):
+        '''Returns a list of timestamps for each scan in the dataset and saves as an attribute.'''
+        self._timestamps = [obj.timestamp for obj in self.data_list]
+        return self._timestamps
+
     def copy(self) -> THzData:
         '''Creates a deep copy of the THzData object, including all scans and metadata.'''
         copied_scans = [BaseTHzData(data=obj.raw_data.copy(), headers=obj.headers.copy() if obj.headers else None) for obj in self.data_list]

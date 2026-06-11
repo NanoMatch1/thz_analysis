@@ -326,7 +326,7 @@ def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool =
             data_pre = data_obj.processing_dict.get('pre-window')
             ax[0].plot(data_pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
             ax[1].plot(data_obj.data[:, 1], label='{} (windowed)'.format(filename))
-            breakpoint()
+
         ax[0].plot(global_window, label='Window Function', alpha=0.5, lw=1)
         ax[0].legend()
         ax[1].legend()
@@ -701,6 +701,18 @@ def zero_pad(dataset: DataSet, config: dict | None = None, show_graph: bool = Fa
     t_common, padded_dict, metrics = core.pad_to_common_grid(data_dict)
     t_extended, extended_dict, metrics = core.extend_grid(t_common, padded_dict, extend_factor)
 
+    if show_graph:
+        fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+        for filename, data_obj in dataset.data.items():
+            pre = data_obj.data
+            # breakpoint()
+            ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
+            ax.plot(t_extended * _S_TO_PS, extended_dict[filename], label='{} (padded)'.format(filename))
+        ax.set_xlabel('Time (ps)')
+        ax.set_title('Zero-Padded Traces')
+        ax.legend()
+        plt.show()
+
     for filename, data_obj in dataset.data.items():
         padded_y = extended_dict[filename]
         new_data = np.column_stack((t_extended, padded_y))
@@ -738,6 +750,49 @@ def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
     return dataset
 
 
+def _absolute_time_spectrum(time_s: np.ndarray, amplitude: np.ndarray, n_fft: int) -> tuple:
+    """Hann-windowed rfft of a segment, phase-referenced to ABSOLUTE time.
+
+    The rfft's implicit time origin is the first sample; multiplying by
+    ``exp(-i*2*pi*f*t0)`` refers the phase back to the experiment time axis so
+    spectra of segments cropped from different gates share a common origin.
+    The mean is subtracted first (segments carry no meaningful DC).
+    """
+    dt = float(np.median(np.diff(time_s)))
+    windowed = (amplitude - np.mean(amplitude)) * np.hanning(amplitude.size)
+    spectrum = np.fft.rfft(windowed, n=n_fft)
+    freq = np.fft.rfftfreq(n_fft, dt)
+    return freq, spectrum * np.exp(-2j * np.pi * freq * time_s[0])
+
+
+def _first_reflection_spectrum(filepath: str, freq: np.ndarray) -> np.ndarray:
+    """Spectrum of a segmented first-reflection .acc on the pipeline's grid.
+
+    Loads the file, averages its scans, and computes the absolute-time
+    referenced spectrum with the FFT length chosen so the frequency grid
+    matches ``freq`` (the grid of the already-FFT'd second-reflection data).
+    """
+    from dataset_core.io.loaders.acc_loader import ACCLoader
+
+    thz_obj = ACCLoader(filepath).load()
+    averaged = np.asarray(thz_obj.data, dtype=float)  # [time_s, mean, stderr]
+    time_s = averaged[:, 0]
+    amplitude = averaged[:, 1]
+
+    dt = float(np.median(np.diff(time_s)))
+    df = float(freq[1] - freq[0])
+    n_fft = int(round(1.0 / (df * dt)))
+    grid, spectrum = _absolute_time_spectrum(time_s, amplitude, n_fft)
+    if grid.size != freq.size or not np.allclose(grid, freq, rtol=0, atol=df * 1e-6):
+        raise ValueError(
+            f"First-reflection grid of '{filepath}' (dt {dt * _S_TO_PS:.4f} ps, "
+            f"{grid.size} bins) does not match the pipeline FFT grid "
+            f"({freq.size} bins, df {df * _HZ_TO_THZ * 1e3:.3f} GHz). The first- "
+            f"and second-reflection segments must come from the same acquisitions."
+        )
+    return spectrum
+
+
 def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: str = 'substrate') -> DataSet:
     """Compute H(f) = Y_sample / Y_reference for each sample-reference pair.
 
@@ -748,9 +803,64 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
 
     Per-spectrum SNR masks are stored on both sample and reference objects as
     ``processing_dict['snr_mask']`` for use by frequency-domain visualizations.
+
+    Front-pulse self-referencing (window-coupled reflection)
+    --------------------------------------------------------
+    ``config['transfer']['self_reference'] = True`` multiplies H by the
+    front-pulse drift correction ``C = Y1_ref / Y1_sample`` built from the
+    sibling ``first_reflection`` segment folder, giving
+
+        H_new = (Y2_s / Y1_s) / (Y2_ref / Y1_ref)
+
+    — a ratio of intra-trace ratios in which source-spectrum, detector and
+    mount-to-mount alignment drift cancel (each trace is referenced to its own
+    front-face reflection, which never sees the sample). Validated on CNT-13/D:
+    mount drift of 7-10% rms is replaced by a ~1.6% prediction noise floor
+    (see ANALYSIS_NOTES §11). Requirements:
+
+    - the dataset directory is a ``second_reflection`` segment folder whose
+      sibling ``first_reflection`` folder holds the SAME filenames (the
+      ``segment_reflections`` layout); override the location with
+      ``config['transfer']['first_reflection_dir']``;
+    - both gates must treat instrument echoes (GaP) consistently — either
+      both inside or both outside the gate — so the echo factor cancels in W.
+
+    The sub-sample timing ramp is skipped in this mode: the front-pulse
+    spectra already carry the true relative timing, so applying the ramp as
+    well would double-count the residual.
     """
+    import os
+
     config = config or {}
-    apply_snr_mask = config.get('transfer', {}).get('apply_snr_mask', True)
+    transfer_cfg = config.get('transfer', {})
+    apply_snr_mask = transfer_cfg.get('apply_snr_mask', True)
+    self_reference = transfer_cfg.get('self_reference', False)
+
+    first_reflection_dir = None
+    first_spectra_cache: dict = {}
+    if self_reference:
+        first_reflection_dir = transfer_cfg.get('first_reflection_dir') or os.path.join(
+            os.path.dirname(dataset.file_dir), 'first_reflection'
+        )
+        if not os.path.isdir(first_reflection_dir):
+            raise FileNotFoundError(
+                f"Self-referencing needs the first-reflection segment folder, but "
+                f"'{first_reflection_dir}' does not exist. Run segment_reflections "
+                f"with a 'first_reflection' component, set "
+                f"config['transfer']['first_reflection_dir'] explicitly, or disable "
+                f"with config['transfer']['self_reference'] = False."
+            )
+
+    def _cached_first_spectrum(filename: str, freq: np.ndarray) -> np.ndarray:
+        if filename not in first_spectra_cache:
+            filepath = os.path.join(first_reflection_dir, filename)
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(
+                    f"Self-referencing: no first-reflection file for '{filename}' "
+                    f"in '{first_reflection_dir}'."
+                )
+            first_spectra_cache[filename] = _first_reflection_spectrum(filepath, freq)
+        return first_spectra_cache[filename]
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -773,11 +883,30 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
         # time-domain trace. It is a no-op (residual = 0) when alignment was not
         # run, or when the SUBSAMPLE_TIMING_CORRECTION toggle was off.
         subsample_shift = data_obj.processing_dict.get('subsample_shift_seconds', 0.0)
-        if subsample_shift:
+        if self_reference and subsample_shift:
+            print(
+                f"[sub-sample] '{filename}': ramp for {subsample_shift * _S_TO_PS:+.4f} ps "
+                f"skipped — self-referencing carries the front-pulse timing itself."
+            )
+        elif subsample_shift:
             H = H * core.phase_ramp(freq, subsample_shift)
             print(
                 f"[sub-sample] '{filename}': applied spectral phase ramp for "
                 f"{subsample_shift * _S_TO_PS:+.4f} ps residual timing."
+            )
+
+        front_samp = front_ref = None
+        if self_reference:
+            front_samp = _cached_first_spectrum(filename, freq)
+            front_ref = _cached_first_spectrum(ref_obj.filename, freq)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                selfref_correction = front_ref / front_samp
+            H = H * selfref_correction
+            data_obj.processing_dict['selfref_correction'] = selfref_correction
+            band = np.isfinite(selfref_correction)
+            print(
+                f"[self-ref] '{filename}': applied front-pulse correction "
+                f"(|C| median {np.nanmedian(np.abs(selfref_correction[band])):.3f})."
             )
 
         data_obj.processing_dict['transfer_H'] = H
@@ -789,6 +918,13 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
                 snr_mask_combined, mask_metrics = core.trusted_band_mask(
                     freq, Y_ref, Y_samp, H, config,
                 )
+                if self_reference:
+                    # The correction divides by the front-pulse spectra, so bins
+                    # where THEY are noise must be excluded too.
+                    front_mask, _ = core.trusted_band_mask(
+                        freq, front_ref, front_samp, H, config,
+                    )
+                    snr_mask_combined = snr_mask_combined & front_mask
                 data_obj.processing_dict['transfer_mask'] = snr_mask_combined
                 data_obj.processing_dict['mask_metrics'] = mask_metrics
                 _write_snr_masks(data_obj, ref_obj, mask_metrics)
@@ -988,6 +1124,154 @@ def invert_nk_reflection(
         data_obj.data = np.column_stack((freq, n, k))
 
     return dataset
+
+
+def characterise_window(
+    first_reflection_path: str,
+    second_reflection_path: str,
+    *,
+    thickness_m: float,
+    theta_deg: float = 45.0,
+    band_thz: tuple = (0.25, 2.75),
+    n_initial: float = 1.95,
+    fft_length: int = 8192,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> dict:
+    """Window optical constants from a single bare-window two-pulse trace.
+
+    Takes the two segmented components of ONE bare-window acquisition (the
+    ``segment_reflections`` output for the same original file) and:
+
+    1. computes the intra-trace ratio ``W = Y_second / Y_first`` — the window
+       transfer function, in which the source spectrum, detector response and
+       shared air path cancel;
+    2. measures the inter-pulse envelope delay (anchors the phase branch);
+    3. inverts W for the complex window index n(f) - i*k(f) via
+       ``thz_core.invert_window_index`` (s-pol, plane-parallel window model).
+
+    The measured W is also the quantity used by front-pulse self-referencing
+    (``transfer_function`` with ``self_reference=True``): the empirical W
+    predicts the bare-window second reflection from any measured first
+    reflection. Use THIS function to characterise/monitor the window; use the
+    transfer-function option to apply the correction in the pipeline.
+
+    Parameters
+    ----------
+    first_reflection_path, second_reflection_path : str
+        Segmented .acc files of the same bare-window acquisition.
+    thickness_m : float
+        Window thickness in metres (e.g. 0.9e-3). The extracted n scales
+        inversely with it: a 1% thickness error is ~1% systematic on n.
+    theta_deg : float
+        EXTERNAL angle of incidence in degrees.
+    band_thz : tuple[float, float]
+        Trusted analysis band in THz for the inversion.
+    n_initial : float
+        Starting index for the iterative inversion.
+    fft_length : int
+        Zero-padded FFT length applied to both segments (sets the grid).
+    config : dict, optional
+        Extra ``window`` config keys forwarded to ``invert_window_index``.
+    show_graph : bool
+        Plot |W|, the extracted n(f) and k(f).
+
+    Returns
+    -------
+    dict
+        ``freq`` (Hz), ``W`` (complex), ``mask``, ``n``, ``k``,
+        ``delay_s`` (measured inter-pulse delay), and ``metrics``.
+    """
+    from dataset_core.io.loaders.acc_loader import ACCLoader
+
+    def _load_segment(filepath):
+        averaged = np.asarray(ACCLoader(filepath).load().data, dtype=float)
+        return averaged[:, 0], averaged[:, 1]
+
+    time_first, amp_first = _load_segment(first_reflection_path)
+    time_second, amp_second = _load_segment(second_reflection_path)
+
+    dt_first = float(np.median(np.diff(time_first)))
+    dt_second = float(np.median(np.diff(time_second)))
+    if abs(dt_first - dt_second) > 1e-3 * dt_first:
+        raise ValueError(
+            f"Segment sampling intervals differ ({dt_first * _S_TO_PS:.4f} vs "
+            f"{dt_second * _S_TO_PS:.4f} ps) — both segments must come from the "
+            f"same acquisition."
+        )
+
+    freq, spectrum_first = _absolute_time_spectrum(time_first, amp_first, fft_length)
+    _, spectrum_second = _absolute_time_spectrum(time_second, amp_second, fft_length)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        w_measured = spectrum_second / spectrum_first
+
+    delay_s = (core.envelope_peak_time(time_second, amp_second)
+               - core.envelope_peak_time(time_first, amp_first))
+
+    f_thz = freq * _HZ_TO_THZ
+    mask = (
+        (f_thz >= band_thz[0]) & (f_thz <= band_thz[1])
+        & np.isfinite(w_measured)
+    )
+
+    window_config = {'window': {'n_initial': n_initial}}
+    if config:
+        window_config['window'].update(config.get('window', {}))
+
+    theta_external_rad = np.deg2rad(theta_deg)
+    n_window, k_window, metrics = core.invert_window_index(
+        freq, w_measured, mask,
+        thickness_m=thickness_m,
+        theta_external_rad=theta_external_rad,
+        delay_estimate_s=delay_s,
+        config=window_config,
+    )
+
+    cos_internal = float(np.real(
+        np.cos(core.snell_refracted_angle(theta_external_rad, 1.0, n_initial))
+    ))
+    nominal_delay_s = 2.0 * n_initial * thickness_m * cos_internal / 299_792_458.0
+    print("---- Window characterisation ----")
+    print(f"Files: {first_reflection_path}")
+    print(f"       {second_reflection_path}")
+    print(f"Inter-pulse delay: measured {delay_s * _S_TO_PS:.3f} ps "
+          f"(nominal n={n_initial}, d={thickness_m * 1e3:.3f} mm: "
+          f"{nominal_delay_s * _S_TO_PS:.3f} ps)")
+    print(f"n_window: mean {metrics['values']['n_mean']:.4f} "
+          f"+/- {metrics['values']['n_std']:.4f}, "
+          f"k mean {metrics['values']['k_mean']:.4f} "
+          f"({metrics['values']['trusted_bins']} bins, "
+          f"converged={metrics['values']['converged']})")
+
+    if show_graph:
+        fig, (ax_w, ax_n, ax_k) = plt.subplots(
+            3, 1, figsize=(9, 8), sharex=True, layout='constrained'
+        )
+        ax_w.plot(f_thz[mask], np.abs(w_measured[mask]))
+        ax_w.set_ylabel('|W|')
+        ax_w.set_title(
+            f'Window transfer W = Y2/Y1 and extracted index '
+            f'(d = {thickness_m * 1e3:.3f} mm, {theta_deg:.0f}° external)'
+        )
+        ax_n.plot(f_thz[mask], n_window[mask])
+        ax_n.axhline(n_initial, color='0.5', lw=0.8, ls=':',
+                     label=f'n_initial {n_initial}')
+        ax_n.set_ylabel('n')
+        ax_n.legend()
+        ax_k.plot(f_thz[mask], k_window[mask])
+        ax_k.set_ylabel('k')
+        ax_k.set_xlabel('Frequency (THz)')
+        plt.show()
+
+    return {
+        'freq': freq,
+        'W': w_measured,
+        'mask': mask,
+        'n': n_window,
+        'k': k_window,
+        'delay_s': delay_s,
+        'metrics': metrics,
+    }
 
 
 def invert_nk_grid(dataset: DataSet, config: dict | None = None) -> DataSet:
@@ -1783,8 +2067,8 @@ def phase_correction(dataset: DataSet, source: str = 'transfer') -> DataSet:
         Must already have FFT data (and transfer function if *source='transfer'*).
     source : str
         Which complex spectrum to operate on:
-        - ``'transfer'`` – unwrapped phase of H(f)  (default)
-        - ``'fft'``      – unwrapped phase of the raw FFT spectrum
+        - ``'transfer'`` - unwrapped phase of H(f)  (default)
+        - ``'fft'``      - unwrapped phase of the raw FFT spectrum
 
     Workflow (per trace, blocking):
         1. Show unwrapped phase vs frequency (THz).
@@ -1877,7 +2161,8 @@ def phase_correction(dataset: DataSet, source: str = 'transfer') -> DataSet:
         # intercept is the timing-error offset; subtract the full linear trend
         # so that the residual phase is only dispersion.
         correction = np.polyval(selection['coeffs'], freq_thz)
-        corrected_unwrapped = unwrapped - correction
+        # corrected_unwrapped = unwrapped - correction
+        corrected_unwrapped = unwrapped - intercept  # only remove y-intercept
 
         plt.plot(freq_thz, unwrapped, color='steelblue', alpha=0.5, label='original')
         plt.plot(freq_thz, corrected_unwrapped, color='darkorange', label='corrected')

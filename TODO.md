@@ -1,10 +1,45 @@
 # TODO
 
+## dataset_core — two-phase pipeline
+
+- [ ] **Persist the sub-sample alignment residual across segmentation.**
+  `align_to_reference` (phase 1) stores `subsample_shift_seconds` in
+  `processing_dict`, which is lost when the segmented .acc files are reloaded in
+  phase 2 — so the §4 spectral phase ramp has not been applied in the split
+  workflow. Options: write the residual into the segmented file header (a
+  `%param` token the loader picks up), or a sidecar JSON per segment folder.
+  Not needed when `transfer.self_reference` is on (the front-pulse correction
+  carries the true timing itself — ANALYSIS_NOTES §11), but the conventional
+  path should be correct too.
+
+- [x] **Front-pulse self-referencing + window characterisation** (2026-06-11,
+  ANALYSIS_NOTES §11): `transfer_function` `self_reference` config option,
+  `characterise_window`, thz-core `window.py` (`window_transfer_model`,
+  `invert_window_index`, `envelope_peak_time`). Tests:
+  `test_window_selfref_workflow.py` (5), thz-core `test_window.py` (9).
+  - Follow-up: feed measured n_SiO₂(ω) into `invert_nk_reflection` as a
+    per-frequency `n_window` array.
+  - Follow-up: average W over several bare-window acquisitions to push the
+    ~1.6% prediction noise floor down.
+
 ## dataset_core
 
 - [ ] Clean up `save_database` / `load_database` in `dataset.py`:
   - Remove hardcoded `database_dir` default path (`C:\Users\Samuel\Data\database`) — should be injected or read from config.
   - Deduplicate pickle serialisation/deserialisation logic shared with `save_state` / `load_state`.
+
+## dataset_core / thz-core — windowing
+
+- [ ] **Peak-centered time gating in `window_time`.** `core.window_time` only gates
+  via explicit `gate_start` / `gate_end`; there is no width-based gate, so a config
+  like `{"window": {"length": 0.3}}` (or `alpha` with `type:"hann"`) is silently
+  ignored and the window spans the whole trace. Add a gate specified as a width
+  centered on the main pulse: locate the |peak| (reuse
+  `preprocess.find_extremum_in_index_range`), then set
+  `gate_start = t_peak - width/2`, `gate_end = t_peak + width/2`. Decide the knob:
+  `gate_width_ps` (absolute) is clearest; thread it through the adapter
+  `window_time` config and add a unit test (gate centered on peak, correct width,
+  energy outside the gate zeroed). Keeps the existing explicit-bounds path intact.
 
 ## thz-core
 

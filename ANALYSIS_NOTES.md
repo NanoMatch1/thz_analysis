@@ -351,3 +351,59 @@ n/k/σ land — for testing "which shift reproduces the expected (Drude-like) sh
   fought the Slider widget and left the curve undrawn); fast enough for the
   few-hundred-point curves. An initial `update()` draws the curve immediately.
 - Tests: `tests/test_time_shift_sweep.py` (6); `test_phase_ramp.py` (2, thz-core).
+
+## 11. Front-pulse self-referencing & window characterisation  ★ implemented (2026-06-11)
+Problem: the bare-window reference and the pressed-sample measurement are
+different mounts. Window deformation under pressure / rotation / realignment
+changes the coupling into the spectrometer, so the reference no longer matches
+the sample's window path — frequency-structured "fake features" appear in H.
+
+- **Key identity.** The intra-trace ratio `W(ω) = Y₂/Y₁` of a bare-window trace
+  is a property of the window alone: source spectrum, detector response and the
+  shared air path are common to both pulses and cancel. Model (s-pol):
+  `W = [t_in·r_back·t_out/r_front]·exp(−2i(ω/c)·d·β)`, `β = √(n_w²−sin²θ_e)`.
+  The Fresnel factor is ≈ −0.81 for SiO₂ at 45° (sign flip between pulses).
+- **The correction.** `H_new = (Y₂ₛ/Y₁ₛ)/(Y₂ᵣ/Y₁ᵣ) = H_old·(Y₁ᵣ/Y₁ₛ)` — a ratio
+  of intra-trace ratios; each trace is referenced to its own front pulse, which
+  never sees the sample. The front-pulse ratio `D = Y₁ₛ/Y₁ᵣ` IS the drift, and
+  is directly measurable (D ≡ 1 would mean no drift).
+- **Evaluation on CNT-13/D (2026-06-10).** Mount-to-mount drift |D|−1 =
+  6.6–9.6% rms with oscillatory structure (swings 0.93–1.22). Leave-one-scan-out
+  CV on the bare window: predicting Y₂ from Y₁ via W has a 1.6% rms noise floor
+  (vs 1.0% direct substitution — the ~√2 cost of using two noisy pulses). So the
+  correction trades a 7–10% structured systematic for ~0.6% extra noise.
+  Full-pipeline result: pairwise spread across the three s-orientation repeats
+  drops n 11.3%→4.1%, σ₁ 18.3%→4.6%, |σ| 16.1%→3.6%. The 90°-rotated
+  P-orientation sample stays cleanly distinct (real anisotropy, ~25% in H) —
+  previously drift was a large fraction of that signal.
+- **Window characterisation.** `thz.characterise_window(first_path, second_path,
+  thickness_m=0.9e-3, theta_deg=45)` inverts the measured W for n_SiO₂(ω)−ik via
+  `thz_core.invert_window_index` (iterative Fresnel-corrected, phase branch
+  anchored by the measured envelope delay). CNT-13/D: n_SiO₂ = 1.962–1.967 flat
+  over 0.5–2.7 THz ⇒ fused silica (crystal quartz would be ~2.1), so rotation
+  sensitivity is geometric (wedge/mount), not birefringence. k comes out small
+  but slightly negative at low f (−0.013→+0.01): the pure Fresnel model misses a
+  ~1% coupling factor ⇒ **use the empirical W for reference construction; the
+  model fit is for characterisation/diagnostics only.** n scales inversely with
+  the assumed d (0.90±0.01 mm ⇒ ~1.1% systematic; measure d per window to do
+  better). Measured inter-pulse delay 11.018 ps ⇒ n·d·cosθᵢ = 1.6516 mm.
+- **Usage.** `transfer_function(dataset, config={"transfer":
+  {"self_reference": True}}, ...)` on a `second_reflection` segment folder; the
+  sibling `first_reflection` folder (same filenames — the `segment_reflections`
+  layout) supplies the front pulses. Missing files raise (no silent fallback).
+  The trusted mask is additionally intersected with the front-pulse SNR mask.
+- **Sub-sample ramp interplay.** In self-reference mode the §4 spectral phase
+  ramp is skipped: the front-pulse spectra are absolute-time referenced, so the
+  correction already carries the true relative timing (applying the ramp too
+  would double-count). Noticed in passing: in the two-phase workflow the stored
+  residual never survives segmentation anyway (`processing_dict` is not
+  persisted), so phase 2 has been running without the §4 ramp — self-referencing
+  also repairs that hole naturally.
+- **Gate hygiene.** Both gates must treat the GaP echo consistently (both
+  exclude it, as the current gates do) so the multiplicative detector echo
+  cancels in W. Windowed deconvolution is exact only when the Hann gate weighs
+  the drift's time-domain echoes equally for both pulses — keep each pulse
+  near the centre of its gate (synthetic test: off-centre pulses + harsh
+  0.8 ps-correlation drift left a ~5% residual; centred + realistic drift <1%).
+- Tests: `tests/test_window_selfref_workflow.py` (5), thz-core
+  `tests/test_window.py` (9). Evaluation scripts in `explorations/`.
