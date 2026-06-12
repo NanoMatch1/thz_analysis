@@ -407,3 +407,80 @@ the sample's window path — frequency-structured "fake features" appear in H.
   0.8 ps-correlation drift left a ~5% residual; centred + realistic drift <1%).
 - Tests: `tests/test_window_selfref_workflow.py` (5), thz-core
   `tests/test_window.py` (9). Evaluation scripts in `explorations/`.
+
+## §12  THzDataReflection container and root-directory loading
+
+### Why it exists
+The original pipeline pointed `DataSet` at a `second_reflection/` folder and
+used the path-based `_first_reflection_spectrum` helper to reload the front
+pulses from disk every time `transfer_function` was called with
+`self_reference=True`. The first pulses were processed inconsistently: full-trace
+`np.hanning` + mean subtraction in one go, with no baseline step, no global
+truncate, and no user-configured window. The main (second-reflection) pipeline
+applied `subtract_baseline → global_truncate → window_time (user config) →
+zero_pad → fft_spectrum`. This mismatch meant the W = Y₂/Y₁ ratio was formed
+from spectra treated differently.
+
+### THzDataReflection (`dataset_core/data_structures/thz.py`)
+`THzDataReflection(THzData)` subclass that stores the second reflection as the
+primary data object (all inherited `THzData` operations and the `data` property
+act on it unchanged) and attaches the first reflection as `first_segment: THzData`.
+
+- `from_thzdata(second, first)` — classmethod that promotes two existing
+  `THzData` objects without re-averaging. Copy is shallow (`__dict__.update`),
+  so no wasted computation.
+- `all_segments()` → `[('first_reflection', first_seg), ('second_reflection', self)]`
+  — iterator protocol for pipeline functions that need to process both gates.
+- Fully backwards-compatible: code that never checks `isinstance(...,
+  THzDataReflection)` sees a normal `THzData`.
+
+### Root-directory loading (`DataSet.load_all_data`)
+`DataSet(root_dir).load_all_data()` now auto-detects whether
+`root_dir/first_reflection/` and `root_dir/second_reflection/` subdirs exist.
+If both are present, `_load_reflection_layout` pairs files by name and builds
+`THzDataReflection` objects. Files in `second_reflection/` with no counterpart
+in `first_reflection/` are loaded as plain `THzData` with a warning.
+
+Pass `explicit_dir=True` to bypass detection and load `file_dir` as a flat
+directory even when the subdirs are present — use this when re-running
+`segment_reflections` preprocessing on raw files that live inside an already-
+segmented directory tree, or when accessing raw acquisitions for debugging.
+
+Legacy code that pointed directly at `second_reflection/` continues to work
+unchanged: no `first_reflection/` subdir exists there, so the loader falls back
+to the old flat-directory path, and `transfer_function` uses the file-based
+fallback for front-pulse spectra.
+
+### Pipeline consistency fix
+`subtract_baseline` and `window_time` now iterate `THzDataReflection.all_segments()`
+(via `isinstance` check) so both gates receive identical pre-processing.
+`zero_pad` operates on the second reflection only (gates have different lengths
+by design; padding is handled implicitly in the FFT step).
+
+`fft_spectrum` calls `_compute_first_segment_fft(first_seg, freq)` after the
+second-reflection FFT. This function back-calculates `n_fft = 2*(len(freq)−1)`
+from the second's frequency grid and uses `np.fft.rfft(first_y, n=n_fft)` —
+equivalent to zero-padding the shorter first gate to the same length — then
+applies the absolute-time phase reference `exp(−i·2πf·t₀)`. The result is
+stored in `first_seg.processing_dict['fft_spectrum']` on the same frequency grid
+as the second reflection.
+
+`transfer_function` with `self_reference=True` checks for the stored spectrum
+first (`THzDataReflection` path), and only falls back to loading from disk if
+it is absent (legacy path). The `_get_first_spectrum` helper encapsulates this
+logic so the rest of the function does not change.
+
+### n_window array fix (`_resolve_reflection_geometry`)
+`theta_internal_rad` must be a scalar (Snell gives one angle). When `n_window`
+is a per-frequency array, computing `float(np.real(snell(..., n_window)))` would
+silently discard the array dimension. Fixed by extracting a scalar mean first for
+the angle, while passing the full array to `fresnel_reflection_s` for
+`r_reference`:
+```python
+n_window_scalar = float(np.real(np.mean(np.atleast_1d(n_window))))
+theta_internal_rad = float(np.real(snell(..., n_window_scalar)))
+r_reference_value = fresnel_reflection_s(n_window, 1.0, theta_internal_rad)
+```
+At the CNT-13/D window (n_SiO₂ = 1.962–1.967 flat), the array vs scalar change
+shifts `r_reference` by +0.003 (+0.7 %) — comparable to the n measurement
+uncertainty, so worth keeping but not urgent to backfill old results.

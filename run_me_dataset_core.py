@@ -137,6 +137,8 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\B"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-11_CNT-paper"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17"
     # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-06-10_humidity and purge\2026-06-09_CNT-paper\TESTING"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
@@ -194,18 +196,14 @@ if __name__ == "__main__":
         print(f"Using reference file: {reference_filename}")
 
         # result = thz.characterise_window(
-        first_refl = os.path.join(os.path.dirname(fileDir), "first_reflection", reference_filename)
-        second_refl = os.path.join(os.path.dirname(fileDir), "second_reflection", reference_filename)
+        first_refl = os.path.join(fileDir, "first_reflection", reference_filename)
+        second_refl = os.path.join(fileDir, "second_reflection", reference_filename)
         result = thz.characterise_window(first_refl, second_refl, thickness_m=0.9e-3, theta_deg=45.0, band_thz=(0.2, 3.5), show_graph=True)
 
         n_window_freq = result['n'] - 1j * result['k'] # Build the complex refractive index of the window material from the characterisation result.
         return n_window_freq
 
     ### --- Config Setup ---
-
-    ### --- Acquisition editing ---
-    # import acquisition_editor
-    # acquisition_editor.process_directory(fileDir)
    
     def preprocess(fileDir, show_graph=True):
         dataset = DataSet(fileDir)
@@ -222,7 +220,7 @@ if __name__ == "__main__":
         # dataset.plot_current()
 
         thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (151, 158.5), 'second_reflection': (162, 168)})
+        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (152, 156.4), 'second_reflection': (162.2, 168.2)})
         print("Pre-processing complete.")
         sys.exit()
 
@@ -230,9 +228,13 @@ if __name__ == "__main__":
 
 # 15 mins for 6-aligned
 
-    # acquisition_editor(fileDir)'
+
+    ### --- Acquisition editing ---
+    # import acquisition_editor
+    # acquisition_editor.process_directory(fileDir)
     ### --- Pre-processing and segmentation ---
     # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
+    
     # preprocess(fileDir)
     # --- Main analysis 
     dataset = DataSet(fileDir)
@@ -249,7 +251,7 @@ if __name__ == "__main__":
 
     # thz.plot_current(dataset)
     thz.global_truncate(dataset)
-    thz.pre_window_align_peak(dataset, show_graph=show_graph, recalibrate=False)  #, auto_range=(40,60))
+    thz.pre_window_align_peak(dataset, show_graph=True, recalibrate=False)  #, auto_range=(40,60))
     thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
@@ -275,7 +277,7 @@ if __name__ == "__main__":
     # thz.phase_correction(dataset, source='fft')
 
 
-    # n_window_freq = window_characterisation(dataset)
+    n_window_freq = window_characterisation(dataset)
     # thz.invert_nk(dataset, thickness_m=1e-3)
     thz.invert_nk_reflection(
         dataset,

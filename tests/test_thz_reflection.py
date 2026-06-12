@@ -135,6 +135,30 @@ def test_dataset_reflection_layout_creates_thzdatareflection():
         shutil.rmtree(tmpdir)
 
 
+def test_explicit_dir_bypasses_reflection_layout():
+    """explicit_dir=True loads file_dir directly even when reflection subdirs exist."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        os.makedirs(os.path.join(tmpdir, "first_reflection"))
+        os.makedirs(os.path.join(tmpdir, "second_reflection"))
+        for name in ("sample_a.dat", "reference_a.dat"):
+            _write_dat(os.path.join(tmpdir, "first_reflection", name), n_pts=60)
+            _write_dat(os.path.join(tmpdir, "second_reflection", name), n_pts=100)
+        # Also write a file directly in the root so explicit_dir has something to load
+        _write_dat(os.path.join(tmpdir, "raw_data.dat"))
+
+        ds = DataSet(tmpdir)
+        ds.load_all_data(explicit_dir=True)
+        items = dict(ds.data.items())
+        # Should only see the flat root file, not the subdir files
+        assert "raw_data.dat" in items
+        assert not isinstance(items["raw_data.dat"], THzDataReflection)
+        # Subdir files should NOT appear (we loaded the root dir directly)
+        assert "sample_a.dat" not in items
+    finally:
+        shutil.rmtree(tmpdir)
+
+
 def test_dataset_reflection_layout_no_first_match_falls_back_to_thzdata():
     """Files in second_reflection/ with no first_reflection/ counterpart load as plain THzData."""
     tmpdir = tempfile.mkdtemp()
@@ -169,6 +193,7 @@ _TESTS = [
     test_repr_contains_class_name,
     test_dataset_flat_dir_unchanged,
     test_dataset_reflection_layout_creates_thzdatareflection,
+    test_explicit_dir_bypasses_reflection_layout,
     test_dataset_reflection_layout_no_first_match_falls_back_to_thzdata,
 ]
 

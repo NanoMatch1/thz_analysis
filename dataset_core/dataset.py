@@ -2,13 +2,11 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-import dataset_core.io.loaders   # auto-imports all loader modules
 from dataset_core.io import get_loader_for_extension
 from dataset_core.data_structures.thz import THzData, BaseTHzData, THzDataReflection
 from dataset_core.services.grouping import GroupingService
 from dataset_core.services.database import DatabaseService
 
-import thz_core.thz_core as thz  
 
 from pathlib import Path
 
@@ -431,13 +429,18 @@ class DataSet:
         Reflection layout detection
         ---------------------------
         If ``file_dir`` contains both a ``first_reflection/`` and a
-        ``second_reflection/`` subdirectory, the method automatically loads the
+        ``second_reflection/`` subdirectory the method automatically loads the
         dataset in reflection mode: each second-reflection file is paired with its
         matching first-reflection counterpart and stored as a
         ``THzDataReflection`` object.  If those subdirectories do not exist the
         method falls back to loading all files in ``file_dir`` directly as plain
         ``THzData`` objects (original behaviour).
-        ``explicit_dir`` forces the method to load from ``file_dir`` directly, even if the reflection subdirs are present. This is useful for rerunning the preprocessing, debugging, or non-reflection datasets in a reflection-style folder structure.
+
+        Pass ``explicit_dir=True`` to suppress reflection-layout detection and
+        load ``file_dir`` as a flat directory regardless.  Use this when you need
+        to re-run ``segment_reflections`` preprocessing on raw files that live
+        inside a directory that already contains the segmented output subdirs, or
+        when debugging the raw acquisitions directly.
 
         Parameters
         ----------
@@ -449,6 +452,11 @@ class DataSet:
             Defaults to os.listdir. Inject a replacement for testing.
         case_insensitive : bool
             If True, file matching is done in a case-insensitive manner.
+        explicit_dir : bool
+            If True, bypass reflection-layout detection and load files directly
+            from ``file_dir`` as plain ``THzData`` objects even when
+            ``first_reflection/`` and ``second_reflection/`` subdirs are present.
+            Default is False.
         '''
         first_subdir = os.path.join(self.file_dir, 'first_reflection')
         second_subdir = os.path.join(self.file_dir, 'second_reflection')
