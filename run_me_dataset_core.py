@@ -216,11 +216,11 @@ if __name__ == "__main__":
         # --- initial pre-processing steps ---
 
         # --- alignment step, different protocols
-        thz.align_to_reference(dataset, ref_type="reference", roi=(152, 156), subsample_correction=True, show_graph=show_graph)
+        thz.align_to_reference(dataset, ref_type="reference", roi=(152, 156), subsample_correction=False, show_graph=show_graph)
         # dataset.plot_current()
 
         thz.normalise(dataset, config={"bounds": (152, 156)}, show_graph=show_graph)
-        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (152, 156.4), 'second_reflection': (162.2, 168.2)})
+        thz.segment_reflections(dataset, show_graph=True, segments={'first_reflection': (152, 159), 'second_reflection': (162.2, 168)})
         print("Pre-processing complete.")
         sys.exit()
 
@@ -235,12 +235,12 @@ if __name__ == "__main__":
     ### --- Pre-processing and segmentation ---
     # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
     
-    # preprocess(fileDir)
+    preprocess(fileDir)
     # --- Main analysis 
     dataset = DataSet(fileDir)
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
-    dataset.plot_current()
+    # dataset.plot_current()
 
     # ---
 
@@ -251,7 +251,12 @@ if __name__ == "__main__":
 
     # thz.plot_current(dataset)
     thz.global_truncate(dataset)
-    thz.pre_window_align_peak(dataset, show_graph=True, recalibrate=False)  #, auto_range=(40,60))
+    thz.pre_window_align_peak(dataset, show_graph=True, auto_range_ps=(163,167), recalibrate=False)
+    # --- Pre-window centering: extend traces backward so the pulse sits at the
+    # temporal midpoint, giving the Tukey window symmetric taper regions.
+    centering_config = {'centering': {'peak_mode': 'auto', 'taper_ps': 1}}
+    thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
+    thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
     thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
@@ -264,7 +269,7 @@ if __name__ == "__main__":
     thz.transfer_function(
         dataset,
         config={
-            "transfer": {"apply_snr_mask": True, "self_reference": True},
+            "transfer": {"apply_snr_mask": True, "self_reference": False},
             "mask": {"snr_thresh_db": 20, "tail_fraction": 0.25, "min_contiguous_bins": 3},
         },
         ref_type='reference',

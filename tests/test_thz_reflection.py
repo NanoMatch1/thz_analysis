@@ -19,6 +19,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from dataset_core.data_structures.thz import BaseTHzData, THzData, THzDataReflection
 from dataset_core.dataset import DataSet
+from dataset_core.adapters.thz_adapter import center_pulse
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +160,151 @@ def test_explicit_dir_bypasses_reflection_layout():
         shutil.rmtree(tmpdir)
 
 
+def test_center_pulse_first_reflection_auto():
+    """Auto-mode centering prepends samples so the peak is at the midpoint."""
+    # Build a first_segment where the pulse sits early: 20 samples before peak,
+    # 60 samples after — so the peak needs 40 samples prepended to centre it.
+    n_pts = 81  # indices 0..80, peak at 20
+    dt_s = 7.5e-15
+    t = np.arange(n_pts) * dt_s
+    y = np.zeros(n_pts)
+    y[20] = 1.0  # sharp peak at index 20
+
+    second = _make_thzdata("s.acc", n_pts=n_pts)
+    first = THzData(data=[BaseTHzData(data=np.column_stack([t, y]), headers=[])],
+                    header=None, filename="s.acc")
+    refl = THzDataReflection.from_thzdata(second, first)
+
+    # Wrap in a minimal DataSet-like structure by monkey-patching
+    class _FakeData:
+        def items(self_):
+            return [("s.acc", refl)]
+
+    class _FakeDataset:
+        data = _FakeData()
+
+    center_pulse(_FakeDataset(), segment='first_reflection', config={'centering': {'peak_mode': 'auto', 'taper_ps': 0.0}})
+
+    t_new = refl.first_segment.data[:, 0]
+    y_new = refl.first_segment.data[:, 1]
+    new_peak_idx = int(np.argmax(np.abs(y_new)))
+
+    n_before_new = new_peak_idx
+    n_after_new = len(y_new) - 1 - new_peak_idx
+    assert n_before_new == n_after_new, (
+        f"Peak should be centred: n_before={n_before_new}, n_after={n_after_new}"
+    )
+    assert refl.first_segment.processing_dict.get('pre_centering') is not None
+    assert refl.first_segment.processing_dict['centering_info']['n_prepend'] == 40
+
+
+def test_center_pulse_first_reflection_already_centred():
+    """No modification when peak is already at the midpoint."""
+    n_pts = 101
+    dt_s = 7.5e-15
+    t = np.arange(n_pts) * dt_s
+    y = np.zeros(n_pts)
+    y[50] = 1.0  # exactly centred
+
+    second = _make_thzdata("s.acc", n_pts=n_pts)
+    first = THzData(data=[BaseTHzData(data=np.column_stack([t, y]), headers=[])],
+                    header=None, filename="s.acc")
+    refl = THzDataReflection.from_thzdata(second, first)
+
+    class _FakeData:
+        def items(self_):
+            return [("s.acc", refl)]
+
+    class _FakeDataset:
+        data = _FakeData()
+
+    center_pulse(_FakeDataset(), segment='first_reflection', config={'centering': {'peak_mode': 'auto', 'taper_ps': 0.0}})
+
+    assert refl.first_segment.processing_dict.get('pre_centering') is None
+    assert len(refl.first_segment.data) == n_pts  # unchanged
+
+
+def test_center_pulse_first_reflection_taper_smooth():
+    """Taper ramp starts at 0 and ends at 1 with no discontinuity at the pad edge."""
+    n_pts = 81
+    dt_s = 7.5e-15
+    t = np.arange(n_pts) * dt_s
+    y = np.zeros(n_pts)
+    y[20] = 1.0
+    # Set pre-pulse region to a constant non-zero value so a step would be visible
+    y[:20] = 0.1
+
+    second = _make_thzdata("s.acc", n_pts=n_pts)
+    first = THzData(data=[BaseTHzData(data=np.column_stack([t, y]), headers=[])],
+                    header=None, filename="s.acc")
+    refl = THzDataReflection.from_thzdata(second, first)
+
+    class _FakeData:
+        def items(self_):
+            return [("s.acc", refl)]
+
+    class _FakeDataset:
+        data = _FakeData()
+
+    taper_ps = 0.3  # ~40 samples at 7.5 fs/pt
+    center_pulse(_FakeDataset(), segment='first_reflection', config={'centering': {'peak_mode': 'auto', 'taper_ps': taper_ps}})
+
+    n_prepend = refl.first_segment.processing_dict['centering_info']['n_prepend']
+    y_new = refl.first_segment.data[:, 1]
+
+    # Pad region should be identically zero
+    assert np.all(y_new[:n_prepend] == 0.0), "Prepended region must be zero"
+    # First sample of taper (right after pad) should be near 0
+    assert abs(y_new[n_prepend]) < 1e-6, "First taper sample must be near zero"
+
+
+def test_center_pulse_main_trace():
+    """center_pulse centres the main data_obj.data trace for any THzData object."""
+    n_pts = 81
+    dt_s = 7.5e-15
+    t = np.arange(n_pts) * dt_s
+    y = np.zeros(n_pts)
+    y[20] = 1.0  # peak at index 20, so 60 samples after — needs 40 prepended
+
+    data_obj = _make_thzdata("s.acc", n_pts=n_pts, n_scans=1)
+    # Override the averaged data directly
+    data_obj.data = np.column_stack([t, y])
+
+    class _FakeData:
+        def items(self_):
+            return [("s.acc", data_obj)]
+
+    class _FakeDataset:
+        data = _FakeData()
+
+    center_pulse(_FakeDataset(), config={'centering': {'peak_mode': 'auto', 'taper_ps': 0.0}})
+
+    y_new = data_obj.data[:, 1]
+    new_peak_idx = int(np.argmax(np.abs(y_new)))
+    n_before_new = new_peak_idx
+    n_after_new = len(y_new) - 1 - new_peak_idx
+    assert n_before_new == n_after_new, (
+        f"Main trace should be centred: n_before={n_before_new}, n_after={n_after_new}"
+    )
+    assert data_obj.processing_dict['centering_info']['n_prepend'] == 40
+
+
+def test_center_pulse_first_reflection_skips_plain_thzdata():
+    """Plain THzData objects (no first_segment) are skipped without error."""
+    second = _make_thzdata("s.acc", n_pts=100)
+
+    class _FakeData:
+        def items(self_):
+            return [("s.acc", second)]
+
+    class _FakeDataset:
+        data = _FakeData()
+
+    center_pulse(_FakeDataset(), segment='first_reflection')
+    # No exception and data unchanged
+    assert len(second.data) == 100
+
+
 def test_dataset_reflection_layout_no_first_match_falls_back_to_thzdata():
     """Files in second_reflection/ with no first_reflection/ counterpart load as plain THzData."""
     tmpdir = tempfile.mkdtemp()
@@ -195,6 +341,11 @@ _TESTS = [
     test_dataset_reflection_layout_creates_thzdatareflection,
     test_explicit_dir_bypasses_reflection_layout,
     test_dataset_reflection_layout_no_first_match_falls_back_to_thzdata,
+    test_center_pulse_first_reflection_auto,
+    test_center_pulse_first_reflection_already_centred,
+    test_center_pulse_first_reflection_taper_smooth,
+    test_center_pulse_main_trace,
+    test_center_pulse_first_reflection_skips_plain_thzdata,
 ]
 
 

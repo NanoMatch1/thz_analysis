@@ -95,6 +95,34 @@ def _build_data_dict(dataset: DataSet) -> dict:
     }
 
 
+def _resolve_segment(data_obj, segment: str):
+    """Return the data holder for *segment*, or None to skip this data_obj.
+
+    ``'second_reflection'`` → *data_obj* itself (all object types).
+    ``'first_reflection'``  → *data_obj.first_segment* for
+    ``THzDataReflection`` only; returns ``None`` for plain ``THzData``.
+    """
+    if segment == 'first_reflection':
+        if not isinstance(data_obj, THzDataReflection):
+            return None
+        return data_obj.first_segment
+    return data_obj
+
+
+def _build_segment_data_dict(dataset: DataSet, segment: str) -> dict:
+    """Build {filename: (N,2) array} for the given segment type.
+
+    Skips data objects that have no holder for the requested segment
+    (e.g. plain ``THzData`` when ``segment='first_reflection'``).
+    """
+    result = {}
+    for filename, data_obj in dataset.data.items():
+        holder = _resolve_segment(data_obj, segment)
+        if holder is not None:
+            result[filename] = _time_amplitude_array(holder)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Per-scan working matrix (preserves statistical power through preprocessing)
 #
@@ -205,69 +233,182 @@ def _plot_with_snr_mask(
 # pipeline steps
 # ---------------------------------------------------------------------------
 
-def subtract_baseline(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
-    """Subtract DC baseline from each trace (removes detector/digitiser offset)."""
-    config = config or {}
+def subtract_baseline(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Subtract DC baseline from each trace (removes detector/digitiser offset).
 
-    data_dict = _build_data_dict(dataset)
-    corrected, metrics = core.subtract_baseline(data_dict, config)
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which segment to process. Call twice to process both.
+    """
+    config = config or {}
     n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
+
+    data_dict = _build_segment_data_dict(dataset, segment)
+    corrected, metrics = core.subtract_baseline(data_dict, config)
 
     if show_graph:
         fig, ax = plt.subplots(2, 1, layout='constrained')
         for filename, data in corrected.items():
-            ax[1].plot(data[:, 1], label='{} (corrected)'.format(filename))
-            pre = data_dict[filename]
-            ax[0].plot(pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
-        # ax[0].legend()
-        # ax[1].legend()
+            ax[1].plot(data[:, 1], label=f'{filename} (corrected)')
+            ax[0].plot(data_dict[filename][:, 1], label=f'{filename} (original)',
+                       linestyle='--', lw=1, alpha=0.5)
+        ax[0].set_title(f'Original Traces — {segment}')
         ax[1].set_title('Baseline-Corrected Traces')
-        ax[0].set_title('Original Traces')
         ax[1].set_xlabel('Time Point Index')
         plt.show()
 
     for filename, data_obj in dataset.data.items():
-        data_obj.data = corrected[filename]
-        data_obj.processing_dict['baseline_metrics'] = metrics
+        holder = _resolve_segment(data_obj, segment)
+        if holder is None:
+            continue
+        holder.data = corrected[filename]
+        holder.processing_dict['baseline_metrics'] = metrics
 
-        # Mirror the baseline subtraction onto every individual scan so the
-        # per-scan working matrix stays consistent with the averaged trace.
-        scan_matrix = _ensure_scan_matrix(data_obj)
-        scan_columns = scan_matrix[:, 1:]
-        scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
-
-        if isinstance(data_obj, THzDataReflection):
-            first_seg = data_obj.first_segment
-            first_data_dict = {filename: _time_amplitude_array(first_seg)}
-            first_corrected, first_metrics = core.subtract_baseline(first_data_dict, config)
-            first_seg.data = first_corrected[filename]
-            first_seg.processing_dict['baseline_metrics'] = first_metrics
+        if segment == 'second_reflection':
+            # Mirror baseline subtraction onto the per-scan matrix so the
+            # per-scan working data stays consistent with the averaged trace.
+            # (first_segment is already an averaged trace; no per-scan matrix.)
+            scan_matrix = _ensure_scan_matrix(data_obj)
+            scan_columns = scan_matrix[:, 1:]
+            scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
 
     return dataset
 
-def global_truncate(dataset, show_graph=False):
-    '''Takes the min and max value of the time axis across all samples and truncates all samples to that common range.'''
-    min_t = max(float(np.nanmin(data_obj.data[:, 0])) for data_obj in dataset.data.values())
-    max_t = min(float(np.nanmax(data_obj.data[:, 0])) for data_obj in dataset.data.values())
-    for filename, data_obj in dataset.data.items():
-        mask = (data_obj.data[:, 0] >= min_t) & (data_obj.data[:, 0] <= max_t)
-        data_obj.data = data_obj.data[mask, :]
+def global_truncate(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    show_graph: bool = False,
+) -> DataSet:
+    """Truncate all traces of *segment* to their common time range.
+
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which segment to process. Call twice to process both.
+    """
+    holders = [(fn, _resolve_segment(obj, segment)) for fn, obj in dataset.data.items()]
+    holders = [(fn, h) for fn, h in holders if h is not None]
+
+    if not holders:
+        print(f"[global_truncate] No data found for segment '{segment}', skipping.")
+        return dataset
+
+    min_t = max(float(np.nanmin(h.data[:, 0])) for _, h in holders)
+    max_t = min(float(np.nanmax(h.data[:, 0])) for _, h in holders)
+
+    for fn, h in holders:
+        mask = (h.data[:, 0] >= min_t) & (h.data[:, 0] <= max_t)
+        h.data = h.data[mask, :]
         if show_graph:
-            plt.plot(data_obj.data[:, 0], data_obj.data[:, 1], label=filename)
-    print(f"Globally truncated all samples to common time range ")
+            plt.plot(h.data[:, 0] * _S_TO_PS, h.data[:, 1], label=fn)
+
+    print(f"[global_truncate] {segment}: truncated to common time range.")
     if show_graph:
         plt.legend()
-        plt.xlabel('Time (s)')
-        plt.title('Globally Truncated Traces')
+        plt.xlabel('Time (ps)')
+        plt.title(f'Globally Truncated Traces — {segment}')
         plt.show()
+    return dataset
 
     
 
-def pre_window_align_peak(dataset: DataSet, show_graph: bool = False, auto_range: tuple = None, recalibrate=False) -> DataSet:
-    """Aligns all acquisitions in the dataset on their main peak. Used for pre-aligning the main pulse before windowing such that the window operates at the same T0 distance from edge of the window."""
+def define_alignment_regions(
+    dataset: DataSet,
+    config: dict,
+    segments: tuple = ('second_reflection', 'first_reflection'),
+) -> dict:
+    """Interactively define peak-search regions for each segment, writing results into *config*.
 
-    data_dict = _build_data_dict(dataset)
-    aligned = core.align_on_peak(data_dict, auto_range=auto_range)
+    For each segment in *segments*, if ``config['align']['auto_range_ps'][segment]``
+    is already set (not ``None``), the selector is skipped — headless mode.  Otherwise
+    a SpanSelector window opens against a representative trace.
+
+    Parameters
+    ----------
+    dataset : DataSet
+    config : dict
+        Modified in-place.  Results land in ``config['align']['auto_range_ps'][segment]``.
+    segments : tuple of str
+        Segments to define regions for.
+
+    Returns
+    -------
+    dict
+        The modified *config* dict (also mutated in-place).
+    """
+    align_cfg = config.setdefault('align', {})
+    region_cfg = align_cfg.setdefault('auto_range_ps', {})
+
+    for segment in segments:
+        if region_cfg.get(segment) is not None:
+            print(f"[define_alignment_regions] '{segment}': using preset {region_cfg[segment]} ps.")
+            continue
+
+        rep_holder, rep_filename = None, None
+        for filename, data_obj in dataset.data.items():
+            holder = _resolve_segment(data_obj, segment)
+            if holder is not None:
+                rep_holder, rep_filename = holder, filename
+                break
+
+        if rep_holder is None:
+            print(f"[define_alignment_regions] '{segment}': no data found, skipping.")
+            continue
+
+        t_ps = rep_holder.data[:, 0] * _S_TO_PS
+        y = rep_holder.data[:, 1]
+        bounds = _span_select_bounds(
+            t_ps, y,
+            title=f"Peak region — '{segment}' (file: {rep_filename})",
+        )
+        region_cfg[segment] = bounds
+        print(f"[define_alignment_regions] '{segment}': peak region → {bounds[0]:.2f}–{bounds[1]:.2f} ps.")
+
+    return config
+
+
+def pre_window_align_peak(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    show_graph: bool = False,
+    auto_range_ps: tuple | None = None,
+    recalibrate: bool = False,
+) -> DataSet:
+    """Align all traces of *segment* on their main pulse peak.
+
+    Used before windowing so the window function lands at the same T0 distance
+    from the edge for every file.
+
+    Parameters
+    ----------
+    dataset : DataSet
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which segment to align.
+    show_graph : bool
+    auto_range_ps : tuple[float, float] or None
+        ``(t_start_ps, t_end_ps)`` in picoseconds.  Enables headless operation.
+        If ``None``, an interactive SpanSelector opens for each trace.
+    recalibrate : bool
+        If True, prompt interactively to choose a reference file and replace
+        all time axes with that file's axis (removes instrumental timing offsets).
+    """
+    data_dict = _build_segment_data_dict(dataset, segment)
+
+    auto_range_idx = None
+    if auto_range_ps is not None:
+        first_data = next(iter(data_dict.values()))
+        t_s = first_data[:, 0]
+        idx_start = int(np.searchsorted(t_s, auto_range_ps[0] * 1e-12))
+        idx_end = int(np.searchsorted(t_s, auto_range_ps[1] * 1e-12))
+        auto_range_idx = (idx_start, idx_end)
+
+    aligned = core.align_on_peak(data_dict, auto_range=auto_range_idx)
 
     if recalibrate:
         print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
@@ -296,59 +437,275 @@ def pre_window_align_peak(dataset: DataSet, show_graph: bool = False, auto_range
             aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
 
     if show_graph:
-        import matplotlib.pyplot as plt
         for filename, data in aligned.items():
             plt.plot(data[:, 1], label=filename)
         plt.legend()
+        plt.title(f'Peak-aligned traces — {segment}')
         plt.show()
 
     for filename, data_obj in dataset.data.items():
-        data_obj.data = aligned[filename]
+        holder = _resolve_segment(data_obj, segment)
+        if holder is not None:
+            holder.data = aligned[filename]
 
     return dataset
 
 
-def window_time(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
-    """Apply a time-domain window to each trace in the dataset."""
+def _pick_peak_manual(t_ps: np.ndarray, y: np.ndarray, title: str) -> float:
+    """Open a click-picker window and return the clicked time in ps."""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(t_ps, y, lw=1)
+    ax.set_xlim(float(np.nanmin(t_ps)), float(np.nanmax(t_ps)))
+    ax.margins(x=0)
+    ax.set_xlabel('Time (ps)')
+    ax.set_ylabel('Amplitude')
+    ax.set_title(title)
+    ax.text(
+        0.01, 0.99, "Click on the main pulse peak, then close the window.",
+        transform=ax.transAxes, va='top', ha='left', fontsize=9,
+        bbox=dict(boxstyle='round,pad=0.3', alpha=0.2),
+    )
+    clicked = {}
+
+    def _onclick(event):
+        if event.inaxes == ax:
+            clicked['t_ps'] = float(event.xdata)
+            ax.axvline(clicked['t_ps'], color='tab:red', lw=1.5, linestyle='--',
+                       label=f"Peak @ {clicked['t_ps']:.2f} ps")
+            ax.legend()
+            fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect('button_press_event', _onclick)
+    plt.show()
+
+    if 't_ps' not in clicked:
+        raise RuntimeError(f"No peak picked for '{title}'.")
+    return clicked['t_ps']
+
+
+def _center_pulse_trace(
+    t: np.ndarray,
+    y: np.ndarray,
+    peak_mode: str = 'auto',
+    taper_ps: float = 0.5,
+    picker_title: str = 'Pick main pulse peak',
+) -> tuple:
+    """Core centering routine — operates on raw arrays, knows nothing about datasets.
+
+    Returns (t_new, y_new, info) where info carries metadata needed by
+    callers for logging and by the graph helper for annotation.
+
+    If the pulse is already centred (n_prepend == 0), t_new and y_new are
+    copies of the inputs and info['already_centred'] is True.
+    """
+    dt = float(np.median(np.diff(t)))
+    t_ps = t * _S_TO_PS
+
+    if peak_mode == 'auto':
+        peak_idx = int(np.argmax(np.abs(y)))
+    elif peak_mode == 'manual':
+        peak_t_ps = _pick_peak_manual(t_ps, y, picker_title)
+        peak_idx = int(np.argmin(np.abs(t_ps - peak_t_ps)))
+    else:
+        raise ValueError(f"peak_mode must be 'auto' or 'manual', got {peak_mode!r}")
+
+    n_before = peak_idx
+    n_after = len(y) - 1 - peak_idx
+    n_prepend = max(0, n_after - n_before)
+
+    info = {
+        'already_centred': n_prepend == 0,
+        'n_prepend': n_prepend,
+        'peak_idx_original': peak_idx,
+        'peak_idx_new': n_prepend + peak_idx,
+        'taper_samples': 0,
+        'dt_s': dt,
+    }
+
+    if n_prepend == 0:
+        return t.copy(), y.copy(), info
+
+    taper_samples = int(round(taper_ps * 1e-12 / dt))
+    taper_samples = min(taper_samples, peak_idx)
+    info['taper_samples'] = taper_samples
+
+    t_prepend = t[0] - np.arange(n_prepend, 0, -1) * dt
+    t_new = np.concatenate([t_prepend, t])
+    y_new = np.concatenate([np.zeros(n_prepend), y.copy()])
+
+    if taper_samples > 0:
+        ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, taper_samples, endpoint=False)))
+        y_new[n_prepend : n_prepend + taper_samples] *= ramp
+
+    return t_new, y_new, info
+
+
+def _plot_centering_result(filename: str, pre_arr: np.ndarray, new_arr: np.ndarray, info: dict) -> None:
+    """Two-panel centering diagnostic: full trace overlay + junction zoom."""
+    t_orig_ps = pre_arr[:, 0] * _S_TO_PS
+    y_orig = pre_arr[:, 1]
+    t_new_ps = new_arr[:, 0] * _S_TO_PS
+    y_new = new_arr[:, 1]
+
+    n_prepend = info['n_prepend']
+    peak_idx_new = info['peak_idx_new']
+    taper_samples = info['taper_samples']
+    dt_ps = info['dt_s'] * _S_TO_PS
+
+    pad_end_ps = t_new_ps[n_prepend - 1]
+    taper_end_ps = t_new_ps[n_prepend + taper_samples - 1] if taper_samples > 0 else pad_end_ps
+    peak_ps = t_new_ps[peak_idx_new]
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), layout='constrained')
+    fig.suptitle(f"Pulse centering — '{filename}'")
+
+    for ax, (panel_title, xlim) in zip(axes, [
+        ('Full trace', (t_new_ps[0], t_new_ps[-1])),
+        ('Junction zoom', (t_new_ps[0], peak_ps + 1.0)),
+    ]):
+        ax.plot(t_orig_ps, y_orig, color='gray', lw=1, linestyle='--', alpha=0.7, label='Original')
+        ax.plot(t_new_ps, y_new, color='tab:blue', lw=1.2, label='Centered')
+        ax.axvspan(t_new_ps[0], pad_end_ps, alpha=0.15, color='tab:blue',
+                   label=f'Prepended pad ({n_prepend} pts, {n_prepend * dt_ps:.2f} ps)')
+        if taper_samples > 0:
+            ax.axvspan(pad_end_ps, taper_end_ps, alpha=0.30, color='tab:orange',
+                       label=f'Taper ({taper_samples * dt_ps:.2f} ps)')
+        ax.axvline(peak_ps, color='tab:red', lw=1, linestyle=':', label=f'Peak @ {peak_ps:.2f} ps')
+        ax.set_xlim(*xlim)
+        ax.set_xlabel('Time (ps)')
+        ax.set_ylabel('Amplitude')
+
+        ax.set_ylim(float(np.nanmin(y_new)), float(np.nanmax(y_new)))
+        ax.set_title(panel_title)
+        ax.legend(fontsize=8)
+    # normalise the axis to view the taper region better
+    junction_values = y_new[n_prepend : n_prepend + taper_samples] if taper_samples > 0 else []
+    junction_values *= 3
+    axes[1].set_ylim(float(np.nanmin(junction_values)), float(np.nanmax(junction_values)))
+
+
+
+def center_pulse(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Centre the main pulse at the temporal midpoint by pre-padding with zeros.
+
+    Works for any measurement geometry (reflection, transmission) and either
+    segment.  Call once per segment for explicit, inspectable processing.
+
+    Parameters
+    ----------
+    dataset : DataSet
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+    config : dict, optional
+        ``config['centering']`` keys:
+
+        ``peak_mode`` : ``'auto'`` (default) or ``'manual'``
+        ``taper_ps`` : float, default 0.5
+            Duration (ps) of the half-cosine ramp at the pad–signal junction.
+    show_graph : bool
+
+    Notes
+    -----
+    Modifies the segment's data array in-place.  Original trace saved under
+    ``processing_dict['pre_centering']``.  Call after ``pre_window_align_peak``
+    and before ``window_time``.
+    """
     config = config or {}
+    centering_cfg = config.get('centering', {})
+    peak_mode = centering_cfg.get('peak_mode', 'auto')
+    taper_ps = centering_cfg.get('taper_ps', 0.5)
 
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0]
-        y = data_obj.data[:, 1]
+        holder = _resolve_segment(data_obj, segment)
+        if holder is None:
+            continue
+
+        t = holder.data[:, 0]
+        y = holder.data[:, 1]
+        t_new, y_new, info = _center_pulse_trace(
+            t, y, peak_mode=peak_mode, taper_ps=taper_ps,
+            picker_title=f"'{filename}' [{segment}] — pick main pulse peak",
+        )
+
+        if info['already_centred']:
+            print(f"[center_pulse/{segment}] '{filename}': pulse already centred, skipping.")
+            continue
+
+        pre_arr = np.column_stack((t, y))
+        holder.processing_dict['pre_centering'] = pre_arr
+        holder.processing_dict['centering_info'] = info
+        holder.data = np.column_stack((t_new, y_new))
+
+        n_prepend = info['n_prepend']
+        taper_samples = info['taper_samples']
+        dt_ps = info['dt_s'] * _S_TO_PS
+        print(
+            f"[center_pulse/{segment}] '{filename}': prepended {n_prepend} samples "
+            f"({n_prepend * dt_ps:.2f} ps); "
+            f"taper {taper_samples} samples ({taper_samples * dt_ps:.2f} ps)."
+        )
+
+        if show_graph:
+            _plot_centering_result(f"{filename} [{segment}]", pre_arr, holder.data, info)
+            plt.show()
+
+    return dataset
+
+
+def window_time(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Apply a time-domain window to each trace in the dataset.
+
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which data segment to window.  Call once per segment for explicit,
+        inspectable processing.
+    """
+    config = config or {}
+
+    holders = [
+        (fn, _resolve_segment(obj, segment))
+        for fn, obj in dataset.data.items()
+    ]
+    holders = [(fn, h) for fn, h in holders if h is not None]
+
+    global_window = None
+    for fn, holder in holders:
+        t = holder.data[:, 0]
+        y = holder.data[:, 1]
         windowed_y, metrics, global_window = core.window_time(t, y, config)
 
         new_data = np.column_stack((t, windowed_y))
-        if data_obj.data.shape[1] > 2:
-            new_data = np.column_stack((new_data, data_obj.data[:, 2:]))
+        if holder.data.shape[1] > 2:
+            new_data = np.column_stack((new_data, holder.data[:, 2:]))
 
-        data_obj.data = new_data
-        data_obj.processing_dict['window_metrics'] = metrics
-        data_obj.processing_dict['pre-window'] = np.column_stack((t, y))
-
-        if isinstance(data_obj, THzDataReflection):
-            first_seg = data_obj.first_segment
-            first_t = first_seg.data[:, 0]
-            first_y = first_seg.data[:, 1]
-            first_windowed_y, first_metrics, _ = core.window_time(first_t, first_y, config)
-            first_seg.data = np.column_stack((first_t, first_windowed_y))
-            first_seg.processing_dict['window_metrics'] = first_metrics
-            first_seg.processing_dict['pre-window'] = np.column_stack((first_t, first_y))
+        holder.processing_dict['pre-window'] = np.column_stack((t, y))
+        holder.processing_dict['window_metrics'] = metrics
+        holder.data = new_data
 
     if show_graph:
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(2, 1, layout='constrained')
-        
-        for filename, data_obj in dataset.data.items():
-            data_pre = data_obj.processing_dict.get('pre-window')
-            ax[0].plot(data_pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
-            ax[1].plot(data_obj.data[:, 1], label='{} (windowed)'.format(filename))
-
-        ax[0].plot(global_window, label='Window Function', alpha=0.5, lw=1)
-        ax[0].legend()
-        ax[1].legend()
-        ax[0].set_title('Original Traces')
-        ax[1].set_title('Windowed Traces')
-        ax[1].set_xlabel('Time Point Index')    
+        fig, axes = plt.subplots(2, 1, layout='constrained')
+        fig.suptitle(f'Window applied — {segment}')
+        for fn, holder in holders:
+            pre = holder.processing_dict.get('pre-window')
+            axes[0].plot(pre[:, 1], label=f'{fn} (original)', linestyle='--', lw=1, alpha=0.5)
+            axes[1].plot(holder.data[:, 1], label=f'{fn} (windowed)')
+        if global_window is not None:
+            axes[0].plot(global_window, label='Window Function', alpha=0.5, lw=1)
+        axes[0].legend()
+        axes[1].legend()
+        axes[0].set_title('Original Traces')
+        axes[1].set_title('Windowed Traces')
+        axes[1].set_xlabel('Time (ps)')
         plt.show()
 
     return dataset
@@ -707,87 +1064,144 @@ def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
     plt.show()
 
 
-def zero_pad(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
-    """Zero-pad all traces onto a common time grid."""
-    config = config or {}
+def zero_pad(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Zero-pad traces of *segment* onto a common time grid.
 
-    data_dict = _build_data_dict(dataset)
-    extend_factor = config.get('pad', {}).get('extend_factor', 1.0)
+    Accepts either ``config['pad']['extend_factor']`` (relative, default 1.0) or
+    ``config['pad']['n_samples']`` (absolute target length).  ``n_samples`` takes
+    precedence when both are present.  A ``ValueError`` is raised if ``n_samples``
+    is smaller than the longest trace after grid alignment, which would truncate data.
+
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which data segment to pad.  Call once per segment.  Using ``n_samples``
+        (absolute) for both segments ensures they share the same FFT frequency grid.
+    """
+    config = config or {}
+    pad_cfg = config.get('pad', {})
+
+    data_dict = _build_segment_data_dict(dataset, segment)
+    if not data_dict:
+        return dataset
 
     t_common, padded_dict, metrics = core.pad_to_common_grid(data_dict)
-    t_extended, extended_dict, metrics = core.extend_grid(t_common, padded_dict, extend_factor)
+
+    n_samples = pad_cfg.get('n_samples', None)
+    if n_samples is not None:
+        n_common = len(t_common)
+        if n_samples < n_common:
+            raise ValueError(
+                f"zero_pad: n_samples={n_samples} is smaller than the longest trace "
+                f"({n_common} samples) — this would truncate data, not pad it. "
+                f"Use n_samples >= {n_common}."
+            )
+        # Build extended arrays to EXACTLY n_samples points, bypassing extend_grid's
+        # integer rounding so every file in every segment lands on the same grid.
+        dt = float(np.median(np.diff(t_common)))
+        t_extended = t_common[0] + np.arange(n_samples) * dt
+        extended_dict = {
+            name: np.concatenate([arr, np.zeros(n_samples - n_common)])
+            for name, arr in padded_dict.items()
+        }
+        metrics = {}
+    else:
+        extend_factor = pad_cfg.get('extend_factor', 1.0)
+        t_extended, extended_dict, metrics = core.extend_grid(t_common, padded_dict, extend_factor)
 
     if show_graph:
         fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+        fig.suptitle(f'Zero-padded — {segment}')
         for filename, data_obj in dataset.data.items():
-            pre = data_obj.data
-            # breakpoint()
-            ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], label='{} (original)'.format(filename), linestyle='--', lw=1, alpha=0.5)
-            ax.plot(t_extended * _S_TO_PS, extended_dict[filename], label='{} (padded)'.format(filename))
+            holder = _resolve_segment(data_obj, segment)
+            if holder is None or filename not in extended_dict:
+                continue
+            pre = holder.data
+            ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], label=f'{filename} (original)', linestyle='--', lw=1, alpha=0.5)
+            ax.plot(t_extended * _S_TO_PS, extended_dict[filename], label=f'{filename} (padded)')
         ax.set_xlabel('Time (ps)')
-        ax.set_title('Zero-Padded Traces')
         ax.legend()
         plt.show()
 
     for filename, data_obj in dataset.data.items():
-        padded_y = extended_dict[filename]
-        new_data = np.column_stack((t_extended, padded_y))
-        data_obj.data = new_data
-        data_obj.processing_dict['pad_metrics'] = metrics
+        holder = _resolve_segment(data_obj, segment)
+        if holder is None or filename not in extended_dict:
+            continue
+        holder.data = np.column_stack((t_extended, extended_dict[filename]))
+        holder.processing_dict['pad_metrics'] = metrics
 
     return dataset
 
 
-def _compute_first_segment_fft(first_seg, freq: np.ndarray) -> None:
-    """Compute the FFT of a first-reflection segment on a pre-determined frequency grid.
+def fft_spectrum(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    config: dict | None = None,
+    n_fft: int | None = None,
+) -> DataSet:
+    """Compute the FFT for each trace in *segment* and switch to frequency domain.
 
-    The first-reflection gate is typically shorter than the second-reflection gate,
-    so it has fewer time-domain samples.  Using the second reflection's n_fft (via
-    ``len(freq)`` back-calculation) implicitly zero-pads the first-segment rfft to
-    the same length, ensuring W = Y2 / Y1 can be formed sample-by-sample.
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which data segment to transform.  Call once per segment.
 
-    The absolute-time phase reference (``exp(-i*2*pi*f*t0)``) is applied so the
-    first- and second-reflection spectra share a common experiment time origin.
+        For ``'first_reflection'`` an absolute-time phase reference
+        ``exp(-2πif·t₀)`` is applied so both segment spectra share the
+        experiment time origin, enabling W = Y₂/Y₁ to encode the true
+        inter-pulse delay.
+    n_fft : int or None
+        Optional explicit FFT length.  When provided, ``np.fft.rfft`` is
+        called with ``n=n_fft``, zero-padding or truncating the time-domain
+        trace as needed.  Use this to force the first- and second-reflection
+        spectra onto the same frequency grid when the two segments were
+        zero-padded to different lengths (e.g. when ``extend_factor`` rather
+        than ``n_samples`` was used in ``zero_pad``).
     """
-    first_t = first_seg.data[:, 0]
-    first_y = first_seg.data[:, 1]
-    # Back-calculate n_fft from the frequency grid produced by the second FFT.
-    # rfftfreq(n, dt) has length n//2 + 1, so n = 2*(len(freq)-1).
-    n_fft = 2 * (len(freq) - 1)
-    spectrum = np.fft.rfft(first_y - np.mean(first_y), n=n_fft)
-    spectrum *= np.exp(-2j * np.pi * freq * first_t[0])
-    first_seg.processing_dict['fft_freq'] = freq
-    first_seg.processing_dict['fft_spectrum'] = spectrum
-    first_seg.current_state = 'frequency_domain'
-
-
-def fft_spectrum(dataset: DataSet, config: dict | None = None) -> DataSet:
-    """Compute the FFT for each trace and switch data to frequency domain."""
     config = config or {}
 
     for filename, data_obj in dataset.data.items():
-        t = data_obj.data[:, 0]
-        y = data_obj.data[:, 1]
+        holder = _resolve_segment(data_obj, segment)
+        if holder is None:
+            continue
 
-        # Snapshot the pre-FFT time trace so export_results can write it later
-        data_obj.processing_dict['time_domain_prefft'] = np.column_stack((t, y))
+        t = holder.data[:, 0]
+        y = holder.data[:, 1]
 
-        freq, spectrum, metrics = core.fft_spectrum(t, y, config)
+        holder.processing_dict['time_domain_prefft'] = np.column_stack((t, y))
 
-        data_obj.processing_dict['fft_freq'] = freq
-        data_obj.processing_dict['fft_spectrum'] = spectrum
-        data_obj.processing_dict['fft_metrics'] = metrics
+        if n_fft is not None:
+            fft_cfg = config.get('fft', {})
+            norm = str(fft_cfg.get('norm', 'backward'))
+            amplitude_scale = float(fft_cfg.get('amplitude_scale', 1.0))
+            dt = float(np.median(np.diff(t)))
+            raw = np.fft.rfft(y, n=n_fft, norm=norm) * amplitude_scale
+            freq = np.fft.rfftfreq(n_fft, dt)
+            spectrum = raw
+            metrics = {}
+        else:
+            freq, spectrum, metrics = core.fft_spectrum(t, y, config)
 
-        # Store magnitude + phase as the new "data" for plotting convenience
-        data_obj.data = np.column_stack((
+        if segment == 'first_reflection':
+            # Absolute-time phase reference: encodes the true inter-pulse delay
+            # in W = Y₂/Y₁ without time-domain resampling.
+            spectrum = spectrum * np.exp(-2j * np.pi * freq * t[0])
+
+        holder.processing_dict['fft_freq'] = freq
+        holder.processing_dict['fft_spectrum'] = spectrum
+        holder.processing_dict['fft_metrics'] = metrics
+
+        holder.data = np.column_stack((
             freq,
             np.abs(spectrum),
             np.angle(spectrum),
         ))
-        data_obj.current_state = 'frequency_domain'
-
-        if isinstance(data_obj, THzDataReflection):
-            _compute_first_segment_fft(data_obj.first_segment, freq)
+        holder.current_state = 'frequency_domain'
 
     return dataset
 

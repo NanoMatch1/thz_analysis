@@ -57,16 +57,16 @@ def plot_nk(dataset, title=""):
     return
 
 
-dataset = DataSet("C:/Users/Samuel/matchbook")
-dataset.load_database(index=35)
-# filtered_files = [file for file in dataset.data.keys() if "reference" not in file.lower()]
+# dataset = DataSet("C:/Users/Samuel/matchbook")
+# dataset.load_database (index=35)
+# # filtered_files = [file for file in dataset.data.keys() if "reference" not in file.lower()]
 
-plot_sigma(dataset, title="non-self-referenced")
-plot_nk(dataset, title="non-self-referenced")
+# plot_sigma(dataset, title="non-self-referenced")
+# plot_nk(dataset, title="non-self-referenced")
 
-# --- Self-referenced versions ---
+# --- Self-referenced versions --- 
 dataset = DataSet("C:/Users/Samuel/matchbook")
-dataset.load_database(index=33)
+dataset.load_database()
 plot_sigma(dataset, title="self-referenced")
 plot_nk(dataset, title="self-referenced")
 
