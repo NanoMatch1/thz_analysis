@@ -44,7 +44,7 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     #     start as the WHOLE trace; any GaP echo is excluded later by the second
     #     region's trailing edge (isolate_and_window zeros outside each region). ---
     thz.build_full_trace_reflection(dataset)
-    dataset.plot_current(title="full-trace reflection")
+    # dataset.plot_current(title="full-trace reflection")
 
     # --- pair sample <-> reference ---
     dataset.group_files(keywords=['type'])
@@ -80,8 +80,11 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     #     center_mode=config.get('center_mode', 'crop'),
     #     show_graph=show,
     # )
+    breakpoint()
+    thz.isolate_regions(dataset, config)
+    thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
 
-    
+
 
     dataset.plot_current(title="isolated + windowed reflections")
     # --- FFT both reflections onto ONE frequency grid (zero-pad inside the FFT via
@@ -211,7 +214,7 @@ if __name__ == '__main__':
         'processing_path': 'shared_axis',   # 'shared_axis' (new) or 'segmented' (old)
         'root_dir': ROOT_DIR,
         'headless': False,                  # True -> no SpanSelectors / plot windows
-        'show_graphs': True,
+        'show_graphs': False,
 
         # ---- geometry / inversion ----
         'theta_external_deg': 45.0,

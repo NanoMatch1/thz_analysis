@@ -596,7 +596,7 @@ class THzDataReflection(THzData):
             f"   -> Data type: {self.data_type}\n"
         )
 
-    # def plot_current(self, *, figure_obj=None, **kwargs) -> None:
+
         """Plot both reflection segments on two subplots.  Accepts the same kwargs as THzData.plot_current."""
         import matplotlib.pyplot as plt
 

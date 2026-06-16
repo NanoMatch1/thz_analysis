@@ -442,6 +442,23 @@ def _windowed_pulse_on_common_axis(
 
     return common_amplitude * window_function, window_function
 
+def isolate_regions(
+    dataset: DataSet,
+    config: dict | None = None,
+    center_mode: str = 'crop',
+    show_graph: bool = False,) -> DataSet:
+    """First isolate the two reflection regions, then check the peak position. If not centered, pad the window with a taper to ensure smoothness. This function replaces the previous `isolate_and_window` function and provides a more simple and robust approach to handling reflection regions.
+    
+    The key message here is to ensure that the windowing is done symmetrically about the peak. Asymmetry will drive the centroid away from the peak, which is wrong. The windowing should always be symmetric about the peak, and if the region is asymmetric, the window should be padded with a taper to ensure smoothness.
+
+    This step is only to isolate and pad, the next step is the windowing.
+    """
+
+
+
+
+
+
 
 def isolate_and_window(
     dataset: DataSet,
@@ -459,7 +476,6 @@ def isolate_and_window(
 
     - ``center_mode='crop'``: symmetric Hann centred on the peak (half-width = the
       shorter of pre/post). Narrower, exactly symmetric — no centroid shift.
-      TESTING - DONT USE
     - ``center_mode='pad'`` : Hann over the FULL region (tapers to zero at both
       region edges). Keeps all the region data; mildly asymmetric about the peak
       when the region is.
@@ -538,6 +554,11 @@ def isolate_and_window(
         second_full_amplitude = second_holder.data[:, 1].copy()
         first_region_isolated = isolate_to_region(first_full_amplitude, first_plan)
         second_region_isolated = isolate_to_region(second_full_amplitude, second_plan)
+
+        plt.plot(common_time_seconds * _S_TO_PS, first_region_isolated, label='first isolated')
+        plt.plot(common_time_seconds * _S_TO_PS, second_region_isolated, label='second isolated')
+        plt.legend()
+        plt.show()
 
         first_windowed, first_window_function = _windowed_pulse_on_common_axis(
             common_time_seconds, first_region_isolated, first_plan, window_config)
