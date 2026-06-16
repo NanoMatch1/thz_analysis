@@ -74,15 +74,15 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     # --- THE coupling step: isolate + symmetric window both reflections on one
     #     shared axis. center_mode 'pad' keeps the full pulse (pads the short side
     #     with zeros); 'crop' shrinks to the short side. ---
-    # thz.isolate_and_window(
-    #     dataset,
-    #     config={'window': config['window']},
-    #     center_mode=config.get('center_mode', 'crop'),
-    #     show_graph=show,
-    # )
-    breakpoint()
-    thz.isolate_regions(dataset, config)
-    thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
+    thz.isolate_and_window(
+        dataset,
+        config={'window': config['window']},
+        center_mode=config.get('center_mode', 'crop'),
+        show_graph=show,
+    )
+    # breakpoint()
+    # thz.isolate_regions(dataset, config)
+    # thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
 
 
 

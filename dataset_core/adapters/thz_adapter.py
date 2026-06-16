@@ -419,8 +419,6 @@ def _windowed_pulse_on_common_axis(
     window_start = plan['window_start_seconds']
     window_end = plan['window_end_seconds']
 
-    breakpoint()
-
     window_function = np.zeros_like(common_time_seconds)
     pre_width = max(peak_time - window_start, 1e-30)
     post_width = max(window_end - peak_time, 1e-30)
