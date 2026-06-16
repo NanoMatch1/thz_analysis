@@ -246,6 +246,397 @@ def define_reflection_gates(
 
 
 # ---------------------------------------------------------------------------
+# Shared-axis reflection isolation (build full trace -> define regions ->
+# isolate_and_window). Keeps both reflections on ONE time axis so the inter-pulse
+# phase relationship is structural — no common-grid step, no absolute-time factor.
+# ---------------------------------------------------------------------------
+
+def build_full_trace_reflection(dataset: DataSet) -> DataSet:
+    """Wrap each loaded full trace into a THzDataReflection WITHOUT cropping to gates.
+
+    Both segments (``first_segment`` and the primary/second object) start as
+    independent copies of the **whole** trace on one shared time axis. The
+    reflection regions are isolated later by ``isolate_and_window`` — so the two
+    pulses keep a single, shared axis and their true inter-pulse delay.
+
+    No echo cropping happens here: any GaP echo is excluded by the second-reflection
+    region's trailing edge, and ``isolate_and_window`` zeros everything outside each
+    region before windowing — so the region selection is the only echo filter needed.
+
+    Each object gets ``first_region``/``second_region`` attributes initialised to
+    ``None`` for ``define_reflection_regions`` to fill.
+    """
+    for filename, data_obj in list(dataset.data.items()):
+        raw_time_ps = np.asarray(data_obj.raw_data, dtype=float)[:, 0]
+        start_ps = float(raw_time_ps.min())
+        stop_ps = float(raw_time_ps.max())
+
+        first_full_copy = _crop_thzdata_to_gate(data_obj, start_ps, stop_ps)
+        second_full_copy = _crop_thzdata_to_gate(data_obj, start_ps, stop_ps)
+        reflection_obj = THzDataReflection.from_thzdata(second_full_copy, first_full_copy)
+        reflection_obj.first_region = None
+        reflection_obj.second_region = None
+        dataset.data[filename] = reflection_obj
+
+        print(
+            f"[build_full_trace_reflection] '{filename}': full trace "
+            f"[{start_ps:.1f}, {stop_ps:.1f}] ps ({len(first_full_copy.data)} samples) "
+            f"wrapped on a shared axis; regions not yet defined."
+        )
+    return dataset
+
+
+def define_reflection_regions(
+    dataset: DataSet,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> dict:
+    """Define BOTH reflection regions once — from preset bounds or a SpanSelector.
+
+    One function for both regions. ``config['regions']`` may hold
+    ``{'first_reflection': (start, stop) | None, 'second_reflection': ... }`` in ps.
+    Any entry that is ``None`` is selected interactively on a representative trace.
+    The resolved (start, stop) ps tuples are written onto every THzDataReflection as
+    ``first_region`` / ``second_region`` attributes (self-describing) and mirrored
+    back into ``config['regions']`` for headless repeats.
+    """
+    config = config or {}
+    requested_regions = config.get('regions', {})
+    region_names = ('first_reflection', 'second_reflection')
+
+    representative_obj = next(iter(dataset.data.values()))
+    representative_time_ps = representative_obj.data[:, 0] * _S_TO_PS
+    representative_amplitude = representative_obj.data[:, 1]
+
+    resolved_regions = {}
+    for region_name in region_names:
+        preset_bounds = requested_regions.get(region_name)
+        if preset_bounds is None:
+            bounds_ps = _span_select_bounds(
+                representative_time_ps, representative_amplitude,
+                title=f"Select {region_name}",
+            )
+            print(f"[define_reflection_regions] {region_name}: selected "
+                  f"[{bounds_ps[0]:.2f}, {bounds_ps[1]:.2f}] ps")
+        else:
+            bounds_ps = (float(preset_bounds[0]), float(preset_bounds[1]))
+            print(f"[define_reflection_regions] {region_name} (preset): "
+                  f"[{bounds_ps[0]:.2f}, {bounds_ps[1]:.2f}] ps")
+        resolved_regions[region_name] = bounds_ps
+
+    for filename, reflection_obj in dataset.data.items():
+        reflection_obj.first_region = resolved_regions['first_reflection']
+        reflection_obj.second_region = resolved_regions['second_reflection']
+
+    config['regions'] = resolved_regions
+    return resolved_regions
+
+
+def _plan_centered_window(
+    time_seconds: np.ndarray,
+    amplitude: np.ndarray,
+    region_seconds: tuple,
+    center_mode: str,
+) -> dict:
+    """Work out the apodization window for one reflection region.
+
+    The region [start, stop] bounds the real data (everything outside is zeroed).
+    The window's Hann/Tukey ALWAYS tapers to zero at its own edges, and the edges
+    are chosen to land on real-data boundaries so BOTH sides taper smoothly:
+
+    - ``'crop'``: symmetric window centred on the peak, half-width = the SHORTER
+      half (min of pre/post). Tapers to zero at ``peak ± half``, both inside the
+      region. Narrower, exactly symmetric about the peak (no centroid shift).
+    - ``'pad'`` : the FULL region. Tapers to zero at both region edges, so it keeps
+      all the region data and is smooth on both sides. Its centre is the region
+      centre, so it is mildly asymmetric about the peak when the region is.
+
+    (A window that extended *past* a region edge — the old 'pad' — left the Hann
+    non-zero where the data was cut, giving a sharp step on the padded side. Keeping
+    the window edges on the data boundary is what makes both sides smooth.)
+    """
+    region_start_seconds, region_end_seconds = region_seconds
+    inside_region = (time_seconds >= region_start_seconds) & (time_seconds <= region_end_seconds)
+    region_indices = np.where(inside_region)[0]
+    if region_indices.size < 4:
+        raise ValueError(
+            f"reflection region [{region_start_seconds * _S_TO_PS:.2f}, "
+            f"{region_end_seconds * _S_TO_PS:.2f}] ps selects <4 samples."
+        )
+    peak_index = region_indices[int(np.argmax(np.abs(amplitude[region_indices])))]
+    peak_time_seconds = float(time_seconds[peak_index])
+
+    pre_half_seconds = peak_time_seconds - region_start_seconds
+    post_half_seconds = region_end_seconds - peak_time_seconds
+    if center_mode == 'crop':
+        half_width_seconds = min(pre_half_seconds, post_half_seconds)
+        window_start_seconds = peak_time_seconds - half_width_seconds
+        window_end_seconds = peak_time_seconds + half_width_seconds
+    elif center_mode == 'pad':
+        window_start_seconds = region_start_seconds
+        window_end_seconds = region_end_seconds
+        half_width_seconds = 0.5 * (window_end_seconds - window_start_seconds)
+    else:
+        raise ValueError("center_mode must be 'crop' or 'pad'.")
+
+    # Never let the window reach past the acquired samples (a region can be set
+    # slightly outside the truncated axis); the Hann must taper inside real data.
+    window_start_seconds = max(window_start_seconds, float(time_seconds[0]))
+    window_end_seconds = min(window_end_seconds, float(time_seconds[-1]))
+
+    return dict(
+        peak_time_seconds=peak_time_seconds,
+        region_start_seconds=region_start_seconds,
+        region_end_seconds=region_end_seconds,
+        pre_half_seconds=pre_half_seconds,
+        post_half_seconds=post_half_seconds,
+        half_width_seconds=half_width_seconds,
+        window_start_seconds=window_start_seconds,
+        window_end_seconds=window_end_seconds,
+        center_mode=center_mode,
+    )
+
+
+def _windowed_pulse_on_common_axis(
+    common_time_seconds: np.ndarray,
+    common_amplitude: np.ndarray,
+    plan: dict,
+    window_config: dict,
+) -> tuple:
+    """Apodize one reflection with a PEAK-ANCHORED window (smooth at both edges).
+
+    The window is 1.0 **at the pulse peak** and tapers to 0 at ``window_start`` and
+    ``window_end`` with the Hann (or Tukey) cosine taper — the same maths as
+    ``thz_core.window_time``, but split at the peak so each side can taper over a
+    different width. That is what keeps BOTH sides smooth while leaving the pulse at
+    full weight, even when the region (and hence the window) is asymmetric about the
+    peak (``pad`` mode). A symmetric window (``crop``) is the special case where the
+    two sides have equal width. Returns ``(windowed_amplitude, window_function)``.
+    """
+    shape = str(window_config.get('type', 'hann')).lower()
+    alpha = float(window_config.get('alpha', 1.0))
+    peak_time = plan['peak_time_seconds']
+    window_start = plan['window_start_seconds']
+    window_end = plan['window_end_seconds']
+
+    breakpoint()
+
+    window_function = np.zeros_like(common_time_seconds)
+    pre_width = max(peak_time - window_start, 1e-30)
+    post_width = max(window_end - peak_time, 1e-30)
+    rising = (common_time_seconds >= window_start) & (common_time_seconds <= peak_time)
+    falling = (common_time_seconds > peak_time) & (common_time_seconds <= window_end)
+    rise_fraction = (common_time_seconds[rising] - window_start) / pre_width   # 0 -> 1 at peak
+    fall_fraction = (common_time_seconds[falling] - peak_time) / post_width    # 0 at peak -> 1
+
+    if shape == 'tukey' and 0.0 < alpha < 1.0:
+        # Flat top over the inner (1-alpha) of each side; cosine taper over the
+        # outer alpha next to each edge.
+        rise_ramp = np.clip(rise_fraction / alpha, 0.0, 1.0)
+        fall_ramp = np.clip((1.0 - fall_fraction) / alpha, 0.0, 1.0)
+        window_function[rising] = 0.5 * (1.0 - np.cos(np.pi * rise_ramp))
+        window_function[falling] = 0.5 * (1.0 - np.cos(np.pi * fall_ramp))
+    else:  # hann (alpha >= 1): full cosine taper on each side
+        window_function[rising] = 0.5 * (1.0 - np.cos(np.pi * rise_fraction))
+        window_function[falling] = 0.5 * (1.0 + np.cos(np.pi * fall_fraction))
+
+    return common_amplitude * window_function, window_function
+
+
+def isolate_and_window(
+    dataset: DataSet,
+    config: dict | None = None,
+    center_mode: str = 'crop',
+    show_graph: bool = False,
+) -> DataSet:
+    """Isolate + apodize BOTH reflections on one shared axis (the coupling step).
+
+    Replaces ``pre_window_align_peak`` + ``center_pulse`` + per-segment windowing.
+    Reads each object's ``first_region`` / ``second_region`` (set by
+    ``define_reflection_regions``) and apodizes each reflection in place on the
+    shared axis. The window always tapers to zero at its own edges, and the edges
+    sit on real-data boundaries so BOTH sides are smooth:
+
+    - ``center_mode='crop'``: symmetric Hann centred on the peak (half-width = the
+      shorter of pre/post). Narrower, exactly symmetric — no centroid shift.
+      TESTING - DONT USE
+    - ``center_mode='pad'`` : Hann over the FULL region (tapers to zero at both
+      region edges). Keeps all the region data; mildly asymmetric about the peak
+      when the region is.
+
+    Both reflections share one axis, so their inter-pulse phase is structural (no
+    common-grid step). Called ONCE (both regions together).
+
+    Decisions are printed per file/region. With ``show_graph=True`` two figures
+    open: (1) the windowed pulses on the shared time axis, and (2) the pulses with
+    their window functions on a sample-index axis — each as first/second subplots.
+    """
+    config = config or {}
+    window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
+    if center_mode not in ('crop', 'pad'):
+        raise ValueError("center_mode must be 'crop' or 'pad'.")
+
+    reflection_items = [
+        (filename, obj) for filename, obj in dataset.data.items()
+        if isinstance(obj, THzDataReflection)
+    ]
+    for filename, obj in dataset.data.items():
+        if not isinstance(obj, THzDataReflection):
+            print(f"[isolate_and_window] '{filename}': not a THzDataReflection, skipping.")
+    if not reflection_items:
+        return dataset
+
+    # --- Pass 1: plan every reflection's centred window (per file) ---
+    # The window placement is per-pulse, but the OUTPUT axis must be common to ALL
+    # files (so the FFT frequency grids match for the transfer-function ratio). So
+    # we first gather every window's extent, then build ONE shared axis below.
+    window_plans = {}
+    for filename, reflection_obj in reflection_items:
+        if reflection_obj.first_region is None or reflection_obj.second_region is None:
+            raise ValueError(
+                f"'{filename}' has no regions defined; run define_reflection_regions first."
+            )
+        shared_time_seconds = reflection_obj.first_segment.data[:, 0]
+        first_region_seconds = (reflection_obj.first_region[0] / _S_TO_PS,
+                                reflection_obj.first_region[1] / _S_TO_PS)
+        second_region_seconds = (reflection_obj.second_region[0] / _S_TO_PS,
+                                 reflection_obj.second_region[1] / _S_TO_PS)
+        window_plans[filename] = (
+            _plan_centered_window(shared_time_seconds, reflection_obj.first_segment.data[:, 1],
+                                  first_region_seconds, center_mode),
+            _plan_centered_window(shared_time_seconds, reflection_obj.data[:, 1],
+                                  second_region_seconds, center_mode),
+        )
+
+    # All files already share one axis (global_truncate trimmed them to a common
+    # length), and every window now stays inside the region (inside that axis), so
+    # we window IN PLACE — no axis extension, no padding zeros, no common-grid step.
+    common_time_seconds = reflection_items[0][1].first_segment.data[:, 0]
+
+    graph_records = {}
+    for filename, reflection_obj in reflection_items:
+        first_plan, second_plan = window_plans[filename]
+        first_holder = reflection_obj.first_segment
+        second_holder = reflection_obj  # the primary object IS the second reflection
+
+        if first_holder.data[:, 0].shape != common_time_seconds.shape:
+            raise ValueError(
+                f"'{filename}' time axis is not aligned with the others "
+                f"({first_holder.data.shape[0]} vs {common_time_seconds.size} samples); "
+                f"run global_truncate so all files share one axis before isolate_and_window."
+            )
+
+        def isolate_to_region(amplitude, plan):
+            # Zero everything outside the region: the region is the only echo /
+            # neighbour-pulse filter (the window also tapers to zero at the region
+            # edges, so this is belt-and-braces and keeps the intent explicit).
+            in_region = ((common_time_seconds >= plan['region_start_seconds'])
+                         & (common_time_seconds <= plan['region_end_seconds']))
+            return amplitude * in_region
+
+        first_full_amplitude = first_holder.data[:, 1].copy()
+        second_full_amplitude = second_holder.data[:, 1].copy()
+        first_region_isolated = isolate_to_region(first_full_amplitude, first_plan)
+        second_region_isolated = isolate_to_region(second_full_amplitude, second_plan)
+
+        first_windowed, first_window_function = _windowed_pulse_on_common_axis(
+            common_time_seconds, first_region_isolated, first_plan, window_config)
+        second_windowed, second_window_function = _windowed_pulse_on_common_axis(
+            common_time_seconds, second_region_isolated, second_plan, window_config)
+
+        first_holder.data = np.column_stack((common_time_seconds, first_windowed))
+        second_holder.data = np.column_stack((common_time_seconds, second_windowed))
+        first_holder.processing_dict['isolate_window_plan'] = first_plan
+        second_holder.processing_dict['isolate_window_plan'] = second_plan
+
+        _print_isolate_decision(filename, 'first_reflection', first_plan, window_config)
+        _print_isolate_decision(filename, 'second_reflection', second_plan, window_config)
+
+        is_reference = False
+        try:
+            is_reference = dataset.data.is_reference(filename)
+        except Exception:
+            pass
+        graph_records[filename] = dict(
+            common_time_seconds=common_time_seconds, is_reference=is_reference,
+            first=dict(raw=first_full_amplitude, windowed=first_windowed,
+                       window_function=first_window_function),
+            second=dict(raw=second_full_amplitude, windowed=second_windowed,
+                        window_function=second_window_function),
+        )
+
+    if show_graph and graph_records:
+        _plot_isolate_centering(graph_records)
+        _plot_isolate_windowing(graph_records)
+    return dataset
+
+
+def _print_isolate_decision(filename: str, segment_name: str, plan: dict, window_config: dict) -> None:
+    """Report exactly how one reflection was centred and windowed."""
+    window_kind = ('symmetric about peak' if plan['center_mode'] == 'crop'
+                   else 'full region')
+    print(
+        f"[isolate_and_window] '{filename}' {segment_name}: "
+        f"peak {plan['peak_time_seconds'] * _S_TO_PS:.2f} ps; "
+        f"region [{plan['region_start_seconds'] * _S_TO_PS:.2f}, "
+        f"{plan['region_end_seconds'] * _S_TO_PS:.2f}] ps; "
+        f"pre/post half {plan['pre_half_seconds'] * _S_TO_PS:.2f}/"
+        f"{plan['post_half_seconds'] * _S_TO_PS:.2f} ps -> "
+        f"mode={plan['center_mode']} ({window_kind}) -> window "
+        f"[{plan['window_start_seconds'] * _S_TO_PS:.2f}, "
+        f"{plan['window_end_seconds'] * _S_TO_PS:.2f}] ps "
+        f"(half-width {plan['half_width_seconds'] * _S_TO_PS:.2f} ps, tapers to 0 at both edges); "
+        f"window={window_config.get('type', 'hann')} alpha={window_config.get('alpha', 1.0)}"
+    )
+
+
+def _plot_isolate_centering(graph_records: dict) -> None:
+    """Figure 1: centred & tapered pulses (both reflections) on the shared TIME axis."""
+    file_count = len(graph_records)
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    fig.suptitle('isolate_and_window — centred & tapered pulses (shared time axis)')
+    for filename, record in graph_records.items():
+        time_ps = record['common_time_seconds'] * _S_TO_PS
+        axes[0].plot(time_ps, record['first']['windowed'], lw=1.3, label=f'{filename} first')
+        axes[1].plot(time_ps, record['second']['windowed'], lw=1.3, label=f'{filename} second')
+    plt.xlabel('time (ps)')
+    plt.ylabel('amplitude')
+    axes[0].legend(fontsize=7)
+    axes[1].legend(fontsize=7)
+    plt.show()
+
+
+def _plot_isolate_windowing(graph_records: dict) -> None:
+    """Figure 2: windowed pulses + window functions on a sample-INDEX axis.
+
+    Same layout as the centering figure — first reflection (top) and second
+    reflection (bottom), every file overlaid — with each file's window function
+    drawn dashed (scaled to the pulse amplitude) so the apodization is visible.
+    """
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    fig.suptitle('isolate_and_window — pulses and window functions (sample index)')
+    for filename, record in graph_records.items():
+        sample_index = np.arange(record['common_time_seconds'].size)
+        peak_amplitude = max(
+            np.max(np.abs(record['first']['windowed'])),
+            np.max(np.abs(record['second']['windowed'])),
+            1e-30,
+        )
+        axes[0].plot(sample_index, record['first']['windowed'], lw=1.3, label=f'{filename} first')
+        axes[0].plot(sample_index, record['first']['window_function'] * peak_amplitude,
+                     '--', lw=1, alpha=0.6)
+        axes[1].plot(sample_index, record['second']['windowed'], lw=1.3, label=f'{filename} second')
+        axes[1].plot(sample_index, record['second']['window_function'] * peak_amplitude,
+                     '--', lw=1, alpha=0.6)
+    axes[1].set_xlabel('sample index')
+    axes[0].set_ylabel('amplitude')
+    axes[1].set_ylabel('amplitude')
+    axes[0].legend(fontsize=7)
+    axes[1].legend(fontsize=7)
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
 # Per-scan working matrix (preserves statistical power through preprocessing)
 #
 # data_obj.data is the AVERAGED [time_s, mean, stderr] trace that the pipeline
@@ -260,25 +651,65 @@ def define_reflection_gates(
 _SCAN_MATRIX_KEY = 'working_scans'
 
 
+def _averaged_as_single_scan(data_obj) -> np.ndarray:
+    """Build a 1-column ``[time_s, mean]`` matrix from the averaged trace.
+
+    The safe fallback when no per-scan matrix is available or the cached one has
+    gone stale: the per-scan scatter is lost but the averaged pipeline result is
+    preserved exactly.
+    """
+    averaged = np.asarray(data_obj.data, dtype=float)
+    return np.column_stack((averaged[:, 0], averaged[:, 1]))
+
+
 def _ensure_scan_matrix(data_obj) -> np.ndarray:
     """Return the per-scan working matrix ``[time_s, scan1, ..., scanN]``.
 
     Created lazily from ``raw_data`` (source ps time converted to SI seconds to
     match ``data_obj.data``) on first use and cached in ``processing_dict``.
-    Subsequent calls return the same array so in-place transforms by the
-    preprocessing steps accumulate. Falls back to the averaged trace as a single
-    "scan" if no multi-scan ``raw_data`` is present.
+    Subsequent calls return the same array so in-place transforms by the linear
+    preprocessing steps (baseline, alignment, normalise) accumulate.
+
+    **Staleness guard (single source of truth).** The matrix is only valid while
+    it has the *same row count* as ``data_obj.data``. Steps that change the row
+    count or resample the time axis (``global_truncate``, ``center_pulse``, and
+    the windowing-hygiene crop in ``pre_window_align_peak``) mutate ``data`` but
+    deliberately do **not** maintain this parallel matrix — keeping two full
+    representations in lockstep through every step is the coupling we want to
+    avoid. So instead of trusting the cache blindly, every call verifies the row
+    count and, on a mismatch (or when ``raw_data`` is single-scan / absent),
+    falls back to the averaged trace as a single "scan". This protects **all**
+    consumers in one place rather than each re-checking.
     """
+    target_rows = np.asarray(data_obj.data).shape[0]
+
     matrix = data_obj.processing_dict.get(_SCAN_MATRIX_KEY)
     if matrix is not None:
+        if np.asarray(matrix).shape[0] == target_rows:
+            return matrix
+        # Cached matrix went stale: a row-count-changing step ran since it was
+        # built. Drop the per-scan scatter and fall back to the averaged trace.
+        if not data_obj.processing_dict.get('_scan_matrix_stale_warned'):
+            print(
+                f"Note: '{getattr(data_obj, 'filename', '<unknown>')}' per-scan "
+                f"matrix is out of sync with the averaged trace "
+                f"({np.asarray(matrix).shape[0]} vs {target_rows} rows); a "
+                f"row-count-changing step ran. Using the averaged trace as a "
+                f"single scan from here."
+            )
+            data_obj.processing_dict['_scan_matrix_stale_warned'] = True
+        matrix = _averaged_as_single_scan(data_obj)
+        data_obj.processing_dict[_SCAN_MATRIX_KEY] = matrix
         return matrix
+
     raw = np.asarray(data_obj.raw_data, dtype=float)
-    if raw.ndim == 2 and raw.shape[1] >= 2:
+    if raw.ndim == 2 and raw.shape[1] >= 2 and raw.shape[0] == target_rows:
         time_seconds = raw[:, 0] / _S_TO_PS  # ps -> s, matching data_obj.data
         matrix = np.column_stack((time_seconds, raw[:, 1:]))
     else:
-        averaged = np.asarray(data_obj.data, dtype=float)
-        matrix = np.column_stack((averaged[:, 0], averaged[:, 1]))
+        # No multi-scan raw_data, or it no longer matches the (already-mutated)
+        # averaged trace — fall back to the averaged trace as a single scan.
+        matrix = _averaged_as_single_scan(data_obj)
     data_obj.processing_dict[_SCAN_MATRIX_KEY] = matrix
     return matrix
 
@@ -424,13 +855,23 @@ def global_truncate(
     min_t = max(float(np.nanmin(h.data[:, 0])) for _, h in holders)
     max_t = min(float(np.nanmax(h.data[:, 0])) for _, h in holders)
 
+    # Mask by value first, then trim ALL holders to the common minimum length. A
+    # float boundary sample can land in some traces but not others (off-by-one),
+    # which would leave files on slightly different-length axes; trimming to the
+    # shortest common count guarantees one identical axis for every file.
+    masked = []
     for fn, h in holders:
-        mask = (h.data[:, 0] >= min_t) & (h.data[:, 0] <= max_t)
-        h.data = h.data[mask, :]
+        kept_indices = np.where((h.data[:, 0] >= min_t) & (h.data[:, 0] <= max_t))[0]
+        masked.append((fn, h, kept_indices))
+    target_length = min(len(kept_indices) for _, _, kept_indices in masked)
+
+    for fn, h, kept_indices in masked:
+        h.data = h.data[kept_indices[:target_length], :]
         if show_graph:
             plt.plot(h.data[:, 0] * _S_TO_PS, h.data[:, 1], label=fn)
 
-    print(f"[global_truncate] {segment}: truncated to common time range.")
+    print(f"[global_truncate] {segment}: truncated to common time range "
+          f"({target_length} samples).")
     if show_graph:
         plt.legend()
         plt.xlabel('Time (ps)')
@@ -943,17 +1384,10 @@ def segment_reflections(
         # Crop the per-scan working matrix [time_s, scan1, ..., scanN] so every
         # individual acquisition is preserved in the segmented files (statistical
         # power), with the baseline / alignment / normalisation carried through
-        # exactly as applied to the averaged trace.
+        # exactly as applied to the averaged trace. _ensure_scan_matrix guarantees
+        # the matrix is row-aligned with data_obj.data (or a clean averaged-trace
+        # fallback if a row-count-changing step ran before segmentation).
         scan_matrix = np.asarray(_ensure_scan_matrix(data_obj), dtype=float)
-        if scan_matrix.shape[0] != np.asarray(data_obj.data).shape[0]:
-            print(
-                f"Warning: '{filename}' scan matrix ({scan_matrix.shape[0]} rows) "
-                f"is out of sync with the averaged trace "
-                f"({np.asarray(data_obj.data).shape[0]} rows); a row-count-changing "
-                f"step ran before segmentation. Falling back to the averaged trace."
-            )
-            averaged = np.asarray(data_obj.data, dtype=float)
-            scan_matrix = np.column_stack((averaged[:, 0], averaged[:, 1]))
         time_ps = scan_matrix[:, 0] * _S_TO_PS
         scans = scan_matrix[:, 1:]
         mean_y = scans.mean(axis=1)

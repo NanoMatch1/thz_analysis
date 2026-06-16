@@ -136,9 +136,10 @@ if __name__ == "__main__":
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\H2O_timing tests"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\B"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-11_CNT-paper"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-11_CNT-paper"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17"
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-16_reflection_testing\export"
     # fileDir = r"C:\Users\Samuel\Data\THz\diagnostics\2026-06-10_humidity and purge\2026-06-09_CNT-paper\TESTING"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\B\segmented\second_reflection"
@@ -234,13 +235,14 @@ if __name__ == "__main__":
     # acquisition_editor.process_directory(fileDir)
     ### --- Pre-processing and segmentation ---
     # --- Preprocess reflections - uncomment to segment and normalise time traces. Comment and re-run with segmented folder to continue analysis
-    
-    preprocess(fileDir)
+    # preprocess(fileDir)
     # --- Main analysis 
     dataset = DataSet(fileDir)
     show_graph = True
     dataset.load_all_data(case_insensitive=True)
+    dataset.plot_current()
     # dataset.plot_current()
+    thz.build_full_trace_reflection()
 
     # ---
 
@@ -256,7 +258,7 @@ if __name__ == "__main__":
     # temporal midpoint, giving the Tukey window symmetric taper regions.
     centering_config = {'centering': {'peak_mode': 'auto', 'taper_ps': 1}}
     thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
-    thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
+    # thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
     thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
     thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
     thz.fft_spectrum(dataset)
@@ -269,7 +271,7 @@ if __name__ == "__main__":
     thz.transfer_function(
         dataset,
         config={
-            "transfer": {"apply_snr_mask": True, "self_reference": False},
+            "transfer": {"apply_snr_mask": True, "self_reference": True},
             "mask": {"snr_thresh_db": 20, "tail_fraction": 0.25, "min_contiguous_bins": 3},
         },
         ref_type='reference',

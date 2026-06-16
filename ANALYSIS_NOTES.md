@@ -54,6 +54,17 @@ Newest material appended at the bottom of each section.
   reloaded files is identical to the originals.
 - Gates exclude the GaP echo. Keep the second-reflection gate trailing edge
   below the *next* GaP echo of the second reflection.
+- **GaP second echo exclusion (CNT-17, 2026-06-16).** A *second-order* internal-reflection
+  echo inside the GaP detection crystal (distinct from the first ~+5.3 ps replica)
+  sits ~168 ps and adds interpretation-harming oscillations. **No dedicated crop is
+  needed**: it sits at a fixed delay from T0, so it is excluded by the second-reflection
+  region's trailing edge (e.g. 168 ps), and `isolate_and_window` zeros everything
+  outside each region before windowing — so even a `pad`-mode window reaching past the
+  region edge multiplies zeros there (verified: max |amp| beyond 168 ps = 0). A brief
+  `build_full_trace_reflection(hard_crop_ps=...)` arg was removed as CNT-17-specific
+  scaffolding. Consequence — the second reflection (peak ~165.4 ps) sets trusted-band n
+  (§16) yet excluding the echo leaves it only ~2.6 ps post-room → narrow symmetric
+  window (~0.19 THz res); the fix is on the acquisition side. See [[gap-second-echo-crop]].
 
 ---
 
@@ -484,3 +495,283 @@ r_reference_value = fresnel_reflection_s(n_window, 1.0, theta_internal_rad)
 At the CNT-13/D window (n_SiO₂ = 1.962–1.967 flat), the array vs scalar change
 shifts `r_reference` by +0.003 (+0.7 %) — comparable to the n measurement
 uncertainty, so worth keeping but not urgent to backfill old results.
+
+## §13  Single-pass in-memory reflection build + hardening (2026-06-16)
+
+### Motivation — drop the save→reload round-trip
+The two-phase workflow (segment to `.acc` files, then reload and process) had a
+real cost: `processing_dict` is not persisted across the save, so the §4
+sub-sample timing residual computed in phase 1 was silently lost before phase 2
+(noted in §11). The new single-pass flow keeps everything in memory:
+`load raw → define gates → build_reflection_dataset (crop in-memory) → align →
+process both segments`. Each acquisition's individual scans are preserved because
+`build_reflection_dataset` crops each scan's `raw_data` (per-scan, in ps) into the
+first/second `THzData` segments up front — no averaging-away of scatter.
+
+### §13a  `save_segmented` must run BEFORE the in-memory build  ★ bug fixed
+We still want the **option** to cache the gated segments as `.acc` files (so a
+later run can reload the segmented layout). The trap: `segment_reflections` gates
+the trace it is given by **both** the first and second time windows. Once
+`build_reflection_dataset` has run, each object's `raw_data` is *already* only the
+second reflection (~159–168 ps), so re-gating it by the first-reflection window
+(~151–158 ps) selects zero samples → `ValueError`. **Fix:** run the optional
+`segment_reflections` save on the **raw flat dataset** (each trace still holds both
+reflections) *before* `build_reflection_dataset`. Ordering is the whole fix; the
+splitter itself is unchanged.
+
+### §13b  Per-scan matrix staleness guard — one check, not N syncs  ★ latent bug
+The per-scan working matrix (§ per_scan_working_matrix: `working_scans` =
+`[time_s, scan1…scanN]`) is carried in lockstep with the averaged `data` by the
+**linear** steps (baseline, alignment, normalise) so the segmented `.acc` files
+retain every acquisition. But three steps change `data`'s **row count / time
+sampling** and deliberately do **not** update the matrix:
+`global_truncate` (rows ↓), `center_pulse` (prepend, rows ↑), and the
+windowing-hygiene crop in `pre_window_align_peak` (index-crop, rows ↓).
+
+We chose **not** to make those three steps also rewrite the matrix. Maintaining two
+full parallel representations through every step is exactly the tight coupling /
+"same data in two places" we avoid — each new step would have to remember to update
+both, and a missed update is a silent corruption. Instead the invariant lives in
+**one** place: `_ensure_scan_matrix` now verifies on every call that the matrix row
+count matches `data`, and on a mismatch (or single-scan / absent `raw_data`) falls
+back to the averaged trace as a single "scan" — losing the per-scan scatter but
+never returning misaligned rows. The previous ad-hoc version of this check lived
+inside `segment_reflections` only; centralising it protects **every** consumer
+(present and future), which is the point. A one-shot note prints when the fallback
+fires so the loss of per-scan power is visible, not silent.
+
+In the current single-pass reflection flow this guard is mostly a safety net — the
+only consumer (`segment_reflections`, when `save_segmented=True`) runs before the
+row-changing steps — but it removes a live trap for the transmission flow and any
+future code that touches `working_scans` after windowing/centring.
+Tests: `tests/test_thz_reflection.py` (+3: fresh-matches-data, staleness-rebuild,
+single-scan).
+
+## §14  FFT T0 reference — audit of the asymmetric self-referencing  ★ (2026-06-16)
+
+### The question
+`fft_spectrum(segment='first_reflection')` multiplies the front-pulse spectrum by
+the absolute-time factor `exp(-2πi·f·t[0])`; the second reflection gets **no** such
+factor (its `rfft` is referenced to its own array sample 0). Does that asymmetry
+leave a residual linear phase in `H = (Y₂ₛ/Y₁ₛ)/(Y₂ᵣ/Y₁ᵣ)` and bias n?
+
+### How an FFT references phase (first-principles)
+`rfft(y)` measures every spectral phase from the **first sample of the array** — the
+segment's own "T0", which sits at absolute time `t[0]`. Two ways to choose that
+origin: **own** (plain `rfft`, origin = array sample 0) and **absolute** (`×
+exp(-2πi·f·t[0])`, origin = experiment time 0). They differ by a linear phase
+`exp(-2πi·f·t[0])`. In the self-referenced double ratio the only surviving term is
+
+```
+H_abs / H_own = exp(-2πi·f·Δ),   Δ = (t₂ₛ[0]−t₁ₛ[0]) − (t₂ᵣ[0]−t₁ᵣ[0])
+```
+
+i.e. it depends **only** on whether the four segments start at different *absolute*
+array times. If all four share a common origin, Δ=0 and the choice is irrelevant.
+
+### Demo result (CNT-17 s-0, `explorations/demo_phase_referencing.py`)
+Ran one sample + its reference through the real per-segment chain (baseline →
+truncate → center_pulse → window), then formed `H` three ways (own / abs /
+prod=first-abs-second-own) at two points:
+
+- **PRE-pad** (FFT each segment at its own origin, right after windowing): the
+  segments do **not** share an origin — `center_pulse` prepends a *different* number
+  of zeros per file to centre each pulse (sample first-seg 49 samples, reference 51),
+  so `t₁ₛ[0]−t₁ᵣ[0] = +0.10 ps`. Result: **Δ = −0.10 ps**, and own vs abs `H` differ
+  by exactly a −0.10 ps linear phase (slope fit confirms). This is the feared bias.
+- **POST-pad** (production order: `zero_pad` → `fft_spectrum`): **Δ = 0.0000 ps**,
+  own ≡ abs ≡ prod (|H| diff 2e-15, phase slope 0.0000 ps). The methods collapse.
+
+### Why production is already safe — and the real lever
+`zero_pad` calls `pad_to_common_grid`, which places **every trace of a segment onto
+one shared grid** by its absolute `t[0]` (earlier-starting traces get leading zeros).
+So by the time `fft_spectrum` runs, all sample/reference traces of a given segment
+share an identical array origin at the **same absolute time**, and the per-file
+`center_pulse` prepend bookkeeping has been normalised away. The own-vs-absolute
+choice (and hence the first-segment-only asymmetry) is therefore a **no-op in the
+current pipeline**: the abs factor is a per-segment common constant that cancels in
+the double ratio.
+
+**Conclusion / decision (2026-06-16):** the asymmetric T0 reference is **not** a bug
+in the current flow — `pad_to_common_grid` (always run before the FFT) neutralises
+it. We do **not** need to make the reference symmetric for correctness. The genuine
+invariant is *"common-grid the traces before the FFT"*; the FFT T0 factor is
+redundant given that. Caveat to preserve: this safety depends on `zero_pad` running
+**before** `fft_spectrum` and on `pad_to_common_grid` placing by absolute `t[0]`. Any
+reorder that FFTs a segment **before** the common-grid step (or a future per-segment
+FFT path) would reintroduce the −0.1-ps-class own-T0 error — at which point the
+symmetric absolute reference becomes the right defence. `|H|` is phase-ramp
+invariant throughout, so this is a pure n/group-delay concern, never `|r|`.
+
+## §15  Front-reflection window extent & symmetry (limited pre-pulse)  ★ (2026-06-16)
+
+### The constraint
+CNT-17 (typical for us) gives only **~2.3 ps of pre-pulse** before the first
+reflection (peak 154.3 ps, acquisition starts 152.0 ps) but **~11 ps** to the second
+reflection. We can extend pre-pulse collection to ~8–9 ps before T0, but a **laser
+pre-pulse** (a weaker THz replica) is a hard wall beyond that. So a *symmetric*
+peak-centred window of maximum symmetric extent on the front pulse is only ~4.6 ps
+wide and **discards ~9 ps of real post-pulse oscillation**.
+
+### Demo (`explorations/demo_window_extent.py`, CNT-17 s-0)
+Three front-pulse windows, same half-Hann taper logic, second reflection held at a
+fixed symmetric window, then `H = (Y₂ₛ/Y₁ₛ)/(Y₂ᵣ/Y₁ᵣ)`:
+- `narrow_sym` — symmetric ±2.3 ps (pre-pulse limited); drops the tail.
+- `asym` — 2.3 ps pre + 8 ps post (keeps tail, asymmetric about the peak).
+- `prepend_sym` — prepend zeros so pre = post = 8 ps, symmetric (keeps tail; the
+  taper rise falls in the prepended-zero region, so the **real** pulse keeps
+  near-full weight).
+
+### Findings (counter to the naïve "symmetric is safest")
+1. **`narrow_sym` is the worst**, not the safest: forcing symmetry by the short
+   pre-pulse throws away real post-pulse signal → |Y₁| distorted **5.1 %** (vs
+   `prepend_sym`), coarser resolution, low-f leakage. "Symmetric" is a false economy
+   when symmetry is achieved by *discarding data*.
+2. **`prepend_sym` is the most faithful.** Prepending zeros is **not** fabricating
+   signal — the pre-pulse region is genuine baseline, and putting the window's rising
+   taper there leaves the real pulse near full weight. `asym` keeps the same time
+   span but its steep rise *tapers the real leading edge*, and its non-zero window
+   mean **injects DC / low-f**. |Y₁| diff: `asym` 0.5 %, `prepend_sym` 0 (reference).
+3. **Where it reaches the measurement.** Front-window choice barely touches the
+   **trusted band**: phase(H) rms error 0.5–4.5 THz is **0.004 rad (asym) / 0.014 rad
+   (narrow_sym)** — negligible (the front pulse is common to sample & reference, so
+   self-referencing largely absorbs it there). The error is **concentrated below
+   ~0.5 THz** (full-band rms ~0.3 rad) — i.e. it lands on the **low-frequency wing**,
+   exactly the region we were worried about. `|H|`/n in the trusted band are safe.
+
+### Design implication (leaning, pending confirmation)
+Keep the **prepend+taper centering** — Samuel's earlier "orange flag" about it is
+resolved: prepending into genuine baseline is safe and is in fact the *cleanest* way
+to window a pulse whose acquisition truncates its pre-pulse. Lean toward making it
+the **default for the first reflection when pre-pulse < target window** (it cleans
+the low-f wing), with a guard/validation that the prepended region is really baseline
+(no laser pre-pulse / echo) and a pre/post |Y₁| check. It is a low-f-wing refinement,
+**not** a trusted-band n correction. The taper specifically earns its keep when the
+acquisition truncates the *rising edge* (smooths the zero→pulse discontinuity).
+The symmetry question that *does* bite the trusted band is the **second** reflection
+(dispersive sample pulse vs bare SiO₂ reference pulse — different shapes, so an
+asymmetric window shifts their centroids differently and does **not** cancel) — to be
+workshopped next.
+
+## §16  Windowing styles: cancellation vs mixing, per reflection  ★ (2026-06-16)
+
+### Setup
+`explorations/demo_windowing_styles.py` windows **both** reflections of the sample and
+the reference with a chosen *style per reflection* (driven by `WINDOW_STYLES` /
+`STYLE_COMBINATIONS` dicts; apodization via the real `thz_core.window_time`), keeps
+both pulses on one shared axis, and builds `H = (Y₂ₛ/Y₁ₛ)/(Y₂ᵣ/Y₁ᵣ)`. Extents are
+clamped to **±5 ps** — the clean isolation room, since the second reflection has only
+~5.5 ps to the inter-pulse midpoint and the GaP echo sits ~5.3 ps after it (an 8 ps
+window contaminated the second reflection with the first reflection's tail — a real
+gate-hygiene trap worth remembering). Styles: `symmetric_prepended` (full, symmetric,
+prepend zeros for the short front pre-pulse), `symmetric_shortest` (±2.3 ps narrow),
+`asymmetric_tukey` (2.3 pre / 5 post, Tukey α=0.5).
+
+### Result — trusted-band (0.5–4.5 THz) phase(H) error vs the ideal (prepend/prepend)
+| combination | |H| rms frac | phase rms (full) | phase rms (trusted) |
+|---|---|---|---|
+| both narrow | 0.11 | 0.27 | 0.050 |
+| both asymmetric | **0.48** | 0.37 | 0.063 |
+| **narrow 1st, good 2nd** | 0.15 | 0.27 | **0.006** |
+| **good 1st, narrow 2nd** | 0.05 | 0.07 | **0.052** |
+
+### Findings
+1. **Cancellation is asymmetric between the two reflections.** A consistent imperfect
+   window on the **first** reflection cancels almost completely (trusted phase
+   **0.006 rad**) — sample and reference front pulses are the same air→SiO₂ reflection,
+   so identical distortion divides out. The **second** reflection does **not** cancel
+   (**0.052 rad**): the dispersive CNT back-pulse and the bare SiO₂→air reference pulse
+   have different shapes, so the same window distorts them differently.
+2. **Mixing is safe iff the second reflection gets the faithful window.** `narrow 1st /
+   good 2nd` is negligible (0.006 rad); `good 1st / narrow 2nd` carries the whole error
+   (0.052 rad). So the rule is simply: **the second reflection sets the trusted-band n;
+   the first reflection is forgiving.**
+3. **Asymmetric windows wreck |H| magnitude** (0.48 frac rms) via DC injection /
+   leakage, even though their trusted-band phase is only ~0.06 rad — so they are bad
+   for k / |r| regardless. Prefer symmetric.
+4. **All imperfections land mostly on the low-frequency wing** (<0.5 THz); trusted-band
+   effects are modest (≤0.06 rad ≈ ~1 % n). Self-referencing is robust overall.
+
+### Decisions (windowing, 2026-06-16)
+- **Window the second reflection symmetrically and faithfully** — it is the one that
+  reaches trusted-band n. It has ~5 ps of clean isolation (no prepend needed).
+- **The first reflection is forgiving**; a narrow symmetric window is fine for phase/n.
+  Prepend+taper there is a **low-f-wing** refinement, optional (§15), not critical.
+- **Avoid asymmetric windows** (Tukey biased off-peak) — they inject DC and distort |H|.
+- Size every window to the clean isolation extent (don't overrun the neighbouring pulse
+  or the GaP echo); ±5 ps for CNT-17.
+
+## §17  Shared-axis reflection isolation — implementation  ★ (2026-06-16)
+
+Replaces the old `build (crop) → align → pre_window_align_peak → center_pulse →
+window_time → zero_pad (pad_to_common_grid)` chain for reflection data with three
+transparent functions (`dataset_core/adapters/thz_adapter.py`), kept **alongside**
+the old path for A/B.
+
+- **`build_full_trace_reflection(dataset)`** — wraps each raw trace into a
+  `THzDataReflection` where BOTH segments start as independent copies of the *whole*
+  trace on one shared axis. No gate cropping, no echo crop (the echo is handled by the
+  region, below). Sets `first_region`/`second_region = None`.
+- **`define_reflection_regions(dataset, config)`** — one function, both regions, from
+  preset ps bounds or a `SpanSelector`. Writes the (start, stop) ps tuples onto every
+  object as `first_region`/`second_region` and mirrors them into `config['regions']`.
+- **`isolate_and_window(dataset, config, center_mode, show_graph)`** — the one
+  coupling step. A **peak-anchored** window per reflection (value 1 *at the pulse
+  peak*, tapering to zero at both window edges), both pulses placed on ONE shared
+  axis so the inter-pulse phase is structural (no common-grid, no absolute-time
+  factor, no sub-sample ramp). `center_mode='crop'` = symmetric window, half-width =
+  the shorter of pre/post (narrower, no centroid shift); `'pad'` = the FULL region
+  (keeps all data, taper rates differ per side when the region is asymmetric about
+  the peak). **Region-zeroing**: amplitude outside `[region_start, region_end]` is
+  zeroed before windowing — the region is the only echo/neighbour filter (no crop
+  step). Every decision (peak, region, pre/post half, mode, window) is printed.
+
+  **Taper fix (2026-06-16):** the first `'pad'` implementation grew the window to the
+  *longer* half and padded the short side with zeros, then apodized with a symmetric
+  Hann (`thz_core.window_time`). That left the Hann **non-zero at the region edge**
+  where the data was cut → a sharp step on the padded side (and the symmetric Hann's
+  crest sat off the pulse). Fix: the window edges sit on the data boundary and the
+  taper is **peak-anchored** (split the Hann/Tukey cosine at the peak so each side
+  tapers over its own width). Same cosine maths as `thz_core.window_time`, applied
+  asymmetrically — both sides now taper smoothly to zero with the pulse at full
+  weight. Consequence: `crop` and `pad` n now agree closely on CNT-17 (s-0 ≈ 0.95
+  both), where the buggy pad had diverged.
+- **`global_truncate` equal-length fix (2026-06-16)**: it now trims every trace to the
+  common *minimum* sample count, not just by time value. A float boundary sample could
+  land in some files but not others (off-by-one), leaving files on slightly
+  different-length axes; once the dataset-specific 168 ps crop (which had masked this)
+  was removed, `isolate_and_window`'s shared-axis assertion caught it. Trimming to the
+  shortest common count guarantees one identical axis for every file.
+
+### Why one call, both regions (not the `segment=`-twice pattern)
+The shared axis must be common **across both reflections AND across all files** (so the
+FFT grids match for `H = (Y₂/Y₁)…`). That coordination can only be done seeing
+everything at once, so `isolate_and_window` is **two-pass**: (1) plan every window;
+(2) build one common axis spanning all windows of all files, place every pulse on it.
+The first attempt built the axis *per file* — but each file's peak is at a slightly
+different time, so `pad` mode produced different-length axes per file and
+`transfer_function` failed on a length mismatch. The shared two-pass axis fixes it.
+(`crop` mode never extends the axis, so it worked even before the fix.)
+
+### Checkpoint (`show_graph=True`)
+Two figures, each one subplot row per file (sample and reference on their own rows):
+(1) centred & tapered pulses on the shared **time** axis; (2) the pulses with their
+window functions on a sample-**index** axis (the existing `window_time` style). One
+call has all files in hand, so sample+reference are subplots in one figure — we do
+*not* call per region.
+
+### Smoke (CNT-17, `explorations/smoke_isolate_and_window.py`)
+Full path build→regions→isolate→FFT→self-ref transfer→invert runs in both modes;
+both reflections verified on one identical axis; `crop` gives ~40 trusted bins,
+`pad` ~50 (wider window → finer resolution). Unit tests still 17/17.
+
+### Wired into `run_me_reflection.py` (A/B), 2026-06-16
+`pipeline_config['processing_path']` selects `process_shared_axis` (new) vs
+`process_segmented` (old); both share `report()` and the same geometry/window config.
+Shared-axis FFT zero-pads inside `fft_spectrum(n_fft=...)` (no `zero_pad`/
+`pad_to_common_grid` step). Headless A/B on CNT-17 (0.5–3 THz band-mean n):
+s-0 0.917 vs 0.964; s-180 0.696 vs 0.807; s-45 0.786 vs 0.840; s-90 0.763 vs 0.804 —
+the two paths **agree to ~0.04–0.11 in n and ~0.05 in k**, with the same anisotropy
+ordering, so the new shared-axis path is validated against the existing one. (Note:
+`build_full_trace_reflection`'s `hard_crop_ps` arg was externally stripped and
+restored — keep it; the wiring depends on it.)

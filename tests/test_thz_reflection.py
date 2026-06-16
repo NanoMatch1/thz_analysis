@@ -19,7 +19,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from dataset_core.data_structures.thz import BaseTHzData, THzData, THzDataReflection
 from dataset_core.dataset import DataSet
-from dataset_core.adapters.thz_adapter import center_pulse
+from dataset_core.adapters.thz_adapter import center_pulse, _ensure_scan_matrix
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +327,43 @@ def test_dataset_reflection_layout_no_first_match_falls_back_to_thzdata():
         shutil.rmtree(tmpdir)
 
 
+def test_scan_matrix_fresh_matches_data():
+    """A freshly built scan matrix is row-aligned with data and averages to it."""
+    obj = _make_thzdata("s.acc", n_pts=100, n_scans=4)
+    matrix = _ensure_scan_matrix(obj)
+    assert matrix.shape[0] == obj.data.shape[0]
+    assert matrix.shape[1] == 1 + 4  # time + 4 scans
+    # mean of scan columns equals the averaged trace
+    assert np.allclose(matrix[:, 1:].mean(axis=1), obj.data[:, 1])
+
+
+def test_scan_matrix_staleness_guard_rebuilds_on_row_change():
+    """If a row-count-changing step mutates data, the next call falls back cleanly."""
+    obj = _make_thzdata("s.acc", n_pts=100, n_scans=4)
+    # Build and cache the multi-scan matrix.
+    first = _ensure_scan_matrix(obj)
+    assert first.shape == (100, 5)
+
+    # Simulate global_truncate / center_pulse: change data row count WITHOUT
+    # updating the matrix (the deliberate decoupling).
+    obj.data = obj.data[:60, :]
+
+    # Next call must NOT return the stale 100-row matrix; it falls back to the
+    # averaged trace as a single scan, row-aligned with the new data.
+    second = _ensure_scan_matrix(obj)
+    assert second.shape[0] == 60
+    assert second.shape[1] == 2  # time + single averaged scan
+    assert np.allclose(second[:, 1], obj.data[:, 1])
+
+
+def test_scan_matrix_single_scan_raw_matches_data():
+    """A single-scan object yields a 2-column matrix equal to its averaged trace."""
+    obj = _make_thzdata("s.acc", n_pts=80, n_scans=1)
+    matrix = _ensure_scan_matrix(obj)
+    assert matrix.shape == (80, 2)
+    assert np.allclose(matrix[:, 1], obj.data[:, 1])
+
+
 # ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
@@ -346,6 +383,9 @@ _TESTS = [
     test_center_pulse_first_reflection_taper_smooth,
     test_center_pulse_main_trace,
     test_center_pulse_first_reflection_skips_plain_thzdata,
+    test_scan_matrix_fresh_matches_data,
+    test_scan_matrix_staleness_guard_rebuilds_on_row_change,
+    test_scan_matrix_single_scan_raw_matches_data,
 ]
 
 
