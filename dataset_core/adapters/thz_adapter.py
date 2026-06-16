@@ -454,6 +454,8 @@ def isolate_regions(
     This step is only to isolate and pad, the next step is the windowing.
     """
 
+    for filename, data_obj in dataset.data.items():
+
 
 
 

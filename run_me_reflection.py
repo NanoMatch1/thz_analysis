@@ -84,7 +84,7 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     thz.isolate_regions(dataset, config)
     thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
 
-
+    thz.window_time(dataset)
 
     dataset.plot_current(title="isolated + windowed reflections")
     # --- FFT both reflections onto ONE frequency grid (zero-pad inside the FFT via
@@ -207,7 +207,7 @@ def report(dataset: DataSet, band_thz: tuple = (0.5, 3.0)) -> None:
 
 if __name__ == '__main__':
 
-    ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17'
+    ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-17\testing'
 
     pipeline_config = {
         # ---- path selection ----
@@ -240,24 +240,98 @@ if __name__ == '__main__':
         'save_segmented': False,
     }
 
-    headless = pipeline_config.get('headless', False)
-    show = pipeline_config.get('show_graphs', False) and not headless
 
     dataset = DataSet(ROOT_DIR)
     dataset.load_all_data(case_insensitive=True, explicit_dir=True)
+    headless = pipeline_config.get('headless', False)
+    show = pipeline_config.get('show_graphs', False) and not headless
 
-    processing_path = pipeline_config['processing_path']
-    print(f"\n=== processing path: {processing_path} ===\n")
-    if processing_path == 'shared_axis':
-        result = process_shared_axis(dataset, pipeline_config, show)
-    elif processing_path == 'segmented':
-        result = process_segmented(dataset, pipeline_config, show)
-    else:
-        raise ValueError(f"unknown processing_path {processing_path!r}")
+    config = pipeline_config
 
-    report(result)
+        # --- wrap each raw trace as a full-trace THzDataReflection. Both segments
+    #     start as the WHOLE trace; any GaP echo is excluded later by the second
+    #     region's trailing edge (isolate_and_window zeros outside each region). ---
+    thz.define_reflection_regions(dataset, config)
+    
+    thz.build_full_trace_reflection(dataset)
+
+
+    # --- pair sample <-> reference ---
+    dataset.group_files(keywords=['type'])
+    dataset.grouping.show_matches()
+    dataset.plot_current(title="full-trace reflection")
+
+    # --- T0 calibration on the FRONT pulse. In self-reference mode the sample<->ref
+    #     timing cancels in W, so integer-sample alignment is enough; we only need a
+    #     clean common axis. roi restricts the cross-correlation to the first
+    #     reflection so it locks on the front pulse, not the back. ---
+    first_region = config['regions'].get('first_reflection')
+    correlation_roi = first_region if (first_region and None not in first_region) else None
+    thz.align_to_reference(
+        dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=show,
+    )
+
+    # --- baseline off the genuine pre-pulse, on the full trace (both holders) ---
+    thz.subtract_baseline(dataset, segment='second_reflection')
+    thz.subtract_baseline(dataset, segment='first_reflection')
+
+    # --- one common time axis across all files (needed so the FFT grids match) ---
+    thz.global_truncate(dataset, segment='second_reflection')
+    thz.global_truncate(dataset, segment='first_reflection')
+
+    # --- define BOTH reflection regions (preset bounds or SpanSelector) ---
+
+    # --- THE coupling step: isolate + symmetric window both reflections on one
+    #     shared axis. center_mode 'pad' keeps the full pulse (pads the short side
+    #     with zeros); 'crop' shrinks to the short side. ---
+    # thz.isolate_and_window(
+    #     dataset,
+    #     config={'window': config['window']},
+    #     center_mode=config.get('center_mode', 'crop'),
+    #     show_graph=show,
+    # )
+    breakpoint()
+    thz.isolate_regions(dataset, config)
+    thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
+
+    thz.window_time(dataset)
+
+    dataset.plot_current(title="isolated + windowed reflections")
+    # --- FFT both reflections onto ONE frequency grid (zero-pad inside the FFT via
+    #     n_fft — no separate zero_pad / pad_to_common_grid step needed). ---
+    shared_n_fft = config.get('n_fft', 4096)
+    thz.fft_spectrum(dataset, segment='second_reflection', n_fft=shared_n_fft)
+    thz.fft_spectrum(dataset, segment='first_reflection', n_fft=shared_n_fft)
 
     if show:
-        thz.result_viewer(result)
+        thz.plot_fft(dataset, normalise=False, scale='')
 
-    dataset.save_database()
+    # --- self-referenced transfer, inversion, optical parameters ---
+    thz.transfer_function(
+        dataset, config={'transfer': {'self_reference': True}}, ref_type='reference',
+    )
+    thz.invert_nk_reflection(
+        dataset, geometry='window',
+        theta_deg=config['theta_external_deg'],
+        polarization=config['polarization'],
+        n_window=config['n_sio2'],
+    )
+    thz.derive_eps_sigma(dataset)
+
+
+
+    # processing_path = pipeline_config['processing_path']
+    # print(f"\n=== processing path: {processing_path} ===\n")
+    # if processing_path == 'shared_axis':
+    #     result = process_shared_axis(dataset, pipeline_config, show)
+    # elif processing_path == 'segmented':
+    #     result = process_segmented(dataset, pipeline_config, show)
+    # else:
+    #     raise ValueError(f"unknown processing_path {processing_path!r}")
+
+    # report(result)
+
+    # if show:
+    #     thz.result_viewer(result)
+
+    # dataset.save_database()

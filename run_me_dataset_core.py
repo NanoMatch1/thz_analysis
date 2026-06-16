@@ -242,7 +242,7 @@ if __name__ == "__main__":
     dataset.load_all_data(case_insensitive=True)
     dataset.plot_current()
     # dataset.plot_current()
-    thz.build_full_trace_reflection()
+    # thz.build_full_trace_reflection()
 
     # ---
 

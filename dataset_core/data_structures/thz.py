@@ -566,6 +566,7 @@ class THzDataReflection(THzData):
     ) -> None:
         super().__init__(data, header, **kwargs)
         self.first_segment = first_segment
+        self.second_segment = self  # for clarity; the second reflection is the canonical data
 
     @classmethod
     def from_thzdata(cls, second: THzData, first: THzData) -> 'THzDataReflection':
@@ -596,29 +597,18 @@ class THzDataReflection(THzData):
             f"   -> Data type: {self.data_type}\n"
         )
 
+class THzDataReflectionNew:
+    """Simpler reflection data container for two reflection gates, and the info required to process them in parallel.
+    Each of the two segments is a THzData object."""
 
-        """Plot both reflection segments on two subplots.  Accepts the same kwargs as THzData.plot_current."""
-        import matplotlib.pyplot as plt
+    def __init__(self, first_segment: THzData, second_segment: THzData):
+        self.first_segment = first_segment
+        self.second_segment = second_segment
 
-        if figure_obj is None:
-            fig, axes = plt.subplots(2, 1, figsize=kwargs.get('figsize', (10, 8)), sharex=True)
-            show_plot = True
-        else:
-            axes = getattr(figure_obj, 'axes', None)
-            if axes is None or len(axes) < 2:
-                fig, axes = plt.subplots(2, 1, figsize=kwargs.get('figsize', (10, 8)), sharex=True)
-                show_plot = True
-            else:
-                show_plot = False
+        self.first_region = None
+        self.second_region = None
 
-        # Plot first reflection
-        self.first_segment.plot_current(figure_obj=type('FigureObject', (), {'ax': axes[0]}), **kwargs)
-        axes[0].set_title(kwargs.get('first_title', 'First Reflection (Window Only)'))
-
-        # Plot second reflection
-        super().plot_current(figure_obj=type('FigureObject', (), {'ax': axes[1]}), **kwargs)
-        axes[1].set_title(kwargs.get('second_title', 'Second Reflection (Sample Interaction)'))
-
-        if show_plot:
-            plt.tight_layout()
-            plt.show()
+    @property
+    def data(self) -> THzData:
+        """Return the second reflection segment as the canonical data."""
+        return self.second_segment.data
