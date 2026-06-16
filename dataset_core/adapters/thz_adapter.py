@@ -2,7 +2,7 @@ import numpy as np
 import thz_core.thz_core as core
 import matplotlib.pyplot as plt
 from dataset_core.dataset import DataSet, DataService
-from dataset_core.data_structures.thz import THzDataReflection
+from dataset_core.data_structures.thz import THzDataReflection, THzData, BaseTHzData
 """Used to bridge the DataSet manager and the thz analysis library.
 
 Unit convention
@@ -121,6 +121,128 @@ def _build_segment_data_dict(dataset: DataSet, segment: str) -> dict:
         if holder is not None:
             result[filename] = _time_amplitude_array(holder)
     return result
+
+
+# ---------------------------------------------------------------------------
+# In-memory reflection construction helpers
+# ---------------------------------------------------------------------------
+
+def _crop_thzdata_to_gate(
+    data_obj: THzData,
+    t_start_ps: float,
+    t_stop_ps: float,
+) -> THzData:
+    """Crop every individual scan in *data_obj* to the time gate [t_start_ps, t_stop_ps].
+
+    ``raw_data[:, 0]`` is in ps (source units), so the comparison is direct.
+    Returns a new ``THzData`` built from the cropped scan list — no file I/O.
+    The averaged trace, processing_dict, and scan matrix are re-derived from
+    the cropped scans so the new object is self-consistent.
+    """
+    cropped_scans: list[BaseTHzData] = []
+    for scan in data_obj.data_list:
+        raw = np.asarray(scan.raw_data, dtype=float)
+        mask = (raw[:, 0] >= t_start_ps) & (raw[:, 0] <= t_stop_ps)
+        if np.count_nonzero(mask) < 2:
+            raise ValueError(
+                f"Gate [{t_start_ps}, {t_stop_ps}] ps selects <2 samples of "
+                f"'{data_obj.filename}'."
+            )
+        cropped_scan = BaseTHzData(data=raw[mask], headers=scan.headers)
+        cropped_scans.append(cropped_scan)
+    return THzData(
+        data=cropped_scans,
+        header=data_obj.headers,
+        filename=data_obj.filename,
+        data_type=data_obj.data_type,
+    )
+
+
+def build_reflection_dataset(
+    dataset: DataSet,
+    gates: dict,
+    bounds_units: str = 'ps',
+) -> DataSet:
+    """Crop all loaded traces in-memory to form first+second reflection gates.
+
+    Replaces each ``THzData`` entry in *dataset* with a ``THzDataReflection``
+    built from two in-memory crops — no file I/O, no reload round-trip.
+    Individual scans are preserved in each segment so per-scan statistics
+    survive to the FFT stage.
+
+    Parameters
+    ----------
+    dataset : DataSet
+        Must be loaded from the flat raw directory (not the segmented layout).
+    gates : dict
+        ``{'first_reflection': (start, stop), 'second_reflection': (start, stop)}``
+        Bounds in *bounds_units*.
+    bounds_units : {'ps', 's'}
+        Units of the supplied bounds. ``raw_data[:, 0]`` is always in ps;
+        's' bounds are converted before cropping.
+
+    Returns
+    -------
+    DataSet
+        Same object, with each entry replaced by a ``THzDataReflection``.
+    """
+    if bounds_units not in ('ps', 's'):
+        raise ValueError("bounds_units must be 'ps' or 's'.")
+    to_ps = (lambda v: float(v)) if bounds_units == 'ps' else (lambda v: float(v) * _S_TO_PS)
+
+    first_bounds = gates.get('first_reflection')
+    second_bounds = gates.get('second_reflection')
+    if first_bounds is None or second_bounds is None:
+        raise ValueError(
+            "gates must contain both 'first_reflection' and 'second_reflection' keys."
+        )
+    first_start_ps, first_stop_ps = to_ps(first_bounds[0]), to_ps(first_bounds[1])
+    second_start_ps, second_stop_ps = to_ps(second_bounds[0]), to_ps(second_bounds[1])
+
+    for filename, data_obj in list(dataset.data.items()):
+        first_seg = _crop_thzdata_to_gate(data_obj, first_start_ps, first_stop_ps)
+        second_seg = _crop_thzdata_to_gate(data_obj, second_start_ps, second_stop_ps)
+        reflection_obj = THzDataReflection.from_thzdata(second_seg, first_seg)
+        dataset.data[filename] = reflection_obj
+
+    return dataset
+
+
+def define_reflection_gates(
+    dataset: DataSet,
+    config: dict,
+) -> dict:
+    """Resolve or interactively select the first/second reflection time gates.
+
+    Reads ``config['gates']`` and fills any ``None`` component by opening a
+    ``SpanSelector`` on a representative trace.  Returns the filled gates dict
+    (also written back into ``config['gates']``).
+
+    The representative trace is the first file's averaged data in ps.
+    """
+    gates = config.get('gates', {})
+    components = ('first_reflection', 'second_reflection')
+
+    first_obj = next(iter(dataset.data.values()))
+    raw = np.asarray(first_obj.raw_data, dtype=float)
+    time_ps = raw[:, 0]
+
+    # raw_data columns: [time_ps, scan1, ..., scanN] if multi-scan, or [time_ps, amp]
+    if raw.shape[1] > 2:
+        mean_y = raw[:, 1:].mean(axis=1)
+    else:
+        mean_y = raw[:, 1]
+
+    for component in components:
+        if gates.get(component) is None:
+            bounds = _span_select_bounds(time_ps, mean_y, title=f"Select {component}")
+            gates[component] = bounds
+            print(f"  {component}: {bounds[0]:.3f} – {bounds[1]:.3f} ps")
+        else:
+            print(f"  {component} (preset): {gates[component][0]:.3f} – {gates[component][1]:.3f} ps")
+
+    config['gates'] = gates
+    return gates
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +502,7 @@ def pre_window_align_peak(
     auto_range_ps: tuple | None = None,
     recalibrate: bool = False,
 ) -> DataSet:
-    """Align all traces of *segment* on their main pulse peak.
+    """Align all traces so that the center of the main pulse peak sits at the same time-scan index (with respect to the edges of the scan). The data is cropped to the common shared extent, so that windowing is performed exactly the same for all files.
 
     Used before windowing so the window function lands at the same T0 distance
     from the edge for every file.
@@ -889,6 +1011,7 @@ def align_to_reference(
     roi: tuple | None = None,
     max_lag_ps: float | None = None,
     subsample_correction: bool | None = None,
+    timing_segment: str = 'second_reflection',
     show_graph: bool = False,
 ) -> DataSet:
     """Shift each sample in time so it shares its reference's T0 (cross-correlation).
@@ -923,11 +1046,20 @@ def align_to_reference(
         ``transfer_function`` and applied there as an exact spectral phase ramp
         (no time-domain interpolation). When False, the residual is dropped — the
         legacy integer-only behaviour. Default None defers to the module toggle.
+    timing_segment : {'second_reflection', 'first_reflection'}
+        Which segment to cross-correlate on to measure the shift.  Use
+        ``'first_reflection'`` for reflection-mode data where the front-face
+        pulse (window reflection, reference-invariant) is the stable T0 keeper.
+        The measured integer shift is then applied rigidly to BOTH the first and
+        second reflection time axes (same physical delay), keeping the inter-pulse
+        delay intact. The subsample residual is stored on the outer
+        ``data_obj.processing_dict`` where ``transfer_function`` reads it.
     show_graph : bool
         If True, plot reference + sample before/after alignment per sample.
     """
     if subsample_correction is None:
         subsample_correction = SUBSAMPLE_TIMING_CORRECTION
+
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
             continue
@@ -936,55 +1068,74 @@ def align_to_reference(
             print(f"Warning: no '{ref_type}' reference for '{filename}', skipping alignment.")
             continue
 
-        ref_t = ref_obj.data[:, 0]
-        ref_y = ref_obj.data[:, 1]
-        samp_t = data_obj.data[:, 0]
-        samp_y = data_obj.data[:, 1]
+        # Resolve which segment drives the cross-correlation measurement.
+        if timing_segment == 'first_reflection':
+            samp_holder = _resolve_segment(data_obj, 'first_reflection')
+            ref_holder = _resolve_segment(ref_obj, 'first_reflection')
+            if samp_holder is None or ref_holder is None:
+                print(
+                    f"Warning: '{filename}' or its reference has no first_reflection "
+                    f"segment; falling back to second_reflection for alignment."
+                )
+                samp_holder = data_obj
+                ref_holder = ref_obj
+        else:
+            samp_holder = data_obj
+            ref_holder = ref_obj
+
+        ref_t = ref_holder.data[:, 0]
+        ref_y = ref_holder.data[:, 1]
+        samp_t = samp_holder.data[:, 0]
+        samp_y = samp_holder.data[:, 1]
 
         align_cfg: dict = {}
         if roi is not None:
             align_cfg['roi'] = (roi[0] / _S_TO_PS, roi[1] / _S_TO_PS)
         if max_lag_ps is not None:
-            dt = float(np.median(np.diff(ref_t)))
-            align_cfg['max_lag_samples'] = int(round((max_lag_ps / _S_TO_PS) / dt))
+            dt_ref = float(np.median(np.diff(ref_t)))
+            align_cfg['max_lag_samples'] = int(round((max_lag_ps / _S_TO_PS) / dt_ref))
 
         _, _, metrics = core.align_time(ref_t, ref_y, samp_t, samp_y, {'align': align_cfg})
         shift = float(metrics['values']['applied_shift_seconds'])
 
-        # Split the measured shift into a whole-sample part and a sub-sample
-        # residual. The whole-sample part is slid on the time axis: it is exactly
-        # representable on the grid and is picked up by pad_to_common_grid as an
-        # integer offset. The residual (|.| <= dt/2) is NOT representable as a grid
-        # slide — if left in the axis, pad_to_common_grid would silently round it
-        # away, leaving a residual linear phase error in H that biases n. We carry
-        # it to transfer_function and apply it there as an exact spectral phase
-        # ramp (Fourier shift theorem), so the time-domain Y is never resampled.
+        # Split into a whole-sample part (slid on the time axis) and a sub-sample
+        # residual (applied later as a spectral phase ramp in transfer_function).
         dt = float(np.median(np.diff(samp_t)))
         integer_samples = int(round(shift / dt))
         integer_shift = integer_samples * dt
         subsample_residual = shift - integer_shift
         applied_residual = subsample_residual if subsample_correction else 0.0
 
-        # Y values are unchanged — only the time axis slides, by a whole number of
-        # samples. No resampling, no interpolation, no zero-padding here.
+        # Always write the subsample residual onto the OUTER data_obj, regardless
+        # of which segment was used for timing — transfer_function reads it there.
         data_obj.processing_dict['pre_align'] = data_obj.data.copy()
         data_obj.processing_dict['align_metrics'] = metrics
         data_obj.processing_dict['subsample_shift_seconds'] = applied_residual
         data_obj.processing_dict['subsample_shift_measured_seconds'] = subsample_residual
         data_obj.processing_dict['subsample_correction_enabled'] = bool(subsample_correction)
-        shifted_data = data_obj.data.copy()
-        shifted_data[:, 0] = samp_t + integer_shift
-        data_obj.data = shifted_data
 
-        # Slide the per-scan working matrix by the same whole-sample shift so the
-        # individual acquisitions share the sample's aligned time axis.
+        # Apply the integer shift rigidly to the second reflection (always).
+        shifted_data = data_obj.data.copy()
+        shifted_data[:, 0] = data_obj.data[:, 0] + integer_shift
+        data_obj.data = shifted_data
         scan_matrix = _ensure_scan_matrix(data_obj)
         scan_matrix[:, 0] = scan_matrix[:, 0] + integer_shift
+
+        # When timing via the first reflection, also shift the first segment so
+        # the inter-pulse delay is preserved exactly.
+        if timing_segment == 'first_reflection' and isinstance(data_obj, THzDataReflection):
+            first_seg = data_obj.first_segment
+            shifted_first = first_seg.data.copy()
+            shifted_first[:, 0] = first_seg.data[:, 0] + integer_shift
+            first_seg.data = shifted_first
+            first_scan_matrix = _ensure_scan_matrix(first_seg)
+            first_scan_matrix[:, 0] = first_scan_matrix[:, 0] + integer_shift
 
         corr = metrics['values'].get('corr_peak', float('nan'))
         state = 'ON' if subsample_correction else 'OFF'
         print(
-            f"Aligned '{filename}' to '{ref_obj.filename}': "
+            f"Aligned '{filename}' to '{ref_obj.filename}' "
+            f"(via {timing_segment}): "
             f"shift {shift * _S_TO_PS:+.4f} ps = "
             f"{integer_samples:+d} samp ({integer_shift * _S_TO_PS:+.4f} ps grid) + "
             f"{subsample_residual * _S_TO_PS:+.4f} ps sub-sample "
@@ -1003,9 +1154,9 @@ def align_to_reference(
                         color='0.5', lw=1, label='reference')
             if pre is not None:
                 ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], '--', lw=1, alpha=0.7,
-                        label='sample (before)')            
+                        label='sample (before)')
                 ax.plot(data_obj.data[:, 0] * _S_TO_PS, data_obj.data[:, 1], lw=1.4,
-                    label='sample (aligned)')
+                        label='sample (aligned)')
             ax.set_xlabel('Time (ps)')
             ax.set_ylabel('Amplitude')
             ax.set_title(f'Align to reference — {filename}')

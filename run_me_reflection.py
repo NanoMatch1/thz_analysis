@@ -5,23 +5,24 @@ at 45 deg external incidence, s-polarised.  One acquisition contains both the
 front (air->SiO2) first reflection and the back (SiO2->sample) second reflection.
 The SiO2-only trace is the reference.
 
-Two phases:
+Single-pass flow (no save/reload round-trip):
+  1. Load raw traces from ROOT_DIR.
+  2. define_reflection_gates: drag SpanSelector (or use preset bounds) to set
+     first and second reflection time windows — stored in pipeline_config['gates'].
+  3. build_reflection_dataset: crop each raw trace in-memory to both gates,
+     building THzDataReflection objects that retain all individual scans.
+  4. group_files: pair sample <-> reference by filename keyword.
+  5. align_to_reference (timing_segment='first_reflection'): cross-correlate on
+     the front pulse (stable T0 keeper), apply integer shift to BOTH segments,
+     store subsample residual on data_obj for transfer_function.
+  6. Full processing pipeline: subtract_baseline, global_truncate,
+     pre_window_align_peak, center_pulse, window_time, zero_pad, fft_spectrum
+     — all called TWICE, once per segment.
+  7. transfer_function (self_reference=True), invert_nk_reflection, derive_eps_sigma.
 
-  1. segment(): load the raw traces and crop the first + second reflections into
-     separate .acc files under <dir>/first_reflection/ and <dir>/second_reflection/
-     (no zero-pad, no taper).  This is the only reflection-specific step.
-
-  2. process(): point a DataSet at the ROOT directory (which contains
-     first_reflection/ and second_reflection/ as subdirs).  DataSet.load_all_data()
-     auto-detects the layout and builds THzDataReflection objects, so every
-     pipeline step can be called once per segment — explicitly and inspectably.
-
-Each pipeline step is called TWICE, once per segment, so both the first and second
-reflections go through identical processing you can inspect independently.  There
-are no hidden side effects; the segment= kwarg makes every operation explicit.
+Set headless=True in pipeline_config to suppress all interactive windows and
+SpanSelectors (requires gates to be preset in the config).
 """
-
-import os
 
 import numpy as np
 
@@ -30,119 +31,145 @@ from dataset_core.adapters import thz_adapter as thz
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 — segment the raw trace
+# Entry point
 # ---------------------------------------------------------------------------
 
-def segment(dataset: DataSet, config: dict) -> str:
-    """Crop the first + second reflections to separate .acc files.
+if __name__ == '__main__':
 
-    Returns the root output directory whose first_reflection/ and
-    second_reflection/ subdirs can be passed straight to DataSet for phase 2.
-    """
-    show_graphs = config.get('show_graphs', False)
-    interactive = config.get('interactive', False)
-    gates = config.get('gates', None)
+    # -------------------------------------------------------------------------
+    # CONFIG
+    # ROOT_DIR is the flat directory containing the raw .acc/.dat files.
+    # -------------------------------------------------------------------------
+    ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17'
 
-    segments = None if interactive else gates
-    thz.segment_reflections(dataset, segments=segments, show_graph=show_graphs)
-    return config['file_dir']
+    pipeline_config = {
+        'headless': False,          # True → no SpanSelectors, no plot windows
+        'show_graphs': True,
+        'theta_external_deg': 45.0,
+        'polarization': 's',
+        'n_sio2': 1.95,
+        # Centering: half-cosine taper at the pad junction
+        'centering': {'peak_mode': 'auto', 'taper_ps': 1},
+        # Time-domain window
+        'window': {'type': 'Hann', 'alpha': 1},
+        # Zero-pad: absolute sample count so both segments share the same FFT grid.
+        'pad': {'n_samples': 4096},
+        # Gate bounds for segmenting the raw trace into first/second reflections.
+        # Set both to None to open interactive SpanSelectors on the first run,
+        # then paste the printed values here for headless repeats.
+        'gates': {
+            'first_reflection':  None,   # e.g. (151.2, 158.5)
+            'second_reflection': None,   # e.g. (159.5, 168.8)
+        },
+        # Set True to also write the gated segments as .acc files under ROOT_DIR/
+        # (first_reflection/ and second_reflection/ subfolders).  Useful for
+        # caching so a future run can reload from the segmented layout directly.
+        'save_segmented': False,
+    }
 
+    headless = pipeline_config.get('headless', False)
+    show = pipeline_config.get('show_graphs', False) and not headless
 
-# ---------------------------------------------------------------------------
-# Phase 2 — process both reflections through the full pipeline
-# ---------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # STEP 1 — load raw traces
+    # -------------------------------------------------------------------------
+    dataset = DataSet(ROOT_DIR)
+    dataset.load_all_data(case_insensitive=True, explicit_dir=True)
 
-def process(dataset: DataSet, pipeline_config: dict) -> DataSet:
-    """Run the full two-segment pipeline on a root-dir DataSet.
+    # -------------------------------------------------------------------------
+    # STEP 2 — define reflection gates (interactive or from config)
+    # -------------------------------------------------------------------------
+    thz.define_reflection_gates(dataset, pipeline_config)
 
-    pipeline_config keys
-    --------------------
-    show_graphs : bool
-    centering : dict
-        Passed to center_pulse; keys: peak_mode, taper_ps.
-    align : dict
-        auto_range_ps: {segment: (t_start_ps, t_stop_ps) or None}.
-        None triggers an interactive SpanSelector.
-    window : dict
-        Passed to window_time; keys: type, alpha (Tukey / Hann / etc).
-    pad : dict
-        Use n_samples (absolute) so both segments share the same FFT grid.
-    theta_external_deg : float
-    polarization : str
-    n_sio2 : float
-    """
-    show = pipeline_config.get('show_graphs', False)
+    # -------------------------------------------------------------------------
+    # STEP 3 — build THzDataReflection objects in-memory (no file I/O)
+    # -------------------------------------------------------------------------
+    thz.build_reflection_dataset(dataset, pipeline_config['gates'])
 
-    # --- pair sample <-> reference ---
+    # -------------------------------------------------------------------------
+    # STEP 3b — optionally cache gated segments to .acc files
+    # Writes first_reflection/ and second_reflection/ under ROOT_DIR so a future
+    # run can reload from the segmented layout without repeating segmentation.
+    # -------------------------------------------------------------------------
+    if pipeline_config.get('save_segmented', False):
+        thz.segment_reflections(
+            dataset,
+            segments=pipeline_config['gates'],
+            output_dir=ROOT_DIR,
+            show_graph=show,
+        )
+
+    # -------------------------------------------------------------------------
+    # STEP 4 — pair sample <-> reference
+    # -------------------------------------------------------------------------
     dataset.group_files(keywords=['type'])
     dataset.grouping.show_matches()
 
-    # --- baseline subtraction (removes DC offset from each segment) ---
+    # -------------------------------------------------------------------------
+    # STEP 5 — align sample to reference via front pulse (cross-correlation)
+    # The integer shift is applied to BOTH segments; subsample residual stored
+    # on data_obj.processing_dict for transfer_function.
+    # -------------------------------------------------------------------------
+    thz.align_to_reference(
+        dataset,
+        timing_segment='first_reflection',
+        show_graph=show,
+    )
+
+    # -------------------------------------------------------------------------
+    # STEP 6 — process both segments through the full pipeline
+    # Each step is called TWICE, once per segment, for full explicitness.
+    # -------------------------------------------------------------------------
+
+    # --- baseline subtraction ---
     thz.subtract_baseline(dataset, segment='second_reflection')
     thz.subtract_baseline(dataset, segment='first_reflection')
 
-    # --- truncate to common time extent, per segment ---
+    # --- truncate to common time extent per segment ---
     thz.global_truncate(dataset, segment='second_reflection')
     thz.global_truncate(dataset, segment='first_reflection')
 
-    # --- define peak-search regions interactively (or headless if preset) ---
-    # Fills pipeline_config['align']['auto_range_ps'][segment] from SpanSelector
-    # when the value is None.  If both are already set, this is a no-op.
-    thz.define_alignment_regions(dataset, pipeline_config)
+    # --- soft peak alignment (intra-segment, across files) ---
+    thz.pre_window_align_peak(dataset, segment='second_reflection', show_graph=show)
+    thz.pre_window_align_peak(dataset, segment='first_reflection',  show_graph=show)
 
-    # --- soft peak alignment (brings all pulses to the same temporal position) ---
-    second_range_ps = pipeline_config.get('align', {}).get('auto_range_ps', {}).get('second_reflection')
-    first_range_ps  = pipeline_config.get('align', {}).get('auto_range_ps', {}).get('first_reflection')
-
-    thz.pre_window_align_peak(dataset, segment='second_reflection',
-                              auto_range_ps=second_range_ps, show_graph=show)
-    thz.pre_window_align_peak(dataset, segment='first_reflection',
-                              auto_range_ps=first_range_ps,  show_graph=show)
-
-    # --- centre each pulse at the temporal midpoint (zero-pads pre-pulse region) ---
+    # --- centre each pulse at the temporal midpoint ---
     centering_config = {'centering': pipeline_config.get('centering', {'peak_mode': 'auto', 'taper_ps': 0.5})}
-
     thz.center_pulse(dataset, segment='second_reflection', config=centering_config, show_graph=show)
     thz.center_pulse(dataset, segment='first_reflection',  config=centering_config, show_graph=show)
 
-    # --- apply time-domain window (Tukey/Hann) symmetrically about the peak ---
+    # --- apply time-domain window ---
     window_config = {'window': pipeline_config.get('window', {'type': 'Hann', 'alpha': 0.1})}
-
     thz.window_time(dataset, segment='second_reflection', config=window_config, show_graph=show)
     thz.window_time(dataset, segment='first_reflection',  config=window_config, show_graph=show)
 
-    # --- zero-pad to a common length.  Use n_samples (absolute) so both segments
-    #     produce the same FFT frequency grid, making W = Y2/Y1 well-defined. ---
-    pad_config = {'pad': pipeline_config.get('pad', {'n_samples': 8192})}
-
+    # --- zero-pad to a common absolute length so both segments share the same FFT grid ---
+    pad_config = {'pad': pipeline_config.get('pad', {'n_samples': 4096})}
     thz.zero_pad(dataset, segment='second_reflection', config=pad_config, show_graph=show)
     thz.zero_pad(dataset, segment='first_reflection',  config=pad_config, show_graph=show)
 
-    # --- FFT.  Second reflection first so its frequency grid can be used to
-    #     force the first reflection onto the same n_fft, guaranteeing
-    #     W = Y2/Y1 is well-defined sample-by-sample.  The first reflection
-    #     also gets an absolute-time phase reference exp(-2πif·t₀) applied. ---
+    # --- FFT ---
     thz.fft_spectrum(dataset, segment='second_reflection')
 
-    # Derive n_fft from any already-computed second-reflection spectrum so the
-    # first-reflection FFT always matches regardless of pad rounding.
+    # Force the first reflection onto the same n_fft as the second so W = Y2/Y1
+    # is defined sample-by-sample regardless of any rounding in pad.
     _any_obj = next(iter(dataset.data.values()))
     _second_freq = _any_obj.processing_dict.get('fft_freq')
     n_fft_shared = (2 * (len(_second_freq) - 1)) if _second_freq is not None else None
-
     thz.fft_spectrum(dataset, segment='first_reflection', n_fft=n_fft_shared)
 
     if show:
         thz.plot_fft(dataset, normalise=False, scale='')
 
-    # --- H(f) = Y2_sample / Y2_reference, self-referenced to front pulse ---
+    # -------------------------------------------------------------------------
+    # STEP 7 — transfer function, inversion, optical parameters
+    # -------------------------------------------------------------------------
     thz.transfer_function(
         dataset,
         config={'transfer': {'self_reference': True}},
         ref_type='reference',
     )
 
-    # --- invert to n, k ---
     thz.invert_nk_reflection(
         dataset,
         geometry='window',
@@ -152,15 +179,10 @@ def process(dataset: DataSet, pipeline_config: dict) -> DataSet:
     )
     thz.derive_eps_sigma(dataset)
 
-    return dataset
-
-
-# ---------------------------------------------------------------------------
-# Report
-# ---------------------------------------------------------------------------
-
-def report(dataset: DataSet, band_thz: tuple = (0.5, 3.0)) -> None:
-    """Print a quick numeric summary of n, k over a band for each sample."""
+    # -------------------------------------------------------------------------
+    # REPORT
+    # -------------------------------------------------------------------------
+    band_thz = (0.5, 3.0)
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
             continue
@@ -189,59 +211,7 @@ def report(dataset: DataSet, band_thz: tuple = (0.5, 3.0)) -> None:
         else:
             print("  no finite n in band.")
 
+    if show:
+        thz.result_viewer(dataset)
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == '__main__':
-
-    # -------------------------------------------------------------------------
-    # CONFIG
-    # Root dir must contain first_reflection/ and second_reflection/ as subdirs.
-    # DataSet.load_all_data() auto-detects them and builds THzDataReflection objects.
-    # -------------------------------------------------------------------------
-    # ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\2026-06-03_CNT-paper\testing'
-    ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17'
-
-    pipeline_config = {
-        'show_graphs': True,
-        'theta_external_deg': 45.0,
-        'polarization': 's',
-        'n_sio2': 1.95,
-        # Centering: half-cosine taper at the pad junction
-        'centering': {'peak_mode': 'auto', 'taper_ps': 1},
-        # Time-domain window
-        'window': {'type': 'Hann', 'alpha': 1},
-        # Zero-pad: use n_samples (absolute) so both segments share the same FFT grid.
-        # Run the pipeline once to see how many samples your longest gate has, then
-        # set this to the next power of 2 above that.
-        'pad': {'n_samples': 4096},
-        # Peak-search regions for pre_window_align_peak.
-        # Set to None to open the interactive SpanSelector on the first run,
-        # then paste the printed values here for headless repeats.
-        'align': {
-            'auto_range_ps': {
-                'second_reflection': None,  # e.g. (159.5, 168.8)
-                'first_reflection':  None,  # e.g. (151.2, 158.5)
-            },
-        },
-    }
-
-    # -------------------------------------------------------------------------
-    # PHASE 1 — segment (only needed once; skip if segmented/ already exists)
-    # -------------------------------------------------------------------------
-    # raw_dataset = DataSet(ROOT_DIR)
-    # raw_dataset.load_all_data(case_insensitive=True)
-    # segment(raw_dataset, {'file_dir': ROOT_DIR, 'interactive': True, 'show_graphs': True})
-
-    # -------------------------------------------------------------------------
-    # PHASE 2 — process
-    # -------------------------------------------------------------------------
-    dataset = DataSet(ROOT_DIR)
-    dataset.load_all_data(case_insensitive=True)
-
-    ds = process(dataset, pipeline_config)
-    report(ds)
-    thz.result_viewer(ds)
     dataset.save_database()
