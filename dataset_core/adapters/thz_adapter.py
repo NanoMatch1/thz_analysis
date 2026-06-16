@@ -422,6 +422,8 @@ def _windowed_pulse_on_common_axis(
     window_function = np.zeros_like(common_time_seconds)
     pre_width = max(peak_time - window_start, 1e-30)
     post_width = max(window_end - peak_time, 1e-30)
+
+    # breakpoint()
     rising = (common_time_seconds >= window_start) & (common_time_seconds <= peak_time)
     falling = (common_time_seconds > peak_time) & (common_time_seconds <= window_end)
     rise_fraction = (common_time_seconds[rising] - window_start) / pre_width   # 0 -> 1 at peak
@@ -553,10 +555,10 @@ def isolate_and_window(
         first_region_isolated = isolate_to_region(first_full_amplitude, first_plan)
         second_region_isolated = isolate_to_region(second_full_amplitude, second_plan)
 
-        plt.plot(common_time_seconds * _S_TO_PS, first_region_isolated, label='first isolated')
-        plt.plot(common_time_seconds * _S_TO_PS, second_region_isolated, label='second isolated')
-        plt.legend()
-        plt.show()
+        # plt.plot(common_time_seconds * _S_TO_PS, first_region_isolated, label='first isolated')
+        # plt.plot(common_time_seconds * _S_TO_PS, second_region_isolated, label='second isolated')
+        # plt.legend()
+        # plt.show()
 
         first_windowed, first_window_function = _windowed_pulse_on_common_axis(
             common_time_seconds, first_region_isolated, first_plan, window_config)

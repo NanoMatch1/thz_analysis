@@ -57,7 +57,7 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     first_region = config['regions'].get('first_reflection')
     correlation_roi = first_region if (first_region and None not in first_region) else None
     thz.align_to_reference(
-        dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=show,
+        dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=False,
     )
 
     # --- baseline off the genuine pre-pulse, on the full trace (both holders) ---
@@ -78,7 +78,7 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
         dataset,
         config={'window': config['window']},
         center_mode=config.get('center_mode', 'crop'),
-        show_graph=show,
+        show_graph=True,
     )
     # breakpoint()
     # thz.isolate_regions(dataset, config)
@@ -207,11 +207,13 @@ def report(dataset: DataSet, band_thz: tuple = (0.5, 3.0)) -> None:
 
 if __name__ == '__main__':
 
-    ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17'
+    ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-17'
+    ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-16\A'
 
     pipeline_config = {
         # ---- path selection ----
-        'processing_path': 'shared_axis',   # 'shared_axis' (new) or 'segmented' (old)
+        # 'processing_path': 'shared_axis',   # 'shared_axis' (new) or 'segmented' (old)
+        'processing_path': 'segmented',   # 'shared_axis' (new) or 'segmented' (old)
         'root_dir': ROOT_DIR,
         'headless': False,                  # True -> no SpanSelectors / plot windows
         'show_graphs': False,
@@ -222,8 +224,8 @@ if __name__ == '__main__':
         'n_sio2': 1.95,
 
         # ---- shared-axis path ----
-        'center_mode': 'pad',               # 'pad' keeps the pulse tail; 'crop' shrinks
-        'n_fft': 4096,                      # FFT length (zero-pad for display resolution)
+        'center_mode': 'crop',               # 'pad' keeps the pulse tail; 'crop' shrinks
+        'n_fft': 500,                      # FFT length (zero-pad for display resolution)
         'regions': {                        # first/second reflection regions (ps)
             # The second region's trailing edge excludes the GaP echo (no crop needed).
             'first_reflection':  (152.0, 158.5),
@@ -257,7 +259,8 @@ if __name__ == '__main__':
 
     report(result)
 
-    if show:
-        thz.result_viewer(result)
+    # if show:
+
+    thz.result_viewer(result)
 
     dataset.save_database()
