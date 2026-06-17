@@ -57,7 +57,8 @@ matchbook/thz/thz_core/        — nested thz-core repo clone (gitignored here,
     thz_core/
     ├── preprocess.py           — baseline, alignment, windowing, padding
     ├── fft.py                  — rfft with explicit sign convention
-    ├── transfer.py             — H = Y_samp/Y_ref, trusted_band_mask
+    ├── transfer.py             — H = Y_samp/Y_ref, trusted_band_mask,
+    │                             remove_phase_offset (phaseex), phase_ramp
     ├── invert.py               — invert_nk (transmission), invert_nk_reflection
     ├── unwrap.py               — robust_unwrap (quality-guided, SNR-weighted)
     ├── derive.py               — eps, sigma from n, k
@@ -125,6 +126,43 @@ thz.invert_nk_reflection(dataset,               # see ANALYSIS_NOTES §1 + §6b
 thz.derive_eps_sigma(dataset)                   # see ANALYSIS_NOTES §3 for eps_background
 thz.result_viewer(dataset)
 ```
+
+### Transmission flow (free-standing slab) — `ANALYSIS_NOTES §18`
+
+No segmentation. A single pulse per trace; the sample pulse is delayed relative to
+the air/open-beam reference by the material group delay `(n−1)d/c`.
+
+```python
+dataset = DataSet(fileDir)
+dataset.load_all_data(case_insensitive=True, explicit_dir=True)
+dataset.group_files(keywords=['type'])          # pairs sample → reference
+thz.subtract_baseline(dataset)
+thz.centering_manual(dataset)                   # window hygiene: peaks to a common
+                                                # array index, equal start→peak→end.
+                                                # Each file now starts at a different
+                                                # absolute t[0] — that difference IS
+                                                # the group delay (§18).
+thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}})
+thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}})
+                                                # zero_pad runs align_to_common_time_axis
+                                                # first → lays traces on ONE shared axis,
+                                                # converting the t[0] differences into the
+                                                # exp(-iωΔt) phase ramp the FFT needs.
+thz.fft_spectrum(dataset)
+thz.transfer_function(dataset,                  # transmission: self_reference=False
+    config={"transfer": {"apply_snr_mask": True, "self_reference": False},
+            "mask": {"snr_thresh_db": 20, "tail_fraction": 0.25, "min_contiguous_bins": 3}},
+    ref_type='reference')
+thz.remove_phase_offset(dataset,                # phaseex: subtract H's phase intercept
+    config={"phase_offset": {"band_thz": (0.3, 2.0)}})   # fixes the low-f n droop (§18)
+thz.invert_nk(dataset, thickness_m=2.08e-3)
+```
+
+Group-delay preservation is **structural**, not an explicit phase factor: `centering_manual`
+leaves each file with a different absolute `t[0]`, and `align_to_common_time_axis`
+(inside `zero_pad`) re-lays them on a shared axis so the offset becomes the FFT phase
+ramp — the equivalent of legacy `phioffset` (`ANALYSIS_NOTES §18`). `remove_phase_offset`
+then strips the residual constant phase offset that would otherwise droop `n` near DC.
 
 ---
 
@@ -206,7 +244,8 @@ works. With no weights it is byte-for-byte `np.unwrap`.
 | Front-pulse self-referencing | repeat spread n 11%→4%, σ₁ 18%→5% ✓ | `test_window_selfref_workflow.py` + CNT-13/D (`ANALYSIS_NOTES §11`) |
 | n_SiO₂ from single bare-window trace | 1.962–1.967 flat, 0.5–2.7 THz ✓ | `characterise_window`, thz-core `test_window.py` |
 
-**Test counts:** dataset_core 27 pass, thz-core 175 pass.
+**Test counts:** dataset_core 35 pass (reflection workflow/self-ref/time-shift/segment/
+container suites), thz-core 180 pass (incl. `test_remove_phase_offset.py`).
 
 ---
 
@@ -245,6 +284,11 @@ works. With no weights it is byte-for-byte `np.unwrap`.
   `thz_core.invert_window_index` (`ANALYSIS_NOTES §11`).
 - ~~Front-face self-referencing~~ — `transfer_function` `self_reference` config
   option (`ANALYSIS_NOTES §11`).
+- ~~Low-frequency `n` droop / residual constant phase offset on H~~ —
+  `thz_core.remove_phase_offset` + adapter `thz.remove_phase_offset` (the legacy
+  `phaseex` intercept removal, done deterministically); group delay preserved
+  structurally by `align_to_common_time_axis` (split out of `zero_pad`).
+  See `ANALYSIS_NOTES §18`.
 
 ### Deferred
 - Geometry registry (replace `'gold'`/`'window'` string dispatch).

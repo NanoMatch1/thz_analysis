@@ -811,3 +811,64 @@ crosses the peak). Verified on CNT-17: second reflections now *append* ~31–35 
 and centre; first reflections still prepend. Tests 17/17 + synthetic prepend/append/
 already-centred cases. (This only affects the **segmented** path; the shared-axis path
 does not use `center_pulse`.)
+
+
+## §18  Transmission phase handling — group-delay preservation + intercept removal  ★ (2026-06-17)
+
+Working a **free-standing transmission** measurement (fused-silica slab, d = 2.08 mm)
+through the general pipeline. Two symptoms: (1) `n` came out near the expected ~1.9
+but **drooped toward lower values approaching DC**, where theory says it should be
+flat; (2) the existing interactive `phase_correction` did not fix it.
+
+### How the group delay survives `centering_manual` (it is NOT lost)
+`centering_manual` (formerly `pre_window_align_peak`) is **window hygiene only**: it
+aligns every trace's pulse peak to a common **array index** and crops to equal
+start→peak→end sample counts, so the window lands identically on every file. It does
+**not** rewrite the time-axis values — but because it crops a *different* number of
+leading samples per file, each file ends up **starting at a different absolute
+`t[0]`**. After centering, the sample↔reference group delay lives entirely in that
+`t[0]` difference.
+
+A plain `np.fft.rfft` references phase to **array index 0** and **ignores the absolute
+time column**, so FFT-ing at this point would drop the group delay and collapse `n`→1.
+What saves it is `zero_pad` → `pad_to_common_grid`: it lays every trace back onto **one
+shared absolute-time axis** (union span) by inserting each at offset
+`(t[0] − t_lo)/dt`, turning the start-time differences into **index offsets**. The FFT
+then sees the true `exp(−iωΔt)` ramp, and `n ≈ 1.9` comes out correct. This is the
+**structural equivalent of the legacy `phioffset = 2πf·(t0_sam − t0_ref)`** (Ballabio
+`main_TDS.py`), which adds the same term explicitly from the absolute time column.
+
+**Refactor (2026-06-17):** split the adapter `zero_pad` into two named steps so this
+physics-critical step is explicit and separately callable:
+- `align_to_common_time_axis` — Part 1, wraps `pad_to_common_grid` (the
+  group-delay-preserving shared-axis lay-down). Must run before `fft_spectrum`.
+- `zero_pad` — Part 2, the optional trailing-zero resolution padding; it now calls
+  Part 1 first, so all existing call sites stay backward-compatible.
+
+### The low-frequency `n` droop = a constant phase offset on H
+With `φ_H(f) = −2πf·Δt + φ₀`, the inversion `n = 1 − c·φ_H/(2πf·d)` picks up a term
+`−c·φ₀/(2πf·d)` that **diverges as 1/f** toward DC. A non-zero intercept `φ₀` (from the
+sub-sample timing residual, a wrap-branch error, or a slightly-negative baselined mean
+biasing the DC bin) therefore droops/raises `n` only near DC while leaving it ~flat
+elsewhere — exactly the observed symptom. Physically `φ_H` must pass through the origin
+(a passive sample imposes no phase shift at zero frequency).
+
+### Fix: `remove_phase_offset` (the legacy `phaseex`, done cleanly)
+Legacy `phase_interpolation.phaseex` fits the sample−reference phase over 0.3–2 THz and
+subtracts **only `lsq.intercept`** (keeps the slope = group delay). Re-implemented in
+`thz_core.transfer.remove_phase_offset(f, H, fit_band_hz=(0.3e12, 2.0e12), mask=None)`:
+unwrap H's phase, `np.polyfit` a line over the trusted band (∩ optional SNR mask),
+subtract the intercept, rebuild `|H|·exp(i(φ−intercept))`. Magnitude untouched; NaN bins
+passed through; no-op (`applied=False`) if <2 fit bins. thz-core tests 180 pass (+5).
+
+Adapter `thz.remove_phase_offset` operates on `processing_dict['transfer_H']` — the
+array `invert_nk` actually reads — run **after** `transfer_function`. Config:
+`config['phase_offset']['band_thz']` (default (0.3, 2.0)) and `['use_snr_mask']`.
+
+### Why the old `phase_correction` "did nothing"
+`phase_correction(source='fft')` edits each trace's stored `fft_spectrum` **after**
+`transfer_function` has already built `transfer_H`; `invert_nk` reads `transfer_H`, so
+the edit never reaches the inversion. `source='transfer'` does hit `transfer_H`, but the
+function is interactive (drag a span) and per-file, so the fit band is inconsistent. The
+interactive `phase_correction` stays as a manual exploration tool; `remove_phase_offset`
+is the deterministic, pipeline-friendly replacement that matches `phaseex`.

@@ -1837,13 +1837,85 @@ def plot_current(dataset: DataSet, *, error_style: str = 'shaded') -> None:
     plt.show()
 
 
+def align_to_common_time_axis(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    show_graph: bool = False,
+) -> DataSet:
+    """Place every trace of *segment* onto ONE shared absolute-time axis.
+
+    Part 1 of the former combined ``zero_pad`` (the other part is the optional
+    resolution padding, still in ``zero_pad``). This step alone is
+    **physics-critical** and must run before ``fft_spectrum``.
+
+    Computes the union of all per-file time ranges, builds one uniformly-sampled
+    axis spanning it, and inserts each trace at its true absolute-time offset
+    ``(t[0] − t_lo_global)/dt``, zero-filling the gaps (wraps
+    ``thz_core.pad_to_common_grid``).
+
+    Why it matters: ``centering_manual`` crops a different number of leading
+    samples from each file, so afterwards every file **starts at a different
+    absolute ``t[0]``** — and that ``t[0]`` difference *is* the sample↔reference
+    group delay. ``np.fft.rfft`` references phase to array index 0 and ignores
+    the absolute time column, so if you FFT'd now the group delay would be lost
+    and ``n`` would collapse toward 1. Re-laying the traces on one shared axis
+    converts those start-time differences into **index offsets**, which the FFT
+    then sees as the ``exp(−iωΔt)`` ramp that ``invert_nk`` reads as ``n``. This
+    is the structural equivalent of the legacy ``phioffset``
+    (``2πf·(t0_sam − t0_ref)``). See ANALYSIS_NOTES §14 and §18.
+
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which data segment to align.  Call once per segment.
+    """
+    data_dict = _build_segment_data_dict(dataset, segment)
+    if not data_dict:
+        return dataset
+
+    t_common, padded_dict, metrics = core.pad_to_common_grid(data_dict)
+
+    if show_graph:
+        fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+        fig.suptitle(f'Common time axis — {segment}')
+        for filename, data_obj in dataset.data.items():
+            holder = _resolve_segment(data_obj, segment)
+            if holder is None or filename not in padded_dict:
+                continue
+            pre = holder.data
+            ax.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], '--', lw=1, alpha=0.5,
+                    label=f'{filename} (pre-align)')
+            ax.plot(t_common * _S_TO_PS, padded_dict[filename], lw=1,
+                    label=f'{filename} (shared axis)')
+        ax.set_xlabel('Time (ps)')
+        ax.legend(fontsize=8)
+        plt.show()
+
+    for filename, data_obj in dataset.data.items():
+        holder = _resolve_segment(data_obj, segment)
+        if holder is None or filename not in padded_dict:
+            continue
+        holder.data = np.column_stack((t_common, padded_dict[filename]))
+        holder.processing_dict['common_grid_metrics'] = metrics
+
+    return dataset
+
+
 def zero_pad(
     dataset: DataSet,
     segment: str = 'second_reflection',
     config: dict | None = None,
     show_graph: bool = False,
 ) -> DataSet:
-    """Zero-pad traces of *segment* onto a common time grid.
+    """Zero-pad traces of *segment* for finer FFT frequency resolution.
+
+    Part 2 of the processing: appends trailing zeros to lengthen the FFT without
+    adding spectral information (``Δf = 1/(N·dt)``). It first runs
+    ``align_to_common_time_axis`` (Part 1) so the traces share one absolute-time
+    axis — the group-delay-preserving step — then extends that shared grid.
+    Splitting the two makes the physics-critical alignment a named, separately
+    callable step while keeping this one backward-compatible (callers that only
+    want resolution padding still get the alignment for free).
 
     Accepts either ``config['pad']['extend_factor']`` (relative, default 1.0) or
     ``config['pad']['n_samples']`` (absolute target length).  ``n_samples`` takes
@@ -1858,6 +1930,10 @@ def zero_pad(
     """
     config = config or {}
     pad_cfg = config.get('pad', {})
+
+    # Part 1: shared absolute-time axis (group-delay-preserving). Idempotent if
+    # the traces already share a grid.
+    align_to_common_time_axis(dataset, segment=segment)
 
     data_dict = _build_segment_data_dict(dataset, segment)
     if not data_dict:
@@ -2194,6 +2270,92 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
             np.abs(H),
             np.angle(H),
         ))
+
+    return dataset
+
+
+def remove_phase_offset(
+    dataset: DataSet,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Force each sample's transfer-function phase through the origin (``phaseex``).
+
+    Deterministic, non-interactive counterpart to ``phase_correction``. Runs
+    AFTER ``transfer_function`` and operates on ``processing_dict['transfer_H']``
+    — the array ``invert_nk`` actually reads — so the correction reaches the
+    inversion (unlike ``phase_correction(source='fft')``, which edits the raw
+    spectra after H is already built and therefore has no effect on n).
+
+    A constant phase offset on H biases n by a term that diverges as 1/f toward
+    DC (the low-frequency droop in n for an otherwise-flat sample). This fits a
+    line to H's unwrapped phase over a trusted band and subtracts ONLY the
+    intercept, keeping the slope (the group-delay / refractive-index signal).
+    See ANALYSIS_NOTES §18 and ``thz_core.remove_phase_offset``.
+
+    Parameters
+    ----------
+    config : dict, optional
+        ``config['phase_offset']`` keys:
+
+        ``band_thz`` : tuple[float, float], default ``(0.3, 2.0)``
+            Trusted fit band in THz (converted to Hz for the core call).
+        ``use_snr_mask`` : bool, default True
+            Intersect the fit band with ``processing_dict['transfer_mask']`` when
+            present, so only trusted bins drive the intercept fit.
+    show_graph : bool
+        Overlay the unwrapped phase before/after per sample.
+    """
+    config = config or {}
+    phase_cfg = config.get('phase_offset', {})
+    band_thz = phase_cfg.get('band_thz', (0.3, 2.0))
+    use_snr_mask = phase_cfg.get('use_snr_mask', True)
+    band_hz = (band_thz[0] / _HZ_TO_THZ, band_thz[1] / _HZ_TO_THZ)
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        processing = data_obj.processing_dict
+        H = processing.get('transfer_H')
+        freq = processing.get('fft_freq')
+        if H is None or freq is None:
+            print(f"[remove_phase_offset] '{filename}': no transfer function, skipping.")
+            continue
+
+        mask = processing.get('transfer_mask') if use_snr_mask else None
+        H_corrected, metrics = core.remove_phase_offset(freq, H, fit_band_hz=band_hz, mask=mask)
+
+        if show_graph:
+            fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
+            ax.plot(freq * _HZ_TO_THZ, np.unwrap(np.angle(H)), color='steelblue',
+                    alpha=0.6, label='before')
+            ax.plot(freq * _HZ_TO_THZ, np.unwrap(np.angle(H_corrected)), color='darkorange',
+                    label='after (intercept removed)')
+            ax.axhline(0.0, color='gray', lw=0.5, linestyle='dashed')
+            ax.axvspan(band_thz[0], band_thz[1], alpha=0.1, color='green', label='fit band')
+            ax.set_xlabel('Frequency (THz)')
+            ax.set_ylabel('Unwrapped phase of H (rad)')
+            ax.set_title(f'Phase-offset removal — {filename}')
+            ax.legend(fontsize=8)
+            plt.show()
+
+        processing['transfer_H'] = H_corrected
+        processing['phase_offset_metrics'] = metrics
+        data_obj.data = np.column_stack((
+            freq, np.abs(H_corrected), np.angle(H_corrected),
+        ))
+        if metrics['values']['applied']:
+            print(
+                f"[remove_phase_offset] '{filename}': removed intercept "
+                f"{metrics['values']['intercept_rad']:+.4f} rad "
+                f"({metrics['values']['n_fit_bins']} fit bins, "
+                f"{band_thz[0]}-{band_thz[1]} THz)."
+            )
+        else:
+            print(
+                f"[remove_phase_offset] '{filename}': fit band held <2 trusted bins; "
+                f"H left unchanged."
+            )
 
     return dataset
 

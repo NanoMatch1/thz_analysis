@@ -63,6 +63,8 @@ if __name__ == "__main__":
     else:
         dataset.load_state()
 
+    thz.phase_correction(dataset, source='fft')
+    
     thz.transfer_function(
         dataset,
         config={
@@ -72,7 +74,6 @@ if __name__ == "__main__":
         ref_type='reference',
     )
     thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
-    thz.phase_correction(dataset, source='fft')
     thz.invert_nk(dataset, thickness_m=2.08e-3)
     thz.derive_eps_sigma(dataset)
 

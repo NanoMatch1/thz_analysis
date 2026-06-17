@@ -268,7 +268,8 @@ if __name__ == "__main__":
         # thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
         # thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
         thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
-        thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}}, show_graph=show_graph)
+        # thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}}, show_graph=show_graph)
+        thz.align_to_common_time_axis(dataset, show_graph=show_graph)
         thz.fft_spectrum(dataset)
         # The SNR mask is built inside transfer_function (it needs H), so the mask
         # thresholds must travel with it — a standalone trusted_band_mask call before
@@ -289,11 +290,12 @@ if __name__ == "__main__":
         },
         ref_type='reference',
     )
+    thz.remove_phase_offset(dataset, config={"phase_offset": {"band_thz": (0.3, 2.0)}}, show_graph=show_graph)
     # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
 
-    thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
+    # thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
 # 
-    thz.phase_correction(dataset, source='fft')
+    # thz.phase_correction(dataset, source='transfer')
 
     thz.invert_nk(dataset, thickness_m=2.08e-3)
     thz.derive_eps_sigma(dataset)
