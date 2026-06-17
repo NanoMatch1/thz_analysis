@@ -154,7 +154,7 @@ def process_segmented(dataset: DataSet, config: dict, show: bool) -> DataSet:
         thz.plot_fft(dataset, normalise=False, scale='')
 
     thz.transfer_function(
-        dataset, config={'transfer': {'self_reference': True}}, ref_type='reference',
+        dataset, config={'transfer': {'self_reference': False}}, ref_type='reference',
     )
     thz.invert_nk_reflection(
         dataset, geometry='window',
@@ -208,7 +208,7 @@ def report(dataset: DataSet, band_thz: tuple = (0.5, 3.0)) -> None:
 if __name__ == '__main__':
 
     ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-17'
-    ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-16\A'
+    ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A'
 
     pipeline_config = {
         # ---- path selection ----
@@ -216,7 +216,7 @@ if __name__ == '__main__':
         'processing_path': 'segmented',   # 'shared_axis' (new) or 'segmented' (old)
         'root_dir': ROOT_DIR,
         'headless': False,                  # True -> no SpanSelectors / plot windows
-        'show_graphs': False,
+        'show_graphs': True,
 
         # ---- geometry / inversion ----
         'theta_external_deg': 45.0,
@@ -236,7 +236,7 @@ if __name__ == '__main__':
         'window': {'type': 'hann', 'alpha': 1.0},
 
         # ---- segmented path only ----
-        'gates': {'first_reflection': None, 'second_reflection': None},
+        'gates': {'first_reflection': (152.0, 158.5), 'second_reflection': (161.0, 168.0)},
         'centering': {'peak_mode': 'auto', 'taper_ps': 1.0},
         'pad': {'n_samples': 4096},
         'save_segmented': False,

@@ -1079,8 +1079,10 @@ def _center_pulse_trace(
     Returns (t_new, y_new, info) where info carries metadata needed by
     callers for logging and by the graph helper for annotation.
 
-    If the pulse is already centred (n_prepend == 0), t_new and y_new are
-    copies of the inputs and info['already_centred'] is True.
+    Centres by padding the shorter side: prepend zeros if the peak is in the first
+    half, append zeros if it is past the midpoint. If the peak is already at the
+    midpoint, t_new and y_new are copies of the inputs and info['already_centred']
+    is True.
     """
     dt = float(np.median(np.diff(t)))
     t_ps = t * _S_TO_PS
@@ -1095,77 +1097,91 @@ def _center_pulse_trace(
 
     n_before = peak_idx
     n_after = len(y) - 1 - peak_idx
+    # Centre the peak at the array midpoint by padding the SHORTER side with zeros.
+    # Peak in the first half (n_after > n_before) -> pad the FRONT; peak past the
+    # midpoint (n_before > n_after) -> pad the BACK. Exactly one is non-zero (or both
+    # zero when the peak is already at the midpoint), so we only ever pad one side.
     n_prepend = max(0, n_after - n_before)
+    n_append = max(0, n_before - n_after)
 
     info = {
-        'already_centred': n_prepend == 0,
+        'already_centred': (n_prepend == 0 and n_append == 0),
         'n_prepend': n_prepend,
+        'n_append': n_append,
         'peak_idx_original': peak_idx,
         'peak_idx_new': n_prepend + peak_idx,
         'taper_samples': 0,
         'dt_s': dt,
     }
 
-    if n_prepend == 0:
+    if n_prepend == 0 and n_append == 0:
         return t.copy(), y.copy(), info
 
     taper_samples = int(round(taper_ps * 1e-12 / dt))
-    taper_samples = min(taper_samples, peak_idx)
-    info['taper_samples'] = taper_samples
 
     t_prepend = t[0] - np.arange(n_prepend, 0, -1) * dt
-    t_new = np.concatenate([t_prepend, t])
-    y_new = np.concatenate([np.zeros(n_prepend), y.copy()])
+    t_append = t[-1] + np.arange(1, n_append + 1) * dt
+    t_new = np.concatenate([t_prepend, t, t_append])
+    y_new = np.concatenate([np.zeros(n_prepend), y.copy(), np.zeros(n_append)])
 
-    if taper_samples > 0:
-        ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, taper_samples, endpoint=False)))
-        y_new[n_prepend : n_prepend + taper_samples] *= ramp
+    # Half-cosine taper at the single padded junction so the pad<->signal step is
+    # smooth: a RISING ramp over the leading pre-pulse samples when padding the front,
+    # a FALLING ramp over the trailing post-pulse samples when padding the back. The
+    # ramp is clamped to the pre/post-peak sample count so it never crosses the peak.
+    if n_prepend > 0:
+        rise_count = min(taper_samples, n_before)
+        if rise_count > 0:
+            rising_ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, rise_count, endpoint=False)))
+            y_new[n_prepend : n_prepend + rise_count] *= rising_ramp
+        info['taper_samples'] = rise_count
+    elif n_append > 0:
+        fall_count = min(taper_samples, n_after)
+        if fall_count > 0:
+            signal_end_index = n_prepend + len(y)
+            falling_ramp = 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fall_count, endpoint=False)))
+            y_new[signal_end_index - fall_count : signal_end_index] *= falling_ramp
+        info['taper_samples'] = fall_count
 
     return t_new, y_new, info
 
 
 def _plot_centering_result(filename: str, pre_arr: np.ndarray, new_arr: np.ndarray, info: dict) -> None:
-    """Two-panel centering diagnostic: full trace overlay + junction zoom."""
+    """Two-panel centering diagnostic: full trace overlay + zoom on the padded junction."""
     t_orig_ps = pre_arr[:, 0] * _S_TO_PS
     y_orig = pre_arr[:, 1]
     t_new_ps = new_arr[:, 0] * _S_TO_PS
     y_new = new_arr[:, 1]
 
     n_prepend = info['n_prepend']
-    peak_idx_new = info['peak_idx_new']
-    taper_samples = info['taper_samples']
+    n_append = info['n_append']
     dt_ps = info['dt_s'] * _S_TO_PS
+    peak_ps = t_new_ps[info['peak_idx_new']]
+    signal_end_index = len(y_new) - n_append  # first appended-zero sample
 
-    pad_end_ps = t_new_ps[n_prepend - 1]
-    taper_end_ps = t_new_ps[n_prepend + taper_samples - 1] if taper_samples > 0 else pad_end_ps
-    peak_ps = t_new_ps[peak_idx_new]
+    # Zoom the second panel onto whichever junction was actually padded.
+    junction_xlim = (t_new_ps[0], peak_ps + 1.0) if n_prepend > 0 else (peak_ps - 1.0, t_new_ps[-1])
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), layout='constrained')
     fig.suptitle(f"Pulse centering — '{filename}'")
 
     for ax, (panel_title, xlim) in zip(axes, [
         ('Full trace', (t_new_ps[0], t_new_ps[-1])),
-        ('Junction zoom', (t_new_ps[0], peak_ps + 1.0)),
+        ('Junction zoom', junction_xlim),
     ]):
         ax.plot(t_orig_ps, y_orig, color='gray', lw=1, linestyle='--', alpha=0.7, label='Original')
         ax.plot(t_new_ps, y_new, color='tab:blue', lw=1.2, label='Centered')
-        ax.axvspan(t_new_ps[0], pad_end_ps, alpha=0.15, color='tab:blue',
-                   label=f'Prepended pad ({n_prepend} pts, {n_prepend * dt_ps:.2f} ps)')
-        if taper_samples > 0:
-            ax.axvspan(pad_end_ps, taper_end_ps, alpha=0.30, color='tab:orange',
-                       label=f'Taper ({taper_samples * dt_ps:.2f} ps)')
+        if n_prepend > 0:
+            ax.axvspan(t_new_ps[0], t_new_ps[n_prepend - 1], alpha=0.15, color='tab:blue',
+                       label=f'Front pad ({n_prepend} pts, {n_prepend * dt_ps:.2f} ps)')
+        if n_append > 0:
+            ax.axvspan(t_new_ps[signal_end_index], t_new_ps[-1], alpha=0.15, color='tab:green',
+                       label=f'Back pad ({n_append} pts, {n_append * dt_ps:.2f} ps)')
         ax.axvline(peak_ps, color='tab:red', lw=1, linestyle=':', label=f'Peak @ {peak_ps:.2f} ps')
         ax.set_xlim(*xlim)
         ax.set_xlabel('Time (ps)')
         ax.set_ylabel('Amplitude')
-
-        ax.set_ylim(float(np.nanmin(y_new)), float(np.nanmax(y_new)))
         ax.set_title(panel_title)
         ax.legend(fontsize=8)
-    # normalise the axis to view the taper region better
-    junction_values = y_new[n_prepend : n_prepend + taper_samples] if taper_samples > 0 else []
-    junction_values *= 3
-    axes[1].set_ylim(float(np.nanmin(junction_values)), float(np.nanmax(junction_values)))
 
 
 
@@ -1175,10 +1191,12 @@ def center_pulse(
     config: dict | None = None,
     show_graph: bool = False,
 ) -> DataSet:
-    """Centre the main pulse at the temporal midpoint by pre-padding with zeros.
+    """Centre the main pulse at the temporal midpoint by padding with zeros.
 
-    Works for any measurement geometry (reflection, transmission) and either
-    segment.  Call once per segment for explicit, inspectable processing.
+    Pads the shorter side: prepends zeros when the peak is in the first half,
+    appends zeros when it is past the midpoint (so a pulse near either end of its
+    gate is centred, not just an early one). Works for any measurement geometry
+    (reflection, transmission) and either segment.  Call once per segment.
 
     Parameters
     ----------
@@ -1225,11 +1243,15 @@ def center_pulse(
         holder.data = np.column_stack((t_new, y_new))
 
         n_prepend = info['n_prepend']
+        n_append = info['n_append']
         taper_samples = info['taper_samples']
         dt_ps = info['dt_s'] * _S_TO_PS
+        if n_prepend:
+            pad_description = f"prepended {n_prepend} samples ({n_prepend * dt_ps:.2f} ps) to the front"
+        else:
+            pad_description = f"appended {n_append} samples ({n_append * dt_ps:.2f} ps) to the back"
         print(
-            f"[center_pulse/{segment}] '{filename}': prepended {n_prepend} samples "
-            f"({n_prepend * dt_ps:.2f} ps); "
+            f"[center_pulse/{segment}] '{filename}': {pad_description}; "
             f"taper {taper_samples} samples ({taper_samples * dt_ps:.2f} ps)."
         )
 

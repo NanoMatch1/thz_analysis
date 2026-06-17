@@ -772,6 +772,21 @@ Shared-axis FFT zero-pads inside `fft_spectrum(n_fft=...)` (no `zero_pad`/
 `pad_to_common_grid` step). Headless A/B on CNT-17 (0.5–3 THz band-mean n):
 s-0 0.917 vs 0.964; s-180 0.696 vs 0.807; s-45 0.786 vs 0.840; s-90 0.763 vs 0.804 —
 the two paths **agree to ~0.04–0.11 in n and ~0.05 in k**, with the same anisotropy
-ordering, so the new shared-axis path is validated against the existing one. (Note:
-`build_full_trace_reflection`'s `hard_crop_ps` arg was externally stripped and
-restored — keep it; the wiring depends on it.)
+ordering, so the new shared-axis path is validated against the existing one.
+
+### `center_pulse` — centre in BOTH directions  ★ bug fixed (2026-06-16)
+`_center_pulse_trace` only ever **prepended** zeros: `n_prepend = max(0, n_after −
+n_before)`. That centres a pulse only when its peak is in the **first half** of the
+array. When the peak is **past the midpoint** it clamped to 0 and printed "pulse
+already centred, skipping" — misleading: it could not centre, it just gave up. This
+bit the **segmented path's second reflection**: its gate (e.g. 161–168 ps) puts the
+peak at ~63 %, so it was left off-centre, and `window_time` (whole-trace gate →
+Hann centred on the array midpoint) then apodised it **asymmetrically** — exactly the
+§16 centroid-bias failure, and *differently* from the first reflection (peak ~35 %,
+which did centre). Fix: pad the **shorter** side — prepend if the peak is early,
+**append** zeros if it is past the midpoint — with the half-cosine taper at whichever
+junction is padded (rising at the front, falling at the back, clamped so it never
+crosses the peak). Verified on CNT-17: second reflections now *append* ~31–35 samples
+and centre; first reflections still prepend. Tests 17/17 + synthetic prepend/append/
+already-centred cases. (This only affects the **segmented** path; the shared-axis path
+does not use `center_pulse`.)
