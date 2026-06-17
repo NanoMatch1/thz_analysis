@@ -94,7 +94,7 @@ def main():
     # Process up to and including window_time, then SNAPSHOT the time-domain
     # segments (this is BEFORE zero_pad's common-grid re-referencing). Then run
     # zero_pad and snapshot again (production point, just before fft_spectrum).
-    # NOTE: pre_window_align_peak omitted — windowing hygiene (preserves absolute
+    # NOTE: centering_manual omitted — windowing hygiene (preserves absolute
     # time), stale vs center_pulse, and needs interaction; irrelevant to this demo.
     for seg in ("second_reflection", "first_reflection"):
         thz.subtract_baseline(dataset, segment=seg)

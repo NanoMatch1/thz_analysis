@@ -468,7 +468,7 @@ def isolate_and_window(
 ) -> DataSet:
     """Isolate + apodize BOTH reflections on one shared axis (the coupling step).
 
-    Replaces ``pre_window_align_peak`` + ``center_pulse`` + per-segment windowing.
+    Replaces ``centering_manual`` + ``center_pulse`` + per-segment windowing.
     Reads each object's ``first_region`` / ``second_region`` (set by
     ``define_reflection_regions``) and apodizes each reflection in place on the
     shared axis. The window always tapers to zero at its own edges, and the edges
@@ -694,7 +694,7 @@ def _ensure_scan_matrix(data_obj) -> np.ndarray:
     **Staleness guard (single source of truth).** The matrix is only valid while
     it has the *same row count* as ``data_obj.data``. Steps that change the row
     count or resample the time axis (``global_truncate``, ``center_pulse``, and
-    the windowing-hygiene crop in ``pre_window_align_peak``) mutate ``data`` but
+    the windowing-hygiene crop in ``centering_manual``) mutate ``data`` but
     deliberately do **not** maintain this parallel matrix — keeping two full
     representations in lockstep through every step is the coupling we want to
     avoid. So instead of trusting the cache blindly, every call verifies the row
@@ -854,6 +854,149 @@ def subtract_baseline(
 
     return dataset
 
+
+def pad_trace_start(
+    dataset: DataSet,
+    segment: str = 'second_reflection',
+    extension_ps: float = 3.0,
+    taper_ps: float = 1.0,
+    enabled: bool = True,
+    show_graph: bool = False,
+) -> DataSet:
+    """Extend the START of each trace backwards with zeros (smoothly tapered).
+
+    Creates a baseline-zero region before the data so a later symmetric window can
+    reach back without cutting real signal (e.g. the first reflection's limited
+    pre-pulse). For each trace: ramp the leading ``taper_ps`` of real data up from
+    zero (rising half-cosine, so the zero->data junction is smooth), then prepend
+    ``extension_ps`` of zeros. Real samples keep their absolute times; only the axis
+    is extended earlier. Run AFTER ``subtract_baseline``.
+
+    Parameters
+    ----------
+    segment : ``'second_reflection'`` (default) or ``'first_reflection'``
+        Which segment to process. Call twice (same args) to keep both segments of a
+        ``THzDataReflection`` on one shared axis.
+    extension_ps : float
+        Length (ps) of the prepended zero region.
+    taper_ps : float
+        Leading real data (ps) ramped 0->1 to smooth the junction.
+    enabled : bool
+        One-line on/off — returns the dataset unchanged when False.
+    show_graph : bool
+        Plot the extended traces (zeros + taper shaded) and a step-change metric to
+        spot a poor taper / junction discontinuity at a glance.
+    """
+    if not enabled:
+        return dataset
+
+    pad_records = {}
+    for filename, data_obj in dataset.data.items():
+        holder = _resolve_segment(data_obj, segment)
+        if holder is None:
+            continue
+
+        time_seconds = holder.data[:, 0]
+        other_columns = holder.data[:, 1:]  # amplitude (+ stderr if present)
+        sample_interval_seconds = float(np.median(np.diff(time_seconds)))
+        zero_count = int(round(extension_ps * 1e-12 / sample_interval_seconds))
+        taper_count = min(int(round(taper_ps * 1e-12 / sample_interval_seconds)),
+                          other_columns.shape[0])
+
+        tapered_columns = other_columns.copy()
+        if taper_count > 0:
+            rising_ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, taper_count, endpoint=False)))
+            tapered_columns[:taper_count, 0] *= rising_ramp  # taper the amplitude only
+
+        earlier_times = time_seconds[0] - sample_interval_seconds * np.arange(zero_count, 0, -1)
+        new_time = np.concatenate([earlier_times, time_seconds])
+        new_columns = np.concatenate(
+            [np.zeros((zero_count, other_columns.shape[1])), tapered_columns], axis=0)
+
+        holder.processing_dict['pre_pad_start'] = holder.data.copy()
+        holder.data = np.column_stack([new_time, new_columns])
+
+        print(f"[pad_trace_start/{segment}] '{filename}': prepended {zero_count} zero "
+              f"samples ({zero_count * sample_interval_seconds * _S_TO_PS:.2f} ps); "
+              f"tapered leading {taper_count} samples "
+              f"({taper_count * sample_interval_seconds * _S_TO_PS:.2f} ps).")
+
+        pad_records[filename] = dict(
+            time_seconds=new_time, amplitude=holder.data[:, 1],
+            zero_count=zero_count, taper_count=taper_count,
+            sample_interval_seconds=sample_interval_seconds,
+        )
+
+    if show_graph and pad_records:
+        _plot_pad_start(pad_records, segment)
+    return dataset
+
+
+def _plot_pad_start(pad_records: dict, segment: str) -> None:
+    """Diagnostic for pad_trace_start: extended traces + a step-change metric.
+
+    Top: padded traces (prepended-zeros and taper regions shaded). Bottom: the
+    first difference normalised to the peak amplitude — ``(y[i]-y[i-1]) / max|y|`` —
+    which reads directly as "the step as a fraction of the pulse height". A smooth
+    taper stays small and flat through the junction; a poor taper / discontinuity
+    spikes. A dashed reference line marks the typical steepest *in-pulse* slope, so
+    anything in the junction poking above it is sharper than any real feature.
+
+    (The literal "normalise to the previous step" idea is omitted on purpose: the
+    prepended region is zeros, so the previous step is ~0 there and the ratio blows
+    up across the whole flat region — drowning the one junction you want to see.)
+    """
+    figure, (trace_axis, step_axis) = plt.subplots(2, 1, sharex=True)
+    figure.suptitle(f'pad_trace_start — extension & step-change check ({segment})')
+
+    in_pulse_slope_fractions = []
+    for filename, record in pad_records.items():
+        time_ps = record['time_seconds'] * _S_TO_PS
+        amplitude = record['amplitude']
+        peak_amplitude = max(np.max(np.abs(amplitude)), 1e-30)
+        junction_end = record['zero_count'] + record['taper_count']
+
+        trace_axis.plot(time_ps, amplitude, lw=1.2, label=filename)
+
+        step_fraction = np.diff(amplitude) / peak_amplitude
+        step_axis.plot(time_ps[1:], step_fraction, lw=1.0)
+
+        # steepest legitimate slope = max |step| well past the junction (real pulse)
+        past_junction = np.abs(step_fraction[junction_end + 2:])
+        if past_junction.size:
+            in_pulse_slope_fractions.append(float(np.max(past_junction)))
+
+        junction_step = float(np.max(np.abs(step_fraction[:junction_end + 2]))) \
+            if junction_end + 2 <= step_fraction.size else float('nan')
+        print(f"[pad_trace_start/{segment}] '{filename}': max junction step "
+              f"{junction_step * 100:.2f}% of peak.")
+
+    # shade the prepended-zeros and taper regions using a representative record
+    representative = next(iter(pad_records.values()))
+    rep_time_ps = representative['time_seconds'] * _S_TO_PS
+    zero_count = representative['zero_count']
+    taper_count = representative['taper_count']
+    if zero_count > 0:
+        trace_axis.axvspan(rep_time_ps[0], rep_time_ps[zero_count - 1],
+                           alpha=0.15, color='tab:blue', label='prepended zeros')
+    if taper_count > 0:
+        trace_axis.axvspan(rep_time_ps[zero_count], rep_time_ps[zero_count + taper_count - 1],
+                           alpha=0.25, color='tab:orange', label='taper')
+
+    if in_pulse_slope_fractions:
+        reference = float(np.median(in_pulse_slope_fractions))
+        step_axis.axhline(reference, color='0.4', ls='--', lw=1,
+                          label='typical steepest in-pulse slope')
+        step_axis.axhline(-reference, color='0.4', ls='--', lw=1)
+
+    trace_axis.set_ylabel('amplitude')
+    trace_axis.legend(fontsize=7)
+    step_axis.set_ylabel('(y[i]-y[i-1]) / max|y|')
+    step_axis.set_xlabel('time (ps)')
+    step_axis.legend(fontsize=7)
+    plt.show()
+
+
 def global_truncate(
     dataset: DataSet,
     segment: str = 'second_reflection',
@@ -957,7 +1100,7 @@ def define_alignment_regions(
     return config
 
 
-def pre_window_align_peak(
+def centering_manual(
     dataset: DataSet,
     segment: str = 'second_reflection',
     show_graph: bool = False,
@@ -968,6 +1111,8 @@ def pre_window_align_peak(
 
     Used before windowing so the window function lands at the same T0 distance
     from the edge for every file.
+
+    NOTE: This step does not affect the absolute time axis (the first column of each trace) — it only shifts the data in the second column to align the peaks. The time axis is preserved, so that later steps can still use the original time information.
 
     Parameters
     ----------
@@ -994,31 +1139,31 @@ def pre_window_align_peak(
 
     aligned = core.align_on_peak(data_dict, auto_range=auto_range_idx)
 
-    if recalibrate:
-        print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
-        print(" Select which file's time axis to use:")
-        while True:
-            for i, filename in enumerate(aligned.keys()):
-                print(f"  {i}: {filename}")
-            selection = input(f"Enter a number from 0 to {len(aligned)-1}: ")
-            try:            
-                idx = int(selection)
-                if idx < 0 or idx >= len(aligned):
-                    print("Must be a valid number from the list.")
-                    continue
-                selected_filename = list(aligned.keys())[idx]
-                break
-            except ValueError:
-                print("Must be a valid number from the list.")
-        print(f"Selected '{selected_filename}' as the T0 reference. Recalibrating all files to share its time axis.")
+    # if recalibrate:
+    #     print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
+    #     print(" Select which file's time axis to use:")
+    #     while True:
+    #         for i, filename in enumerate(aligned.keys()):
+    #             print(f"  {i}: {filename}")
+    #         selection = input(f"Enter a number from 0 to {len(aligned)-1}: ")
+    #         try:            
+    #             idx = int(selection)
+    #             if idx < 0 or idx >= len(aligned):
+    #                 print("Must be a valid number from the list.")
+    #                 continue
+    #             selected_filename = list(aligned.keys())[idx]
+    #             break
+    #         except ValueError:
+    #             print("Must be a valid number from the list.")
+    #     print(f"Selected '{selected_filename}' as the T0 reference. Recalibrating all files to share its time axis.")
 
-        ref_data = aligned[selected_filename]
-        ref_axis = ref_data[:, 0]
+    #     ref_data = aligned[selected_filename]
+    #     ref_axis = ref_data[:, 0]
 
-        for filename, data in aligned.items():
-            if filename == selected_filename:
-                continue
-            aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
+    #     for filename, data in aligned.items():
+    #         if filename == selected_filename:
+    #             continue
+    #         aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
 
     if show_graph:
         for filename, data in aligned.items():
@@ -1213,7 +1358,7 @@ def center_pulse(
     Notes
     -----
     Modifies the segment's data array in-place.  Original trace saved under
-    ``processing_dict['pre_centering']``.  Call after ``pre_window_align_peak``
+    ``processing_dict['pre_centering']``.  Call after ``centering_manual``
     and before ``window_time``.
     """
     config = config or {}

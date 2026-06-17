@@ -64,6 +64,19 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     thz.subtract_baseline(dataset, segment='second_reflection')
     thz.subtract_baseline(dataset, segment='first_reflection')
 
+    # --- optionally extend the trace start backwards (zeros + leading taper) so a
+    #     later symmetric window can reach back without cutting real pre-pulse.
+    #     Toggle with config['pad_start']['enabled']; called once per segment. ---
+    pad_start_cfg = config.get('pad_start', {})
+    thz.pad_trace_start(dataset, segment='second_reflection',
+                        extension_ps=pad_start_cfg.get('extension_ps', 3.0),
+                        taper_ps=pad_start_cfg.get('taper_ps', 1.0),
+                        enabled=pad_start_cfg.get('enabled', False), show_graph=show)
+    thz.pad_trace_start(dataset, segment='first_reflection',
+                        extension_ps=pad_start_cfg.get('extension_ps', 3.0),
+                        taper_ps=pad_start_cfg.get('taper_ps', 1.0),
+                        enabled=pad_start_cfg.get('enabled', False), show_graph=show)
+
     # --- one common time axis across all files (needed so the FFT grids match) ---
     thz.global_truncate(dataset, segment='second_reflection')
     thz.global_truncate(dataset, segment='first_reflection')
@@ -231,6 +244,9 @@ if __name__ == '__main__':
             'first_reflection':  (152.0, 158.5),
             'second_reflection': (161.0, 168.0),
         },
+        # Extend the trace start backwards (zeros + leading taper) so a symmetric
+        # window can reach back without cutting real pre-pulse. Flip 'enabled'.
+        'pad_start': {'enabled': False, 'extension_ps': 3.0, 'taper_ps': 1.0},
 
         # ---- window (shared by both paths) ----
         'window': {'type': 'hann', 'alpha': 1.0},

@@ -94,7 +94,7 @@ Newest material appended at the bottom of each section.
 - **Method chosen: cross-correlation** (`align_to_reference`, wraps thz-core
   `align_time`). Anchors the reference, shifts the sample, sub-sample (parabolic)
   precision, uses `|corr|` so it handles the sign-flipped sample pulse.
-  - Rejected `pre_window_align_peak`: integer-sample shifts only (0.05 ps granularity) —
+  - Rejected `centering_manual`: integer-sample shifts only (0.05 ps granularity) —
     too coarse for a ~0.1 ps offset.
   - Rejected phase-slope removal as the primary tool: equivalent in principle,
     but needs a trusted band and over-corrects in practice (tested: it made the
@@ -526,7 +526,7 @@ The per-scan working matrix (§ per_scan_working_matrix: `working_scans` =
 retain every acquisition. But three steps change `data`'s **row count / time
 sampling** and deliberately do **not** update the matrix:
 `global_truncate` (rows ↓), `center_pulse` (prepend, rows ↑), and the
-windowing-hygiene crop in `pre_window_align_peak` (index-crop, rows ↓).
+windowing-hygiene crop in `centering_manual` (index-crop, rows ↓).
 
 We chose **not** to make those three steps also rewrite the matrix. Maintaining two
 full parallel representations through every step is exactly the tight coupling /
@@ -703,7 +703,7 @@ prepend zeros for the short front pre-pulse), `symmetric_shortest` (±2.3 ps nar
 
 ## §17  Shared-axis reflection isolation — implementation  ★ (2026-06-16)
 
-Replaces the old `build (crop) → align → pre_window_align_peak → center_pulse →
+Replaces the old `build (crop) → align → centering_manual → center_pulse →
 window_time → zero_pad (pad_to_common_grid)` chain for reflection data with three
 transparent functions (`dataset_core/adapters/thz_adapter.py`), kept **alongside**
 the old path for A/B.
@@ -773,6 +773,27 @@ Shared-axis FFT zero-pads inside `fft_spectrum(n_fft=...)` (no `zero_pad`/
 s-0 0.917 vs 0.964; s-180 0.696 vs 0.807; s-45 0.786 vs 0.840; s-90 0.763 vs 0.804 —
 the two paths **agree to ~0.04–0.11 in n and ~0.05 in k**, with the same anisotropy
 ordering, so the new shared-axis path is validated against the existing one.
+
+### `pad_trace_start` — extend the trace start backwards  (2026-06-17)
+Optional step after `subtract_baseline` (toggle `enabled=`): ramp the leading
+`taper_ps` (1 ps default) of real data up from zero, then prepend `extension_ps`
+(3 ps default) of zeros. Creates a baseline-zero pre-pulse region so a later
+*symmetric* window can reach back without cutting real data (mainly for the first
+reflection's short pre-pulse). Real samples keep their absolute times; only the axis
+extends earlier. Uses the `segment=`-twice pattern (transparency > one call over both
+segments — Samuel's call); in the shared-axis path call it for both segments with the
+same args so they stay on one axis. The region itself isn't moved, so to *use* the new
+room you widen the first region into it.
+
+**Step-change diagnostic (metric decision).** `show_graph` draws the padded traces
+(zeros + taper shaded) and, below, the **first difference normalised to the peak**:
+`(y[i]−y[i−1]) / max|y|` — reads directly as "the step as a fraction of pulse height",
+with a dashed reference at the typical steepest *in-pulse* slope (anything in the
+junction poking above it is sharper than any real feature). Samuel's first idea
+(normalise to the *previous* step, `Δ[i]/Δ[i−1]`) was rejected: the prepended region
+is zeros, so `Δ[i−1]≈0` there and the ratio blows up across the whole flat region,
+hiding the one junction you want to see. CNT-17 junction steps come out 0.2–0.5 % of
+peak (clean taper). One-shot numeric printed per file.
 
 ### `center_pulse` — centre in BOTH directions  ★ bug fixed (2026-06-16)
 `_center_pulse_trace` only ever **prepended** zeros: `n_prepend = max(0, n_after −

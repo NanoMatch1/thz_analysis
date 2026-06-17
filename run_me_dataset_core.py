@@ -137,6 +137,7 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026_06_17_reflection_setup_large\holder"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-11_CNT-paper"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-16_reflection_testing\export"
@@ -239,69 +240,80 @@ if __name__ == "__main__":
     # --- Main analysis 
     dataset = DataSet(fileDir)
     show_graph = True
-    dataset.load_all_data(case_insensitive=True)
-    dataset.plot_current()
-    # dataset.plot_current()
-    thz.build_full_trace_reflection()
 
-    # ---
+    fresh_load = False
+    if fresh_load:
+
+        dataset.load_all_data(case_insensitive=True, explicit_dir=True)
+        dataset.plot_current()
+        # dataset.plot_current()
+        thz.subtract_baseline(dataset, show_graph=show_graph)
+        # thz.build_full_trace_reflection()
+        
+
+        # ---
 
 
-    thz.subtract_baseline(dataset, show_graph=show_graph)
-    dataset.group_files(keywords=['type'])
-    dataset.grouping.show_matches()
+        dataset.group_files(keywords=['type'])
+        dataset.grouping.show_matches()
 
-    # thz.plot_current(dataset)
-    thz.global_truncate(dataset)
-    thz.pre_window_align_peak(dataset, show_graph=True, auto_range_ps=(163,167), recalibrate=False)
-    # --- Pre-window centering: extend traces backward so the pulse sits at the
-    # temporal midpoint, giving the Tukey window symmetric taper regions.
-    centering_config = {'centering': {'peak_mode': 'auto', 'taper_ps': 1}}
-    thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
-    # thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
-    thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
-    thz.zero_pad(dataset, config={"pad": {"extend_factor": 3.0}}, show_graph=show_graph)
-    thz.fft_spectrum(dataset)
-    # The SNR mask is built inside transfer_function (it needs H), so the mask
-    # thresholds must travel with it — a standalone trusted_band_mask call before
-    # this point is a no-op (transfer_H not computed yet) and silently drops them.
-    # self_reference: front-pulse drift correction from the sibling
-    # first_reflection segment folder (ANALYSIS_NOTES §11). Set False to compare
-    # against the conventional bare-window reference.
+
+        # thz.plot_current(dataset)
+        # thz.global_truncate(dataset)
+        dataset.plot_current(title="Current Dataset")
+        thz.centering_manual(dataset, show_graph=True)#, auto_range_ps=(163,167), recalibrate=False)
+        # --- Pre-window centering: extend traces backward so the pulse sits at the
+        # temporal midpoint, giving the Tukey window symmetric taper regions.
+        centering_config = {'centering': {'peak_mode': 'auto', 'taper_ps': 1}}
+        # thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
+        # thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
+        thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
+        thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}}, show_graph=show_graph)
+        thz.fft_spectrum(dataset)
+        # The SNR mask is built inside transfer_function (it needs H), so the mask
+        # thresholds must travel with it — a standalone trusted_band_mask call before
+        # this point is a no-op (transfer_H not computed yet) and silently drops them.
+        # self_reference: front-pulse drift correction from the sibling
+        # first_reflection segment folder (ANALYSIS_NOTES §11). Set False to compare
+        # against the conventional bare-window reference.
+        dataset.save_state()
+    else:
+        dataset.load_state()
+        # dataset.plot_current(title="Current Dataset")
+
     thz.transfer_function(
         dataset,
         config={
-            "transfer": {"apply_snr_mask": True, "self_reference": True},
+            "transfer": {"apply_snr_mask": True, "self_reference": False},
             "mask": {"snr_thresh_db": 20, "tail_fraction": 0.25, "min_contiguous_bins": 3},
         },
         ref_type='reference',
     )
     # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
 
-
     thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
 # 
-    # thz.phase_correction(dataset, source='fft')
+    thz.phase_correction(dataset, source='fft')
 
+    thz.invert_nk(dataset, thickness_m=2.08e-3)
+    thz.derive_eps_sigma(dataset)
 
-    n_window_freq = window_characterisation(dataset)
-    # thz.invert_nk(dataset, thickness_m=1e-3)
-    thz.invert_nk_reflection(
-        dataset,
-        geometry="window",
-        theta_deg=45,
-        polarization='s',
-        # n_window=1.964,
-        n_window=1.964,
-    )
+    # n_window_freq = window_characterisation(dataset)
     # thz.invert_nk_reflection(
     #     dataset,
-    #     geometry="gold",
+    #     geometry="window",
     #     theta_deg=45,
     #     polarization='s',
-    #     # n_window=1.95,
+    #     # n_window=1.964,
+    #     n_window=1.964,
     # )
-    thz.derive_eps_sigma(dataset)
+    # # thz.invert_nk_reflection(
+    # #     dataset,
+    # #     geometry="gold",
+    # #     theta_deg=45,
+    # #     polarization='s',
+    # #     # n_window=1.95,
+    # # )
 
     dataset.save_database()
     thz.result_viewer(dataset)
