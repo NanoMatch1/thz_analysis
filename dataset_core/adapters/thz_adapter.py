@@ -2331,6 +2331,10 @@ def remove_phase_offset(
 
         mask = processing.get('transfer_mask') if use_snr_mask else None
         H_corrected, metrics = core.remove_phase_offset(freq, H, fit_band_hz=band_hz, mask=mask)
+        
+        slope = metrics['values']['slope_rad_per_hz']
+        intercept = metrics['values']['intercept_rad']
+        fit_phase = np.polyval([slope, intercept], freq)
 
         if show_graph:
             # Unwrap only the finite bins — np.unwrap over the full NaN-containing
@@ -2347,6 +2351,10 @@ def remove_phase_offset(
             ax.plot(f_thz, before_phase, color='steelblue', alpha=0.6, label='before')
             ax.plot(f_thz, after_phase, color='darkorange', label='after (intercept removed)')
             ax.axhline(0.0, color='gray', lw=0.5, linestyle='dashed')
+            ax.axvline(0.0, color='gray', lw=0.5, linestyle='dashed')
+            ax.scatter(0.0, 0.0, color='gray', s=20, zorder=3, marker='x')
+            ax.plot(f_thz, fit_phase, color='steelblue', lw=1.0, alpha=0.7, label='phase fit', ls='dashed')
+            ax.plot(f_thz, fit_phase - intercept, color='darkorange', lw=1.0, alpha=0.7, label='fit w/ intercept removed', ls='dashed')
             ax.axvspan(band_thz[0], band_thz[1], alpha=0.1, color='green', label='fit band')
             ax.set_xlabel('Frequency (THz)')
             ax.set_ylabel('Unwrapped phase of H (rad)')

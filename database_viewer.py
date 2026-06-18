@@ -48,6 +48,7 @@ def plot_nk(dataset, title=""):
         mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
         thz._plot_with_snr_mask(ax, freq * thz._HZ_TO_THZ, n, mask, label="{} (n)".format(filename), color=cmap(index))
         thz._plot_with_snr_mask(ax, freq * thz._HZ_TO_THZ, k, mask, label="{} (k)".format(filename), color=cmap(index), linestyle='dashed')
+        ax.set_ylim(bottom=0)  # Ensure y-axis starts at 0 for better visualization
     
     plt.legend()
     plt.xlabel("Frequency (THz)")

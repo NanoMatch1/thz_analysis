@@ -137,7 +137,8 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026_06_17_reflection_setup_large\holder"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\testing\cryostat_windows"
+    fileDir = r"C:\Users\Samuel\Data\THz\Sam\testing\silicon"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-11_CNT-paper"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-16_reflection_testing\export"
@@ -254,18 +255,18 @@ if __name__ == "__main__":
         # ---
 
 
-        dataset.group_files(keywords=['type'])
+        dataset.group_files(keywords=['type', 'seri'])
         dataset.grouping.show_matches()
 
 
         # thz.plot_current(dataset)
         # thz.global_truncate(dataset)
         dataset.plot_current(title="Current Dataset")
-        thz.centering_manual(dataset, show_graph=True)#, auto_range_ps=(163,167), recalibrate=False)
+        # thz.centering_manual(dataset, show_graph=True)#, auto_range_ps=(163,167), recalibrate=False)
         # --- Pre-window centering: extend traces backward so the pulse sits at the
         # temporal midpoint, giving the Tukey window symmetric taper regions.
-        centering_config = {'centering': {'peak_mode': 'auto', 'taper_ps': 1}}
-        # thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
+        centering_config = {'centering': {'peak_mode': 'manual', 'taper_ps': 1}}
+        thz.center_pulse(dataset, config=centering_config, show_graph=show_graph)
         # thz.center_first_reflection_pulse(dataset, config=centering_config, show_graph=show_graph)
         thz.window_time(dataset, config={"window": {"type": "tukey", "alpha": 1}}, show_graph=show_graph)
         # thz.zero_pad(dataset, config={"pad": {"extend_factor": 1.0}}, show_graph=show_graph)
@@ -290,7 +291,7 @@ if __name__ == "__main__":
         },
         ref_type='reference',
     )
-    thz.remove_phase_offset(dataset, config={"phase_offset": {"band_thz": (0.3, 2.0)}}, show_graph=show_graph)
+    # thz.remove_phase_offset(dataset, config={"phase_offset": {"band_thz": (0.3, 2.0)}}, show_graph=show_graph)
     # TODO(revisit): invert_nk uses anchor_phase_origin=True by default (removes the
     # whole-cycle 2pi wrap that droops n at low f for thick samples). Left ON for now —
     # check this is still desired/correct once more transmission + reflection data is in.
@@ -300,7 +301,8 @@ if __name__ == "__main__":
 # 
     # thz.phase_correction(dataset, source='transfer')
 
-    thz.invert_nk(dataset, thickness_m=2.08e-3)
+    # thz.invert_nk(dataset, thickness_m=2.08e-3)
+    thz.invert_nk(dataset, thickness_m=350e-6)
     thz.derive_eps_sigma(dataset)
 
     # n_window_freq = window_characterisation(dataset)
