@@ -154,15 +154,20 @@ thz.transfer_function(dataset,                  # transmission: self_reference=F
             "mask": {"snr_thresh_db": 20, "tail_fraction": 0.25, "min_contiguous_bins": 3}},
     ref_type='reference')
 thz.remove_phase_offset(dataset,                # phaseex: subtract H's phase intercept
-    config={"phase_offset": {"band_thz": (0.3, 2.0)}})   # fixes the low-f n droop (§18)
-thz.invert_nk(dataset, thickness_m=2.08e-3)
+    config={"phase_offset": {"band_thz": (0.3, 2.0)}})   # sub-2π residual only (§18)
+thz.invert_nk(dataset, thickness_m=2.08e-3)     # anchor_phase_origin=True (default) removes
+                                                # the whole-cycle (2π) wrap that droops n at
+                                                # low f for thick samples — the main droop fix
 ```
 
 Group-delay preservation is **structural**, not an explicit phase factor: `centering_manual`
 leaves each file with a different absolute `t[0]`, and `align_to_common_time_axis`
 (inside `zero_pad`) re-lays them on a shared axis so the offset becomes the FFT phase
-ramp — the equivalent of legacy `phioffset` (`ANALYSIS_NOTES §18`). `remove_phase_offset`
-then strips the residual constant phase offset that would otherwise droop `n` near DC.
+ramp — the equivalent of legacy `phioffset` (`ANALYSIS_NOTES §18`). The low-frequency `n`
+droop is a **whole-cycle (2π) wrap error** for thick samples (the phase exceeds π before
+the first reliable bin); it is fixed by `invert_nk`'s `anchor_phase_origin` (default True),
+because an integer cycle cannot be carried through the complex `H` that `remove_phase_offset`
+edits. `remove_phase_offset` then removes the remaining sub-2π residual.
 
 ---
 

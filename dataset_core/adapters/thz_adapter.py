@@ -2293,6 +2293,13 @@ def remove_phase_offset(
     intercept, keeping the slope (the group-delay / refractive-index signal).
     See ANALYSIS_NOTES §18 and ``thz_core.remove_phase_offset``.
 
+    IMPORTANT — this corrects only the **sub-2π (fractional)** part of the offset.
+    A whole-cycle (2π) error is invisible in the complex ``H`` and would be
+    re-introduced by ``invert_nk``'s re-unwrap; that part is handled by
+    ``invert_nk``'s origin anchor (``config['invert']['anchor_phase_origin']``,
+    default True). For a thick sample (the common droop case) the anchor alone
+    flattens n; this step then removes the small remaining residual.
+
     Parameters
     ----------
     config : dict, optional
@@ -2326,16 +2333,27 @@ def remove_phase_offset(
         H_corrected, metrics = core.remove_phase_offset(freq, H, fit_band_hz=band_hz, mask=mask)
 
         if show_graph:
+            # Unwrap only the finite bins — np.unwrap over the full NaN-containing
+            # array propagates NaN forward and can blank the plot.
+            finite = np.isfinite(H)
+            f_thz = freq * _HZ_TO_THZ
+            before_phase = np.full(freq.size, np.nan)
+            after_phase = np.full(freq.size, np.nan)
+            idx = np.where(finite)[0]
+            if idx.size >= 2:
+                before_phase[idx] = np.unwrap(np.angle(H[idx]))
+                after_phase[idx] = np.unwrap(np.angle(H_corrected[idx]))
             fig, ax = plt.subplots(figsize=(10, 4), layout='constrained')
-            ax.plot(freq * _HZ_TO_THZ, np.unwrap(np.angle(H)), color='steelblue',
-                    alpha=0.6, label='before')
-            ax.plot(freq * _HZ_TO_THZ, np.unwrap(np.angle(H_corrected)), color='darkorange',
-                    label='after (intercept removed)')
+            ax.plot(f_thz, before_phase, color='steelblue', alpha=0.6, label='before')
+            ax.plot(f_thz, after_phase, color='darkorange', label='after (intercept removed)')
             ax.axhline(0.0, color='gray', lw=0.5, linestyle='dashed')
             ax.axvspan(band_thz[0], band_thz[1], alpha=0.1, color='green', label='fit band')
             ax.set_xlabel('Frequency (THz)')
             ax.set_ylabel('Unwrapped phase of H (rad)')
-            ax.set_title(f'Phase-offset removal — {filename}')
+            ax.set_title(
+                f"Phase-offset removal — {filename} "
+                f"(Δintercept = {metrics['values']['intercept_rad']:+.3f} rad)"
+            )
             ax.legend(fontsize=8)
             plt.show()
 

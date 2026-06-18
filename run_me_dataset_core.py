@@ -291,6 +291,9 @@ if __name__ == "__main__":
         ref_type='reference',
     )
     thz.remove_phase_offset(dataset, config={"phase_offset": {"band_thz": (0.3, 2.0)}}, show_graph=show_graph)
+    # TODO(revisit): invert_nk uses anchor_phase_origin=True by default (removes the
+    # whole-cycle 2pi wrap that droops n at low f for thick samples). Left ON for now —
+    # check this is still desired/correct once more transmission + reflection data is in.
     # thz.time_shift_slider(dataset, shift_range_ps=(-0.1, 0.06), n_steps=100, sample="a-45_2", quantity='sigma')
 
     # thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')

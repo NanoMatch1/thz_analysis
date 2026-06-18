@@ -43,6 +43,29 @@
 
 ## thz-core
 
+- [ ] **Single-step phase-offset handling (collapse the complex round-trip).**
+  (ANALYSIS_NOTES §18; `explorations/explore_phase_unwrap_vs_legacy.py`.) Today the
+  transfer phase makes a complex round-trip: `transfer_function` unwraps and stores
+  H **complex**, then `invert_nk` re-unwraps `np.angle(H)`. That re-unwrap discards
+  the integer-cycle (2π) part of any phase-offset correction, so we need **two**
+  mechanisms where legacy needs one: the `invert_nk` `anchor_phase_origin` (integer
+  cycle) **plus** `remove_phase_offset` (sub-2π residual). The legacy `phaseex`
+  removes the full intercept once, on the **real** unwrapped phase, immediately
+  before `n = 1 − cφ/(ωd)`, never re-wrapping. Simplification: remove the intercept
+  once on the real unwrapped phase and carry that phase to `invert_nk` without
+  re-unwrapping (e.g. pass an already-unwrapped phase, or have `invert_nk` accept a
+  precomputed phase and skip its own unwrap). Verified equivalence first: the anchor
+  alone already flattens n (~1.94, matching legacy+phaseex); this is a parsimony /
+  maintainability change, not a correctness fix.
+  - **KEEP BOTH the `anchor_phase_origin` integer-cycle fix AND `remove_phase_offset`**
+    (Samuel, 2026-06-18): the sub-2π residual correction is wanted even though it is
+    small. The goal of this item is to remove the *re-unwrap that loses the integer
+    cycle*, not to drop either correction. After the change both should still apply —
+    just on a phase representation that no longer round-trips through complex H.
+  - Keep `anchor_phase_origin` working for callers that still pass complex H. Touches
+    `fft_spectrum` / `transfer_function` / `invert_nk` phase flow — gate it and re-run
+    both suites + the exploration.
+
 - [x] **SNR-guided phase unwrap** — `thz_core/unwrap.py::robust_unwrap` (2026-06-09).
   Shared helper used by `invert_nk` (new `snr_weights=` kwarg) and the KK estimator
   (`estimate_misplacement` / `correct_reflection_phase`, new `snr_weights=`).

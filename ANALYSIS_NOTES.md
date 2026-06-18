@@ -327,6 +327,47 @@ reflection delay, or a gap?
   fit for quantitative n,k despite imperfect contact.
 - **Open / offered:** prototype the de-embedding + a synthetic test (smooth gap →
   exact r2 recovery; Gaussian d-distribution → high-f |x| roll-off).
+- **Prototype done (2026-06-18, `explorations/explore_air_gap_deembedding.py`,
+  isolated demo — not pipeline code).** Synthetic Drude CNT behind a known gap.
+  Confirms: (1) `x = (r_meas − r1)/(1 − r1·r_meas)` recovers `|x|=|r2|` to 1e-16;
+  (2) stripping `2β` with the **true** gap d recovers n,k to **4e-15 (exact)** — the
+  algebra is sound; (3) the **practical weak link is the gap-thickness estimate**: a
+  naive linear fit of `arg(x)` overestimates d (34 vs 30 µm here) because the sample's
+  **own** dispersion adds phase slope, leaving a residual that mis-scales n (~1.1 error).
+  So d must come from the **pulse round-trip delay** (T0/cross-correlation of the
+  second reflections), not from `arg(x)`; or iterate (estimate d → invert → model
+  `arg(r2)` → subtract → re-fit). (4) Roughness σ_d=12 µm rolls `|x|/|r2|` below 0.5 by
+  ~3.5 THz — the coherence-bandwidth ceiling. Naive (no de-embed) n drops to 0.76 by
+  3 THz, reproducing the CNT symptom (§9b). Next: a real-data application (de-embed the
+  CNT-17 `r_sample`, d from its measured second-reflection delay) before any pipeline
+  integration.
+
+### §9b  Reflection phase-code audit — the n<1 droop is the gap, not a code bug (2026-06-18)
+Samuel saw CNT reflection `n` fall **below 1 at high frequency** and not fit a model,
+suspected the air gap, and asked whether the reflection phase code had a hidden bug
+like the transmission one (§18). Audit (`explorations/explore_reflection_phase_audit.py`,
+CNT-17 second_reflection self-ref, 5 samples/rotations):
+- **Reflection inversion is immune to the §18 bug.** `invert_nk_reflection` is
+  closed-form on the **complex** `r = r_ref·H` — no `np.unwrap`, no DC anchor, no
+  re-unwrap. An integer 2π (or the constant offset that bit transmission) is invisible
+  to it (`exp(i·2πm)=1`) and is used directly, so there is no branch/cycle to lose or
+  mishandle. The transmission failure cannot occur here.
+- **φ(H) carries a consistent LINEAR phase** of +0.107…+0.127 ps across all five
+  samples and rotations (s-0/45/90/180) ⇒ a 16–19 µm equivalent air gap (`d=c·Δt/2`).
+  Consistent magnitude across rotations ⇒ systematic gap, **instrumental** — exactly
+  the §9 contact gap, confirming Samuel's suspicion. A linear phase rotates `r` with
+  frequency; in the closed-form inversion that pushes `n` down monotonically and
+  through 1 at high f (raw n: ~2.4 @0.7 THz → <1 above ~1.1–1.5 THz). De-embedding the
+  fitted linear phase reverses the droop (a crude full-band fit overshoots to n≈6–28,
+  confirming the *mechanism*; the exact §9 Fabry–Pérot de-embed is the correct removal).
+- **φ(H) intercept ≈ π (mod 2π)** for every sample. This is **physical, not a bug**:
+  the CNT is higher-index than the SiO₂ window, so `r_{SiO₂→CNT}` is negative (phase π)
+  while the reference `r_{SiO₂→air}` is real-positive ⇒ `H` is negative-real ⇒ arg≈π.
+  The closed form handles it natively (a sign, not a delay — cf. §9 first bullet).
+- **Verdict:** the reflection phase treatment is sound; the n<1 droop is the air-gap
+  linear phase (instrumental). The fix is the §9 Fabry–Pérot de-embed (designed, not
+  yet implemented), not a phase-code change. Note the self-ref path skips the sub-sample
+  ramp by design (front-pulse ratio carries timing), so no spurious code timing is added.
 
 ## 10. Artificial time-shift sweep (qualitative phase exploration)  (2026-06-09)
 Tool to scrub an artificial sub-sample T0 shift on a chosen sample and watch where
@@ -872,3 +913,61 @@ the edit never reaches the inversion. `source='transfer'` does hit `transfer_H`,
 function is interactive (drag a span) and per-file, so the fit band is inconsistent. The
 interactive `phase_correction` stays as a manual exploration tool; `remove_phase_offset`
 is the deterministic, pipeline-friendly replacement that matches `phaseex`.
+
+### ★ The droop was a whole-CYCLE (2π) wrap error — and it can't ride through complex H
+Diagnosing the fused-silica slab (d = 2.08 mm) on real data exposed the subtlety that
+makes this geometry-independent and important. The fitted intercept was **6.357 rad ≈
+2π**, not a small number: the true phase at 0.3 THz is −12.3 rad (n≈1.94), but the slab
+is thick enough that the phase exceeds π *before the first reliable bin*, so `np.unwrap`/
+`robust_unwrap` settle on a branch **one full cycle too high**. Subtracting that intercept
+from the *real unwrapped phase* gives **n = 1.94 dead flat** — correct.
+
+But `remove_phase_offset` applies the correction by multiplying complex `H` by
+`exp(−i·6.357)`, and **a 2π multiple is invisible in a complex number**
+(`exp(−i·2π)=1`). `invert_nk` then takes its *own* `np.angle(H)` and re-unwraps, re-anchors
+at the first bin, and lands right back on the wrong cycle → n unchanged (1.575→1.868,
+still drooping). **The integer-cycle part of a phase correction can never travel through
+a complex H array.** It must be fixed where the real unwrapped phase is decided.
+
+**Fix (thz-core `invert_nk`, default on):** `config['invert']['anchor_phase_origin']`
+(default True) fits a line to the trusted unwrapped phase, extrapolates to DC, and
+subtracts the **nearest integer number of 2π cycles** so the phase passes through the
+origin (a passive sample imposes no phase shift at f=0). Slope/group delay untouched;
+thin samples already on the right branch (|intercept|<π → round to 0) are unchanged.
+Measured effect on the slab: anchor OFF n=1.575→1.868 (droops); anchor ON n≈1.94 flat;
+anchor ON + `remove_phase_offset` n=1.941 flat (the sub-cycle residual cleaned up too).
+
+**Division of labour:** `invert_nk` origin anchor = the integer-cycle (thick-sample)
+fix, the one that removes the droop; `remove_phase_offset` = the sub-2π fractional
+residual. They are complementary. Verified: thz-core 180 tests pass (incl. pre-existing
+`test_thin_sample_unaffected_by_anchoring`, `test_lossy_thick_sample_recovered`); the
+snr-weights unwrap test now disables the anchor in its control assertion so it still
+isolates the `robust_unwrap` weighting mechanism (the anchor is a second, independent
+safeguard against the same branch flip).
+
+### Are we over-engineering vs legacy? (investigation, `explorations/explore_phase_unwrap_vs_legacy.py`)
+Samuel asked why the legacy `main_TDS.py` produced flat n with no anchor — are we
+over-doing it? The exploration compared, on the SAME stored spectra, four phase
+methods. Findings (CNT/silica slab, 6.55 ps inter-pulse delay):
+- **Tested and REJECTED hypothesis:** the legacy's robustness is NOT from its
+  reduced-phase unwrap (subtract `2π·f·t_peak`, unwrap residual, add back). That
+  method gives the **same** φ(H) DC intercept (+6.357 rad ≈ +1.01 cycle) and the
+  **same drooping n** (1.575→1.868) as our raw `np.unwrap`. The 2π error is not an
+  unwrap failure — the phase genuinely starts beyond π at the first usable bin, and
+  no unwrap scheme can recover the absolute cycle without asserting φ(0)=0.
+- **What actually flattens legacy n:** `phaseex` removing the full ~2π intercept
+  from the **real** phase array, in one place, immediately before `n = 1 − cφ/(ωd)`,
+  **never round-tripping through a complex number.**
+- **Why ours takes two steps:** our pipeline stores H complex and `invert_nk`
+  re-unwraps, which splits the one phaseex correction into (a) the integer-cycle
+  half — invisible in complex H, so handled by the `invert_nk` anchor — and (b) the
+  sub-2π half — survives complex H, so handled by `remove_phase_offset`. The anchor
+  alone already flattens n (~1.94); `remove_phase_offset` only trims the ~0.07 rad
+  residual.
+
+**Conclusion:** not physically over-engineered (same result as legacy), but the
+complex-H round-trip + invert_nk re-unwrap is genuinely more moving parts than
+legacy's single real-phase `phaseex`→n. A future simplification would be to remove
+the intercept once on the real unwrapped phase and carry it to `invert_nk` without
+re-unwrapping — deferred; current path is correct and tested. In practice the
+default-on anchor alone is sufficient; `remove_phase_offset` is optional polish.
