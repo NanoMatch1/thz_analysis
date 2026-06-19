@@ -275,13 +275,22 @@ container suites), thz-core 180 pass (incl. `test_remove_phase_offset.py`).
   trace. See `TODO.md` for the planned `gate_width_ps` fix.
 - **Contact gap (CNT-on-glass)** — 0.155–0.18 ps T0 shift changing with 90°
   rotation indicates a ~33–38 µm air gap (`ANALYSIS_NOTES §9`). This degrades
-  the incident-index conditioning advantage of the window geometry. Exact Fabry–Pérot
-  de-embedding is designed but not yet implemented.
+  the incident-index conditioning advantage of the window geometry, and it is what
+  drives CNT reflection **n below 1 at high frequency** (a flat linear phase in φ(H),
+  ~0.11–0.13 ps across all CNT-17 rotations — instrumental, not a code bug; the
+  reflection phase code was audited clean, `ANALYSIS_NOTES §9b`). Exact Fabry–Pérot
+  de-embedding is now **prototyped on synthetic data** (`explorations/explore_air_gap_deembedding.py`:
+  `x=(r_meas−r1)/(1−r1·r_meas)` recovers `|r2|` to 1e-16, n,k exactly with known gap d);
+  real-data application + pipeline integration are **pinned/pending** (the weak link is
+  estimating d — must come from the pulse round-trip delay, not the spectrum).
 
 ### Open work (`TODO.md`)
 - Peak-centred time gating (`gate_width_ps`).
 - Wire SNR weights into `invert_nk` so `robust_unwrap` is on by default.
-- Fabry–Pérot de-embedding for air-gap removal.
+- Fabry–Pérot de-embedding for air-gap removal (synthetic prototype done; real-data + pipeline pending).
+- Single-step phase-offset handling — collapse the complex-H round-trip so the integer
+  cycle is not lost in `invert_nk`'s re-unwrap; keep BOTH the `anchor_phase_origin` and
+  `remove_phase_offset` corrections (parsimony refactor, not a correctness fix).
 - `save_database`/`load_database` cleanup (hardcoded path, deduplication).
 
 ### Done (was deferred)

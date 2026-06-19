@@ -12,5 +12,6 @@ for m in pkgutil.iter_modules(__path__):
 
 # Export the public API
 from .loaders.registry import BaseLoader, get_loader_for_extension, registered_extensions
+from .loaders.generic_loader import GenericTextLoader, spectrum_to_thzdata
 
-__all__ = ["BaseLoader", "get_loader_for_extension", "registered_extensions"]
+__all__ = ["BaseLoader", "get_loader_for_extension", "registered_extensions", "GenericTextLoader", "spectrum_to_thzdata"]

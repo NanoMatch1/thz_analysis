@@ -209,6 +209,7 @@ if __name__ == '__main__':
 
     ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-17'
     ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A'
+    ROOT_DIR = r'C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_19_CNT\test1'
 
     pipeline_config = {
         # ---- path selection ----

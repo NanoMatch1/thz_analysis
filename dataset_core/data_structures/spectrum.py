@@ -75,3 +75,17 @@ class Spectrum:
 
         if show_plot:
             plt.show()
+
+    def to_thzdata(self, *, time_unit_scale: float = 1.0, data_type: str = 'generic'):
+        """Convert this Spectrum to a THzData object for use in the THz pipeline.
+
+        Parameters
+        ----------
+        time_unit_scale : float
+            Multiply the x-axis by this factor before storing.  Leave as 1.0
+            when the x-axis is already in picoseconds (raw THz pipeline convention).
+        data_type : str
+            Label stored on the resulting THzData. Defaults to 'generic'.
+        """
+        from dataset_core.io.loaders.generic_loader import spectrum_to_thzdata
+        return spectrum_to_thzdata(self, time_unit_scale=time_unit_scale, data_type=data_type)

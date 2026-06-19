@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 
 from dataset_core.io import get_loader_for_extension
 from dataset_core.data_structures.thz import THzData, BaseTHzData, THzDataReflection
+from dataset_core.io.loaders.generic_loader import GenericTextLoader
 from dataset_core.services.grouping import GroupingService
 from dataset_core.services.database import DatabaseService
 
@@ -110,6 +111,17 @@ class DataService:
     def remove_item(self, filename):
         if filename in self._data_dict:
             del self._data_dict[filename]
+
+    @property
+    def data(self):
+        return self._data_dict
+
+    @property
+    def current_data(self):
+        """Returns a dict restricted to the filenames
+        that the grouping service considers 'current'.
+        """
+        return self.current_data_dict()
 
     def current_data_dict(self) -> dict:
         '''Returns data dict filtered to current filenames from the grouping service.'''
@@ -417,11 +429,53 @@ class DataSet:
         return fig_obj
 
     def load_any(self, path: str):
+        """Load a single file, falling back to ``GenericTextLoader`` when no
+        registered loader matches the extension or the registered loader fails."""
         ext = Path(path).suffix  # includes the dot
         Loader = get_loader_for_extension(ext)
-        if Loader is None:
-            return None
-        return Loader(path).load()
+        if Loader is not None:
+            try:
+                return Loader(path).load()
+            except Exception as exc:
+                import warnings
+                warnings.warn(
+                    f"Registered loader {Loader.__name__} failed for '{path}': {exc}. "
+                    "Falling back to GenericTextLoader.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        return GenericTextLoader(path).load()
+
+    @staticmethod
+    def _coerce_to_thzdata(obj):
+        """If *obj* is a ``Spectrum``, convert it to ``THzData``. Otherwise return as-is."""
+        from dataset_core.data_structures.spectrum import Spectrum
+        if isinstance(obj, Spectrum):
+            return obj.to_thzdata()
+        return obj
+
+    def convert_to_thzdata(self, *, time_unit_scale: float = 1.0, data_type: str = 'generic') -> None:
+        """Convert any ``Spectrum`` objects in the data service to ``THzData`` in-place.
+
+        Iterates the full data dictionary and replaces each ``Spectrum`` with the
+        result of ``spectrum.to_thzdata()``.  Objects that are already ``THzData``
+        (or any other type) are left untouched.
+
+        Parameters
+        ----------
+        time_unit_scale : float
+            Passed through to ``Spectrum.to_thzdata()``.  Leave as 1.0 when the
+            x-axis is already in picoseconds.
+        data_type : str
+            Label stored on each resulting ``THzData``.
+        """
+        from dataset_core.data_structures.spectrum import Spectrum
+        for filename, obj in list(self.data.data_dict.items()):
+            if isinstance(obj, Spectrum):
+                self.data.data_dict[filename] = obj.to_thzdata(
+                    time_unit_scale=time_unit_scale,
+                    data_type=data_type,
+                )
 
     def load_all_data(self, prefer_acc=True, file_lister=None, case_insensitive=False, explicit_dir=False) -> DataService:
         '''Loads all files in the specified directory into the data service.
@@ -484,7 +538,7 @@ class DataSet:
             filepath = os.path.join(self.file_dir, filename)
             if os.path.isdir(filepath):
                 continue  # skip folders
-            data_object = self.load_any(filepath)
+            data_object = self._coerce_to_thzdata(self.load_any(filepath))
             if data_object is None:
                 continue  # no loader for this extension
             if case_insensitive is True:
@@ -536,7 +590,7 @@ class DataSet:
             filepath = os.path.join(second_dir, filename)
             if os.path.isdir(filepath):
                 continue
-            second_obj = self.load_any(filepath)
+            second_obj = self._coerce_to_thzdata(self.load_any(filepath))
             if second_obj is None:
                 continue
 
@@ -547,7 +601,7 @@ class DataSet:
             first_match = first_lookup.get(first_match_key)
             if first_match is not None:
                 first_filepath = os.path.join(first_dir, first_match)
-                first_obj = self.load_any(first_filepath)
+                first_obj = self._coerce_to_thzdata(self.load_any(first_filepath))
                 if first_obj is not None:
                     first_obj.filename = stored_name
                     second_obj = THzDataReflection.from_thzdata(second_obj, first_obj)

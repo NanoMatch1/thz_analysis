@@ -138,7 +138,13 @@ if __name__ == "__main__":
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-13\D\segmented\second_reflection"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A"
     fileDir = r"C:\Users\Samuel\Data\THz\Sam\testing\cryostat_windows"
-    fileDir = r"C:\Users\Samuel\Data\THz\Sam\testing\silicon"
+    
+    fileDir = r"C:\Users\Samuel\Data\THz\Vasilis_Data\data"
+    fileDir = r"C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_17_ref_calib\export\intensity_test"
+    fileDir = r"C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_19_CNT\test1"
+
+    # fileDir = r"C:\Users\Samuel\Data\THz\Sam\testing\silicon"
+    # fileDir = r"C:\Users\Samuel\Data\THz\calibration\reflection"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-11_CNT-paper"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-17"
     # fileDir = r"C:\Users\Samuel\Data\THz\Sam\2026-06-16_reflection_testing\export"
@@ -211,7 +217,7 @@ if __name__ == "__main__":
     def preprocess(fileDir, show_graph=True):
         dataset = DataSet(fileDir)
         dataset.load_all_data(case_insensitive=True, explicit_dir=True)
-        # dataset.plot_current()
+        dataset.plot_current()
         # --- For reflection data ---
         dataset.group_files(keywords=['type'])
         thz.subtract_baseline(dataset, show_graph=show_graph)
@@ -240,13 +246,16 @@ if __name__ == "__main__":
     # preprocess(fileDir)
     # --- Main analysis 
     dataset = DataSet(fileDir)
+    dataset.load_all_data(case_insensitive=True, explicit_dir=True)
+    dataset.convert_to_thzdata()
+    dataset.plot_current()
+    # breakpoint()
     show_graph = True
 
     fresh_load = False
     if fresh_load:
 
         dataset.load_all_data(case_insensitive=True, explicit_dir=True)
-        dataset.plot_current()
         # dataset.plot_current()
         thz.subtract_baseline(dataset, show_graph=show_graph)
         # thz.build_full_trace_reflection()
@@ -255,7 +264,7 @@ if __name__ == "__main__":
         # ---
 
 
-        dataset.group_files(keywords=['type', 'seri'])
+        dataset.group_files(keywords=['type'])
         dataset.grouping.show_matches()
 
 
@@ -302,8 +311,12 @@ if __name__ == "__main__":
     # thz.phase_correction(dataset, source='transfer')
 
     # thz.invert_nk(dataset, thickness_m=2.08e-3)
-    thz.invert_nk(dataset, thickness_m=350e-6)
-    thz.derive_eps_sigma(dataset)
+    # thz.invert_nk(dataset, thickness_m=350e-6)
+    thz.invert_nk(dataset, thickness_m=0.13e-3)
+
+
+    config_eps = {"derive": {"eps_background": 5}}
+    thz.derive_eps_sigma(dataset, config=config_eps)
 
     # n_window_freq = window_characterisation(dataset)
     # thz.invert_nk_reflection(

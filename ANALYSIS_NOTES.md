@@ -971,3 +971,130 @@ legacy's single real-phase `phaseex`→n. A future simplification would be to re
 the intercept once on the real unwrapped phase and carry it to `invert_nk` without
 re-unwrapping — deferred; current path is correct and tested. In practice the
 default-on anchor alone is sufficient; `remove_phase_offset` is optional polish.
+
+
+## §19  Substrate-sandwich model: opt-in Fabry-Pérot, explicit medium, continuity tracking  ★ (2026-06-19)
+
+Extended the already-wired substrate-sandwich grid inversion (`multilayer.py` +
+`invert_grid.py`; see `docs/sandwich_extraction_explained.md`) with three additions,
+all **additive and backward-compatible** — the defaults reproduce the previous
+output (regression-guarded, see below), and a config key turns each on for a
+deliberate run. No adapter change: `thz_adapter._grid_invert_*` already forward
+`config` verbatim, and the sandwich step spreads `**config.get('invert_grid', {})`,
+so the new keys flow through untouched. (Single source of defaults = the core; the
+config carries only deliberate overrides.)
+
+### 1. Fabry-Pérot is OPT-IN (`fabry_perot: False` default) — and why that flipped
+Initial instinct (2026-06-18) was FP **on** by default. Reversed it: we often run
+**thicker** samples whose internal echo is well separated in time and is **gated
+out** — that is the no-FP (gated) limit, and it must stay the default so existing
+pipelines are unchanged. The thin-sample case (echo overlaps the main pulse, can't
+gate) is the exception, so it opts in. FP re-enters via the existing
+`fabry_perot_factor` primitive.
+- **Which layers get an etalon term:** only the **thin** layer(s) being
+  characterised. The substrate slabs are always the thick, gatable element (mm-scale,
+  echoes separate), so they carry **no** etalon term even with `fabry_perot=True`.
+  - ASMSA (sample step): etalon on the sample layer **and** the empty reference gap.
+  - ASASA (substrate step): etalon on the **gap** only (matches MATLAB
+    `Cuvette_code`'s single `(1 ± r·r·P²)` term); substrate echoes assumed gated.
+  - free_standing: optional slab etalon (thin free films).
+- **Sign-convention caveat (flagged for step-2 validation):** our
+  `fabry_perot_factor` gives the textbook etalon `1/(1 − r²P²)` (resonant poles).
+  MATLAB `Cuvette_code` writes the gap denominator as `(1 − r23·r34·P²)` which, with
+  `r34 = −r23`, is `(1 + r23²P²)` — the **opposite** sign, no poles. This is a
+  genuine convention discrepancy, NOT yet resolved by derivation. Deliberately left
+  to **numerical validation on the Vasilis 200 K triplet** (step 2): if FP-on n(ω)
+  disagrees with MATLAB, the sign is the first suspect. Did not silently "correct"
+  either side.
+
+### 2. Explicit surrounding medium (`medium_index: 1.0` default = vacuum)
+Replaced the hard-coded air index `1` in the ASASA surround and the ASMSA empty-gap
+reference with one `medium_index` parameter (covers both — if you're in vacuum,
+everything outside the solid is vacuum; no physical case splits them). Default `1.0`
+= vacuum; pass ≈1.00027 for dry air at THz. Rationale: the medium sits in the empty
+**reference** gap and so does **not** fully cancel in the filled/empty ratio — it is
+a small but **systematic** phase bias `(ω/c)(n_med−1)·d_gap` on the extracted index
+(~0.017 rad for a 1 mm gap at 3 THz). Making it explicit documents the assumption
+instead of burying `1` in the math. "Air" measurements are treated as vacuum for now
+(dispersive air deferred). The ASASA closed form was re-expressed from primitives
+(`t(n_med,n_sub)·t(n_sub,n_med)`)² · exp(−i(n_sub−n_med)·2d·ω/c); with `medium=1` it
+is bit-identical to the legacy `[4n/(n+1)²]²` form (regression test asserts rtol 1e-12).
+
+### 3. Branch-continuity tracking (`continuity_tracking.enabled: False` default)
+New `_select_by_continuity`: instead of the global residual minimum at each bin
+(which can hop between branches of the transcendental equation frequency-to-frequency
+when FP is kept), restrict the candidate search to a `±search_half_width_cells`
+window around the **previous bin's** solution. The first trusted bin is seeded by the
+analytic guess (`_analytical_initial_guess`) so tracking starts on the physical
+branch; the loop walks `trusted_indices` ascending (frequency upward), which is the
+order continuity relies on. Empty-window fallback → global minimum (a bin is never
+left unsolved). Default off = previous global-min behaviour preserved.
+
+### Tests (thz_core: 196 → 196 pass; +16 new across multilayer + invert_grid)
+- Regression guards: default medium reproduces the legacy ASASA closed form and the
+  ASMSA air-gap reference **exactly** (rtol 1e-12).
+- medium: air vs vacuum differ; H→1 when n_sub=n_medium.
+- FP: requires `thickness_gap_m` when on (ASASA); changes the result; unity at no
+  contrast; explicit factor-form check (ASMSA); substrate-only and sandwich **round
+  trips** recover the true index with FP on.
+- continuity: unit tests on `_select_by_continuity` (local-over-global pick;
+  empty-window fallback); sandwich recovery with tracking enabled; bad half-width raises.
+
+### Step 2 — validation against MATLAB on the 200 K triplet  ★ DONE (2026-06-19)
+Script: `explorations/validate_sandwich_against_matlab.py`. It (a) replicates the
+MATLAB preprocessing exactly (pad → peak-centred Hamming → 2¹² FFT → 0.8–2.0 THz crop)
+so both solvers see the same `H = E_trans/E_ref`; (b) runs a faithful Python **port**
+of each MATLAB grid solver (their exact Fresnel/FP expressions + ±N continuity) as the
+reference; (c) runs `thz_core.invert_nk_grid` through the same `H`; (d) compares.
+Findings (run on `Vasilis_Data/data`, 200 K):
+
+- **Gated-limit model equivalence (pure algebra, no data):** `max|H_matlab −
+  H_thzcore|` over the candidate grid = **7.8e-6**, and that residual is entirely the
+  **speed-of-light constant difference** (MATLAB `2.997925e8` vs thz_core
+  `299792458.0`, ~1.4e-7 relative, acting on the ~150 rad substrate phase). The no-FP
+  models are otherwise identical. → thz_core asasa **is** the MATLAB substrate model in
+  the gated limit.
+- **Substrate, gated limit:** thz_core vs MATLAB-port `|Δn|` median **1.0e-4** (= grid
+  resolution), `|Δk|` median 5.6e-3. Agreement to grid resolution in the bulk.
+- **FP sign (substrate):** thz_core (textbook `1/(1−r²P²)`) vs MATLAB-as-shipped
+  (`1/(1+r0²P²)`) `|Δn|` median **1.3e-3** — small but systematic, as predicted. The
+  FP correction itself (thz_core on vs off) is `|Δn|` median 4e-4. **Verdict: the
+  substrate MATLAB has a FP-sign slip; thz_core's consistent textbook sign (which also
+  matches the *sample* MATLAB code) is correct.** We feed the **gated** (FP-off)
+  substrate index to the sample step anyway — the 1 mm slabs have well-separated,
+  gatable echoes, so FP on the substrate is not the right model regardless.
+- **Sample (ASMSA), the actual measurement goal:** thz_core FP-on vs MATLAB-port FP-on
+  `|Δn|` median **1.4e-3** (≈ grid resolution), `|Δk|` median 4.7e-4 — they overlay.
+  FP-off vs MATLAB(on) is 10× worse (`|Δn|` median 1.4e-2), confirming FP matters at
+  the ~1e-2 level here and thz_core-on tracks it correctly. Sample `n ≈ 2.16`, `k`
+  rises to the 0.2 search ceiling.
+- **Substrate sawtooth — diagnosed (2026-06-19), NOT the search range, NOT a thz_core
+  bug.** Samuel's measured params: substrate n ≈ 1.95, slab **0.9 mm** (not 1 mm), gap
+  60–120 µm (gap irrelevant to substrate n in the gated limit — it cancels). Re-centring
+  the range on 1.95 with d=0.9 mm moved the median to ~2.0 but the **sawtooth persisted**.
+  Root cause, from `n` via direct phase slope: the substrate `H` from the MATLAB's
+  manual **asymmetric zero-padding** (`150`/`210` samples) is a crude time-alignment that
+  does NOT match the true ~5.7 ps slab delay, so the unwrapped phase is cycle-ambiguous
+  (pinned ~0 at 0.8 THz when it should be ~−41 rad — off ~13 cycles) with a ~10 rad
+  non-linear residual. The grid seed at bin 0 therefore rails at the upper bound, and
+  continuity then **slides at exactly its window speed-limit** (max per-bin Δn = ±0.008,
+  0 violations — continuity is provably correct). So the input `H`, not the inverter, is
+  the problem. This is preprocessing-limited (the same class of issue as
+  [[transmission_phase_chain]] / [[robust_unwrap_design]]).
+- **Sample n is INSENSITIVE to the substrate sawtooth (the key result).** Feeding a flat
+  `n_sub = 1.95−0.01i` vs the sawtoothing `n_sub` gives the **same** sample `n`
+  (median 2.158 both; `|Δn|` med 0.002 = grid resolution, `|Δk|` med 0.0). The
+  differential filled/empty ratio cancels the thick-substrate phase, so the substrate
+  weak point does NOT compromise the science. → the sandwich pipeline is validated and
+  fit for sample extraction as-is.
+
+Overlay figure: `explorations/validate_sandwich_against_matlab.png`.
+
+### Next (paused for assessment)
+Step 2 done and passed; the sample extraction is validated and robust. Decisions/options
+for Samuel: (1) keep the textbook FP sign (recommended; matches the *sample* MATLAB and
+the physical etalon). (2) For an accurate substrate n, either measure it independently
+(single-slab transmission) or fix the substrate preprocessing with proper phase anchoring
+(reuse the phase-chain/robust-unwrap tooling) — the manual asymmetric padding is the weak
+link. (3) Pragmatically, the sample step can use a smooth/constant n_sub ≈ 1.95 with no
+measurable effect (shown above). Drude-Smith / conductivity (downstream) out of scope.
