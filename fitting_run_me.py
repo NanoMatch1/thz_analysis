@@ -10,7 +10,7 @@ from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
 from dataset_core.adapters import analysis_tools as tools
 
-def load_dataset(index):
+def load_dataset(index=None):
     dataset = DataSet("C:/Users/Samuel/matchbook")
     dataset.load_database(index=index)
 
@@ -52,7 +52,7 @@ def load_dataset(index):
     # dataset.save_state()  # Save the fit results to a .state file for later use
     # dataset.save_database()  # Save the updated processing_dict to the database
 
-load_dataset(index=40)  # Change the index to load a different dataset
+load_dataset()  # Change the index to load a different dataset
     
 # freq = np.linspace(0.1e12, 5e12, 300)
 # omega = 2 * np.pi * freq

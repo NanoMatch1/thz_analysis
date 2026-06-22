@@ -74,12 +74,13 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     # --- THE coupling step: isolate + symmetric window both reflections on one
     #     shared axis. center_mode 'pad' keeps the full pulse (pads the short side
     #     with zeros); 'crop' shrinks to the short side. ---
-    thz.isolate_and_window(
-        dataset,
-        config={'window': config['window']},
-        center_mode=config.get('center_mode', 'crop'),
-        show_graph=True,
-    )
+    # thz.isolate_and_window(
+    #     dataset,
+    #     config={'window': config['window']},
+    #     center_mode=config.get('center_mode', 'crop'),
+    #     show_graph=True,
+    # )
+    thz.cent
     # breakpoint()
     # thz.isolate_regions(dataset, config)
     # thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
@@ -209,7 +210,7 @@ if __name__ == '__main__':
 
     ROOT_DIR = r'C:\Users\Sam\Data\THz\CNT-17'
     ROOT_DIR = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-16\A'
-    ROOT_DIR = r'C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_19_CNT\test1'
+    ROOT_DIR = r'C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_19_CNT\test1\export'
 
     pipeline_config = {
         # ---- path selection ----
@@ -217,7 +218,7 @@ if __name__ == '__main__':
         'processing_path': 'segmented',   # 'shared_axis' (new) or 'segmented' (old)
         'root_dir': ROOT_DIR,
         'headless': False,                  # True -> no SpanSelectors / plot windows
-        'show_graphs': False,
+        'show_graphs': True,
 
         # ---- geometry / inversion ----
         'theta_external_deg': 45.0,
@@ -225,21 +226,23 @@ if __name__ == '__main__':
         'n_sio2': 1.95,
 
         # ---- shared-axis path ----
+        'centering': {'peak_mode': {}, 'taper_ps': 1.0},
         'center_mode': 'crop',               # 'pad' keeps the pulse tail; 'crop' shrinks
         'n_fft': 500,                      # FFT length (zero-pad for display resolution)
         'regions': {                        # first/second reflection regions (ps)
             # The second region's trailing edge excludes the GaP echo (no crop needed).
-            'first_reflection':  (152.0, 158.5),
-            'second_reflection': (161.0, 168.0),
+            'first_reflection':  (152.8, 160.25),
+            'second_reflection': (176.3, 185.0),
         },
 
         # ---- window (shared by both paths) ----
         'window': {'type': 'hann', 'alpha': 1.0},
 
         # ---- segmented path only ----
-        'gates': {'first_reflection': (152.0, 158.5), 'second_reflection': (161.0, 168.0)},
+        'gates': {'first_reflection':  (152.8, 160.25),
+            'second_reflection': (176.3, 185.0)},
         'centering': {'peak_mode': 'auto', 'taper_ps': 1.0},
-        'pad': {'n_samples': 4096},
+        'pad': {'n_samples': 500},
         'save_segmented': False,
     }
 
@@ -248,6 +251,7 @@ if __name__ == '__main__':
 
     dataset = DataSet(ROOT_DIR)
     dataset.load_all_data(case_insensitive=True, explicit_dir=True)
+    # dataset.plot_current()
 
     processing_path = pipeline_config['processing_path']
     print(f"\n=== processing path: {processing_path} ===\n")
@@ -260,12 +264,12 @@ if __name__ == '__main__':
 
     report(result)
 
-    # if show:
-    breakpoint()
-    for filename, data_obj in dataset.data.items():
-        print(f"\n=== {filename} ===")
-        breakpoint()
-        # thz.plot_nk(data_obj, freq_range=(0.0, 10))
+    # # if show:
+    # breakpoint()
+    # for filename, data_obj in dataset.data.items():
+    #     print(f"\n=== {filename} ===")
+    #     breakpoint()
+    #     # thz.plot_nk(data_obj, freq_range=(0.0, 10))
 
     thz.result_viewer(result)
 

@@ -1090,11 +1090,69 @@ Findings (run on `Vasilis_Data/data`, 200 K):
 
 Overlay figure: `explorations/validate_sandwich_against_matlab.png`.
 
+### Step 2b — legacy Novelli cross-check  ★ (2026-06-21)
+Script: `explorations/run_legacy_novelli_two_step.py`. Drives the group's legacy-thz
+helpers (M. Ballabio; `dataimport`/`fft_err`/`padding`/`phase_interpolation`) in a
+two-step workflow WITHOUT editing `main_TDS.py`. Step 1: air ref + substrate sample,
+ns=1 → free-standing slab (the Novelli Fresnel factor collapses to `(n+1)²/4n`). Step 2:
+substrate ref + sample sample, ns=n_sub(ω). Analytic, no FP (its honest nature; an
+independent baseline). Findings:
+
+- **The Novelli FORMULA is correct.** Fed a properly preprocessed sample H (MATLAB-style
+  symmetric padding), the analytic `n = 1 + Δφ·c/(ωd)` returns **n_sample ≈ 2.15**,
+  matching thz_core/MATLAB (2.16). The physics agrees across all three methods.
+- **The legacy bundled PREPROCESSING is the weak link, not the inversion.** Run end-to-end
+  with the legacy's own `centerpad` + `phaseoffset`, the sample comes out
+  **n ≈ 6.71 (non-physical)** — the centre-pad/offset mishandles the inter-pulse delay on
+  this thick-substrate cuvette data. Decisive test: same formula, MATLAB preprocessing →
+  2.15; legacy preprocessing → 6.71. So legacy-thz as-shipped is NOT reliable here; its
+  time-domain front-end is the problem.
+- **Substrate measurement is TWO slabs** (empty cuvette = air|sub|gap|sub|air): step 1
+  must use the 2-slab path (2·0.9 mm). With that, legacy gives a smooth flat
+  **n_sub ≈ 2.47**; the legacy phase is clean and linear (slope = absolute, intercept ≈ 0,
+  no cycle ambiguity).
+- **This explains the grid sawtooth: the true n_sub is ABOVE the grid ceiling.** Extending
+  the thz_core substrate range past 2.02 (to 2.6 / 3.0, identical results) un-rails it →
+  n_sub ≈ **2.21** (MATLAB preprocessing). So n_sub is preprocessing-sensitive
+  (legacy 2.47 vs grid 2.21) but unambiguously **≫ the 1.71–1.80 the MATLAB searched and
+  > the 1.95 estimate** — the original sawtooth was the 2.02 ceiling clipping the answer.
+
+### Step 2c — substrate puzzle RESOLVED: it is fused silica; the inflation is preprocessing  ★ (2026-06-21)
+Samuel: the substrate is fused silica (SiO₂), known n ≈ 1.96 at THz (cf.
+[[window_selfref_evaluation]] n_SiO2=1.964) — so the 2.2–2.5 from grid+legacy is wrong.
+Decisive check = **raw time-domain peak-to-peak delays** (preprocessing-independent):
+- substrate↔air peak delay = **5.3 ps** → over the 1.8 mm two-slab path, **n_sub = 1.88**
+  (and n=1.96 needs 1.66 mm = 0.83 mm/slab, consistent with ~0.9 mm windows). = fused silica. ✓
+- sample↔substrate peak delay = **0.5 ps** → **n_sample = 2.15** ✓ (matches all methods).
+
+So **the inflated substrate n (grid 2.21 / legacy 2.47) is a PREPROCESSING artifact**: both
+the MATLAB asymmetric zero-pad (hardcodes ~3 ps shift) and the legacy `centerpad` push the
+substrate phase ~3 ps beyond the true 5.3 ps delay. Extending the grid range only let it
+settle on the inflated value instead of railing — it did NOT fix the cause. The genuine
+substrate n is ~1.9 (fused silica). Sample n is unaffected (differential cancels it).
+
+### Step 2d — thz_core's OWN preprocessing gives the correct n  ★ CONFIRMED (2026-06-21)
+Script: `explorations/extract_cuvette_via_thzcore_preprocessing.py`. Ran the same 200 K
+triplet through thz_core's real transmission front-end — each pulse windowed IN PLACE on the
+shared time axis (`window_time`), `fft_spectrum`, `transfer_function`, analytic `invert_nk`
+— with NO asymmetric padding. Result:
+- **substrate n = 1.949, flat [1.946, 1.959]** over the 2-window 1.8 mm path = **fused silica ✓**
+  (the 0.9 mm 1-slab case gives 2.90 ≈ 2×, confirming the two-window path).
+- **sample n = 2.151** ✓ (matches all methods).
+
+So thz_core's careful in-place windowing introduces no spurious group delay and recovers the
+textbook value, where the MATLAB/legacy hardcoded padding does not. **Confirmed: the
+front-end was the entire discrepancy** (Samuel's instinct — both pipelines give ~1.96 on a
+normal silica slab — was right; this cuvette data just exposed the crude-padding front-ends).
+Note Samuel previously cross-checked both pipelines on another fused silica at ~1.96.
+
 ### Next (paused for assessment)
-Step 2 done and passed; the sample extraction is validated and robust. Decisions/options
-for Samuel: (1) keep the textbook FP sign (recommended; matches the *sample* MATLAB and
-the physical etalon). (2) For an accurate substrate n, either measure it independently
-(single-slab transmission) or fix the substrate preprocessing with proper phase anchoring
-(reuse the phase-chain/robust-unwrap tooling) — the manual asymmetric padding is the weak
-link. (3) Pragmatically, the sample step can use a smooth/constant n_sub ≈ 1.95 with no
-measurable effect (shown above). Drude-Smith / conductivity (downstream) out of scope.
+Sample extraction is validated and robust across all three methods (thz_core ≈ MATLAB ≈
+Novelli-formula ≈ 2.16). Substrate is fused silica (~1.9); grid/legacy over-estimates are
+preprocessing artifacts (raw peak delay confirms). Open items for Samuel: (1) keep the textbook FP sign
+(recommended). (2) Substrate n is genuinely uncertain (~2.2–2.5, preprocessing-sensitive)
+and higher than assumed — **extend the substrate search range to ~2.6** and ideally
+measure the substrate independently; what material/expected n is it? (3) The legacy code's
+value as an independent check is limited to its (correct) formula — its preprocessing
+needs replacing to be usable on cuvette data. (4) Sample step can use a smooth/constant
+n_sub with no measurable effect. Drude-Smith / conductivity (downstream) out of scope.
