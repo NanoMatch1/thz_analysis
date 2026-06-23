@@ -39,7 +39,7 @@ SUBSAMPLE_TIMING_CORRECTION = True
 
 def normalise(dataset: DataSet, config: dict | None = None, show_graph: bool = False) -> DataSet:
     """Normalise each trace in the dataset by its max absolute amplitude."""
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     bounds = config.get('bounds', None)
     show_graph = config.get('show_graph', show_graph) # default to kwarg if not in config
 
@@ -586,7 +586,7 @@ def window_reflection_pulses(
     ``isolate_reflection_regions`` first so that the peak search only sees the
     target pulse.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
     if center_mode not in ('crop', 'pad'):
         raise ValueError("center_mode must be 'crop' or 'pad'.")
@@ -720,7 +720,7 @@ def isolate_and_window(
     open: (1) the windowed pulses on the shared time axis, and (2) the pulses with
     their window functions on a sample-index axis — each as first/second subplots.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
     if center_mode not in ('crop', 'pad'):
         raise ValueError("center_mode must be 'crop' or 'pad'.")
@@ -963,7 +963,7 @@ def window_pulses_fixed_width(
     trace edge for the full half-width, the overlapping bins still use the
     identical window weights and a clip warning is printed (shrink ``half_width_ps``).
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
     window_type = window_config.get('type', 'hann')
     alpha = float(window_config.get('alpha', 1.0))
@@ -1242,7 +1242,7 @@ def _plot_with_snr_mask(
 
 def _subtract_baseline_reflection(dataset: DataSet, config: dict | None = None) -> DataSet:
     """Specific pipeline step to subtract baseline from both reflections in a THzDataReflection."""
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
 
     show_graph = bool(config.get('show_graph', False))
@@ -1861,7 +1861,7 @@ def center_pulse(
     ``processing_dict['pre_centering']``.  Call after ``centering_manual``
     and before ``window_time``.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     centering_cfg = config.get('centering', {})
     peak_mode = centering_cfg.get('peak_mode', 'auto')
     taper_ps = centering_cfg.get('taper_ps', 0.5)
@@ -1921,7 +1921,7 @@ def window_time(
         Which data segment to window.  Call once per segment for explicit,
         inspectable processing.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
 
     holders = [
         (fn, _resolve_segment(obj, segment))
@@ -2428,7 +2428,7 @@ def zero_pad(
         Which data segment to pad.  Call once per segment.  Using ``n_samples``
         (absolute) for both segments ensures they share the same FFT frequency grid.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     pad_cfg = config.get('pad', {})
 
     # Part 1: shared absolute-time axis (group-delay-preserving). Idempotent if
@@ -2543,7 +2543,7 @@ def fft_spectrum(
         zero-padded to different lengths (e.g. when ``extend_factor`` rather
         than ``n_samples`` was used in ``zero_pad``).
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
 
     for filename, data_obj in dataset.data.items():
         holder = _resolve_segment(data_obj, segment)
@@ -2667,7 +2667,7 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
     """
     import os
 
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     transfer_cfg = config.get('transfer', {})
     apply_snr_mask = transfer_cfg.get('apply_snr_mask', True)
     self_reference = transfer_cfg.get('self_reference', False)
@@ -2844,7 +2844,7 @@ def remove_phase_offset(
     show_graph : bool
         Overlay the unwrapped phase before/after per sample.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     phase_cfg = config.get('phase_offset', {})
     band_thz = phase_cfg.get('band_thz', (0.3, 2.0))
     use_snr_mask = phase_cfg.get('use_snr_mask', True)
@@ -2925,7 +2925,7 @@ def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
     the fact. It overwrites the existing 'transfer_mask' and refreshes the
     per-spectrum 'snr_mask' arrays on both sample and reference.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -2954,7 +2954,7 @@ def trusted_band_mask(dataset: DataSet, config: dict | None = None) -> DataSet:
 
 def invert_nk(dataset: DataSet, thickness_m: float, config: dict | None = None) -> DataSet:
     """Extract refractive index n and extinction coefficient k for each sample."""
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -3056,7 +3056,7 @@ def invert_nk_reflection(
         Window refractive index for the 'window' geometry (scalar, or a
         per-frequency n_SiO2(f) array). Ignored for 'gold'.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     theta_external_rad = np.deg2rad(theta_deg)
 
     n_incident, theta_internal_rad, r_reference_value = _resolve_reflection_geometry(
@@ -3258,7 +3258,7 @@ def invert_nk_grid(dataset: DataSet, config: dict | None = None) -> DataSet:
 
     For "substrate_sandwich", run "substrate_only" first so that substrate n,k are available.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     geometry = config.get("invert_grid", {}).get("geometry", "free_standing")
 
     if geometry == "free_standing":
@@ -3379,10 +3379,15 @@ def _grid_invert_substrate_sandwich(dataset, config):
         _store_nk_grid(data_obj, freq, n, k, metrics)
 
 
-def derive_eps_sigma(dataset: DataSet) -> DataSet:
-    """Derive complex permittivity and optical conductivity from n, k."""
-    # config = config or {}
-    config = dataset.config or {}
+def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Derive complex permittivity and optical conductivity from n, k.
+
+    Reads ``config['derive']['eps_background']`` (the high-frequency / background
+    permittivity subtracted to isolate the free-carrier conductivity). An explicit
+    ``config`` overrides; otherwise the dataset's own config is the single source
+    of truth.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -3474,7 +3479,7 @@ def sweep_time_shift(
     ``n``, ``k``, ``sigma1``, ``sigma2`` (each shape ``(n_shifts, n_freq)``),
     plus ``theta_internal_rad`` and ``r_reference``.
     """
-    config = config or {}
+    config = config or getattr(dataset, 'config', None) or {}
     filename, data_obj = _select_sample(dataset, sample)
     proc = data_obj.processing_dict
     H = proc.get('transfer_H')

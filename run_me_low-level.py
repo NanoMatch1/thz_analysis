@@ -66,6 +66,8 @@ config: dict = {
         "n_fft": 2000,            # shared FFT length (zero-pad for display resolution)
     },
     "transfer": {
+        "self_reference": True,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
+        "apply_snr_mask": True,     # build the SNR-based trusted-band mask
         "min_ref_amp_rel": 1e-3,
         "regularization_eps": 1e-30,
         "unwrap_phase": True,
@@ -75,10 +77,10 @@ config: dict = {
         "tail_fraction": 0.25,
         "min_contiguous_bins": 3,
     },
-    "invert": {
-        "max_iterations": 30,
-        "convergence_tol": 1e-12,
-        "eps_background": 11.7# Si 
+    "derive": {
+        # Background permittivity subtracted to isolate free-carrier conductivity:
+        # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum; 11.7 = silicon.
+        "eps_background": 1,
     },
 }
 
@@ -102,9 +104,9 @@ dataset.grouping.show_matches()
 # --- T0 calibration on the FRONT pulse (roi locks the cross-correlation onto it) ---
 first_region = config['regions'].get('first_reflection')
 correlation_roi = first_region if (first_region and None not in first_region) else None
-thz.align_to_reference(
-    dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=False,
-)
+# thz.align_to_reference(
+#     dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=True,
+# )
 
 thz.subtract_baseline(dataset)
 
@@ -116,9 +118,8 @@ thz.define_reflection_regions(dataset, config)
 thz.window_pulses_fixed_width(
     dataset,
     half_width_ps=config['window']['half_width_ps'],
-    config={'window': config['window']},
     show_graph=config['general']['show_graph'],
-)
+)  # window config read from dataset.config (single source of truth)
 
 # dataset.plot_current()
 
@@ -146,11 +147,9 @@ if config['general']['show_graph']:
     thz.plot_fft(dataset, normalise=False, scale='')
 
 # --- self-referenced transfer function: H = (Y2/Y1)_sample / (Y2/Y1)_ref.
-#     self_reference=True forms the front/back ratio within each acquisition first,
-#     so the sample<->reference timing cancels structurally. ---
-thz.transfer_function(
-    dataset, config={'transfer': {'self_reference': True}}, ref_type='reference',
-)
+#     transfer + mask settings (incl. self_reference) come from dataset.config so the
+#     SNR mask threshold etc. actually carry through (single source of truth). ---
+thz.transfer_function(dataset, ref_type='reference')
 
 # --- reflection-mode inversion: H -> n, k for the back-face (SiO2->sample)
 #     interface. geometry='window' uses the SiO2 window as the incidence medium. ---
@@ -165,7 +164,7 @@ thz.invert_nk_reflection(
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
 
-# dataset.save_database()
+dataset.save_database()
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)

@@ -655,7 +655,6 @@ class DataSet:
 
             figure_obj = self._generate_figure_object('main')
             data_object.plot_current(figure_obj=figure_obj, **kwargs)
-            breakpoint()
         
         plt.show()
 
