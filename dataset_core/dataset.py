@@ -220,6 +220,7 @@ class DataSet:
         seriesname: str | None = None,
         metadata: dict | None = None,
         file_metadata: dict | None = None,
+        config: dict | None = None,
     ) -> None:
         self.file_dir = file_dir
         self.data = data_service if data_service is not None else DataService()
@@ -232,6 +233,7 @@ class DataSet:
         self.file_metadata = dict(file_metadata or {})
         self.database_service = database_service if database_service is not None else DatabaseService()
 
+        self.config = config if config is not None else {}
         self.history = {}
 
     @property
@@ -653,6 +655,7 @@ class DataSet:
 
             figure_obj = self._generate_figure_object('main')
             data_object.plot_current(figure_obj=figure_obj, **kwargs)
+            breakpoint()
         
         plt.show()
 

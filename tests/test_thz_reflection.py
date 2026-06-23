@@ -56,9 +56,9 @@ def test_from_thzdata_basic():
 
     assert isinstance(refl, THzDataReflection)
     assert refl.filename == "sample.acc"
-    assert refl.first_segment is first
+    assert refl.first_reflection is first
     assert len(refl.data_list) == 3
-    assert len(refl.first_segment.data_list) == 3
+    assert len(refl.first_reflection.data_list) == 3
 
 
 def test_all_segments_order():
@@ -67,7 +67,7 @@ def test_all_segments_order():
     refl = THzDataReflection.from_thzdata(second, first)
     segs = refl.all_segments()
     assert segs[0] == ("first_reflection", first)
-    assert segs[1] == ("second_reflection", refl)
+    assert segs[1] == ("second_reflection", second)
 
 
 def test_data_property_points_to_second():
@@ -82,8 +82,10 @@ def test_isinstance_hierarchy():
     second = _make_thzdata("s.acc")
     first = _make_thzdata("s.acc")
     refl = THzDataReflection.from_thzdata(second, first)
-    assert isinstance(refl, THzData)
     assert isinstance(refl, THzDataReflection)
+    assert not isinstance(refl, THzData), "container must not inherit THzData"
+    assert isinstance(refl.second_reflection, THzData)
+    assert isinstance(refl.first_reflection, THzData)
 
 
 def test_repr_contains_class_name():
@@ -129,8 +131,8 @@ def test_dataset_reflection_layout_creates_thzdatareflection():
         for fname, obj in items:
             assert isinstance(obj, THzDataReflection), \
                 f"'{fname}' should be THzDataReflection, got {type(obj).__name__}"
-            assert obj.first_segment is not None
-            assert obj.first_segment.data.shape[0] == 60  # first_reflection has 60 pts
+            assert obj.first_reflection is not None
+            assert obj.first_reflection.data.shape[0] == 60  # first_reflection has 60 pts
             assert obj.data.shape[0] == 100               # second_reflection has 100 pts
     finally:
         shutil.rmtree(tmpdir)
@@ -162,7 +164,7 @@ def test_explicit_dir_bypasses_reflection_layout():
 
 def test_center_pulse_first_reflection_auto():
     """Auto-mode centering prepends samples so the peak is at the midpoint."""
-    # Build a first_segment where the pulse sits early: 20 samples before peak,
+    # Build a first_reflection where the pulse sits early: 20 samples before peak,
     # 60 samples after — so the peak needs 40 samples prepended to centre it.
     n_pts = 81  # indices 0..80, peak at 20
     dt_s = 7.5e-15
@@ -185,8 +187,8 @@ def test_center_pulse_first_reflection_auto():
 
     center_pulse(_FakeDataset(), segment='first_reflection', config={'centering': {'peak_mode': 'auto', 'taper_ps': 0.0}})
 
-    t_new = refl.first_segment.data[:, 0]
-    y_new = refl.first_segment.data[:, 1]
+    t_new = refl.first_reflection.data[:, 0]
+    y_new = refl.first_reflection.data[:, 1]
     new_peak_idx = int(np.argmax(np.abs(y_new)))
 
     n_before_new = new_peak_idx
@@ -194,8 +196,8 @@ def test_center_pulse_first_reflection_auto():
     assert n_before_new == n_after_new, (
         f"Peak should be centred: n_before={n_before_new}, n_after={n_after_new}"
     )
-    assert refl.first_segment.processing_dict.get('pre_centering') is not None
-    assert refl.first_segment.processing_dict['centering_info']['n_prepend'] == 40
+    assert refl.first_reflection.processing_dict.get('pre_centering') is not None
+    assert refl.first_reflection.processing_dict['centering_info']['n_prepend'] == 40
 
 
 def test_center_pulse_first_reflection_already_centred():
@@ -220,8 +222,8 @@ def test_center_pulse_first_reflection_already_centred():
 
     center_pulse(_FakeDataset(), segment='first_reflection', config={'centering': {'peak_mode': 'auto', 'taper_ps': 0.0}})
 
-    assert refl.first_segment.processing_dict.get('pre_centering') is None
-    assert len(refl.first_segment.data) == n_pts  # unchanged
+    assert refl.first_reflection.processing_dict.get('pre_centering') is None
+    assert len(refl.first_reflection.data) == n_pts  # unchanged
 
 
 def test_center_pulse_first_reflection_taper_smooth():
@@ -249,8 +251,8 @@ def test_center_pulse_first_reflection_taper_smooth():
     taper_ps = 0.3  # ~40 samples at 7.5 fs/pt
     center_pulse(_FakeDataset(), segment='first_reflection', config={'centering': {'peak_mode': 'auto', 'taper_ps': taper_ps}})
 
-    n_prepend = refl.first_segment.processing_dict['centering_info']['n_prepend']
-    y_new = refl.first_segment.data[:, 1]
+    n_prepend = refl.first_reflection.processing_dict['centering_info']['n_prepend']
+    y_new = refl.first_reflection.data[:, 1]
 
     # Pad region should be identically zero
     assert np.all(y_new[:n_prepend] == 0.0), "Prepended region must be zero"
@@ -290,7 +292,7 @@ def test_center_pulse_main_trace():
 
 
 def test_center_pulse_first_reflection_skips_plain_thzdata():
-    """Plain THzData objects (no first_segment) are skipped without error."""
+    """Plain THzData objects (no first_reflection) are skipped without error."""
     second = _make_thzdata("s.acc", n_pts=100)
 
     class _FakeData:

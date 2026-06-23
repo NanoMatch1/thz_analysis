@@ -17,7 +17,7 @@ sample's own dispersion, per the prototype) AND swept, so we can see (a) whether
 plausible d lifts n above 1 and (b) how sensitive n is to d.  A robust d from the
 second-reflection pulse round-trip delay is the follow-up refinement.
 
-Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/deembed_air_gap_realdata.py
+Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/air_gap_cnt_reflection/deembed_air_gap_realdata.py
 """
 
 from __future__ import annotations

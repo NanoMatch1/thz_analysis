@@ -98,14 +98,17 @@ def _build_data_dict(dataset: DataSet) -> dict:
 def _resolve_segment(data_obj, segment: str):
     """Return the data holder for *segment*, or None to skip this data_obj.
 
-    ``'second_reflection'`` → *data_obj* itself (all object types).
-    ``'first_reflection'``  → *data_obj.first_segment* for
+    ``'second_reflection'`` → ``data_obj.second_reflection`` for
+    ``THzDataReflection``; *data_obj* itself for plain ``THzData``.
+    ``'first_reflection'``  → ``data_obj.first_reflection`` for
     ``THzDataReflection`` only; returns ``None`` for plain ``THzData``.
     """
     if segment == 'first_reflection':
         if not isinstance(data_obj, THzDataReflection):
             return None
-        return data_obj.first_segment
+        return data_obj.first_reflection
+    if isinstance(data_obj, THzDataReflection):
+        return data_obj.second_reflection
     return data_obj
 
 
@@ -254,7 +257,7 @@ def define_reflection_gates(
 def build_full_trace_reflection(dataset: DataSet) -> DataSet:
     """Wrap each loaded full trace into a THzDataReflection WITHOUT cropping to gates.
 
-    Both segments (``first_segment`` and the primary/second object) start as
+    Both segments (``first_reflection`` and ``second_reflection``) start as
     independent copies of the **whole** trace on one shared time axis. The
     reflection regions are isolated later by ``isolate_and_window`` — so the two
     pulses keep a single, shared axis and their true inter-pulse delay.
@@ -300,7 +303,7 @@ def define_reflection_regions(
     ``first_region`` / ``second_region`` attributes (self-describing) and mirrored
     back into ``config['regions']`` for headless repeats.
     """
-    config = config or {}
+    config = dataset.config or config or {}
     requested_regions = config.get('regions', {})
     region_names = ('first_reflection', 'second_reflection')
 
@@ -330,6 +333,23 @@ def define_reflection_regions(
 
     config['regions'] = resolved_regions
     return resolved_regions
+
+def generate_reflection_segments(dataset: DataSet) -> DataSet:
+    """Generates the THzDataReflection object from the full trace and defined regions. Required structure for the processing pipeline."""
+    regions = dataset.config.get('regions', None)
+    if regions is None:
+        raise ValueError("Reflection regions must be defined in the dataset config before generating segments.")
+    
+    for filename, data_obj in dataset.data.items():
+        first_reflection = _crop_thzdata_to_gate(data_obj, *regions['first_reflection'])
+        second_reflection = _crop_thzdata_to_gate(data_obj, *regions['second_reflection'])
+        # from_thzdata(second, first): pass second-reflection first, first-reflection second.
+        reflection_obj = THzDataReflection.from_thzdata(second_reflection, first_reflection)
+        dataset.data[filename] = reflection_obj
+    
+    print("Segments generated for all traces based on defined reflection regions.")
+
+    return dataset
 
 
 def _plan_centered_window(
@@ -413,7 +433,8 @@ def _windowed_pulse_on_common_axis(
     peak (``pad`` mode). A symmetric window (``crop``) is the special case where the
     two sides have equal width. Returns ``(windowed_amplitude, window_function)``.
     """
-    shape = str(window_config.get('type', 'hann')).lower()
+    # shape = str(window_config.get('type', 'hann')).lower()
+    shape = 'hann'  # force symmetric Hann for now - asymmetry is bad
     alpha = float(window_config.get('alpha', 1.0))
     peak_time = plan['peak_time_seconds']
     window_start = plan['window_start_seconds']
@@ -442,20 +463,229 @@ def _windowed_pulse_on_common_axis(
 
     return common_amplitude * window_function, window_function
 
-def isolate_regions(
+def isolate_reflection_regions(
     dataset: DataSet,
-    config: dict | None = None,
-    center_mode: str = 'crop',
-    show_graph: bool = False,) -> DataSet:
-    """First isolate the two reflection regions, then check the peak position. If not centered, pad the window with a taper to ensure smoothness. This function replaces the previous `isolate_and_window` function and provides a more simple and robust approach to handling reflection regions.
-    
-    The key message here is to ensure that the windowing is done symmetrically about the peak. Asymmetry will drive the centroid away from the peak, which is wrong. The windowing should always be symmetric about the peak, and if the region is asymmetric, the window should be padded with a taper to ensure smoothness.
+    show_graph: bool = False,
+) -> DataSet:
+    """Zero each reflection's data outside its defined region.
 
-    This step is only to isolate and pad, the next step is the windowing.
+    Reads ``first_region`` / ``second_region`` (ps bounds set by
+    ``define_reflection_regions``) from each ``THzDataReflection`` and masks
+    everything outside the respective region to zero on the shared time axis.
+    This removes neighbouring pulses and instrument echoes before windowing.
+
+    Must be called after ``build_full_trace_reflection`` and
+    ``define_reflection_regions``.  Call ``window_reflection_pulses`` next to
+    apply the apodization taper.
     """
+    reflection_items = [
+        (fn, obj) for fn, obj in dataset.data.items()
+        if isinstance(obj, THzDataReflection)
+    ]
+    if not reflection_items:
+        print("[isolate_reflection_regions] No THzDataReflection objects found, skipping.")
+        return dataset
+
+    # Validate shared time axis before touching any data.
+    common_time_seconds = reflection_items[0][1].first_reflection.data[:, 0]
+    for filename, reflection_obj in reflection_items:
+        t = reflection_obj.first_reflection.data[:, 0]
+        if t.shape != common_time_seconds.shape:
+            raise ValueError(
+                f"'{filename}' time axis length ({t.size}) differs from the first file "
+                f"({common_time_seconds.size}); run global_truncate before isolating."
+            )
+
+    graph_records = {}
+    for filename, reflection_obj in reflection_items:
+        if reflection_obj.first_reflection is None or reflection_obj.second_reflection is None:
+            raise ValueError(
+                f"'{filename}' has no regions defined; run define_reflection_regions first."
+            )
+
+        first_holder = reflection_obj.first_reflection
+        second_holder = reflection_obj.second_reflection
+        time_seconds = first_holder.data[:, 0]
+
+        first_region_s = (reflection_obj.first_reflection[0] / _S_TO_PS,
+                          reflection_obj.first_reflection[1] / _S_TO_PS)
+        second_region_s = (reflection_obj.second_reflection[0] / _S_TO_PS,
+                           reflection_obj.second_reflection[1] / _S_TO_PS)
+
+        first_raw = first_holder.data[:, 1].copy()
+        second_raw = second_holder.data[:, 1].copy()
+
+        first_mask = (time_seconds >= first_region_s[0]) & (time_seconds <= first_region_s[1])
+        second_mask = (time_seconds >= second_region_s[0]) & (time_seconds <= second_region_s[1])
+
+        first_isolated = first_raw * first_mask
+        second_isolated = second_raw * second_mask
+
+        first_holder.processing_dict['pre_isolation'] = first_holder.data.copy()
+        second_holder.processing_dict['pre_isolation'] = second_holder.data.copy()
+
+        first_holder.data = np.column_stack((time_seconds, first_isolated))
+        second_holder.data = np.column_stack((time_seconds, second_isolated))
+
+        print(
+            f"[isolate_reflection_regions] '{filename}': "
+            f"first [{reflection_obj.first_reflection[0]:.2f}, {reflection_obj.first_reflection[1]:.2f}] ps "
+            f"({first_mask.sum()} samples kept); "
+            f"second [{reflection_obj.second_reflection[0]:.2f}, {reflection_obj.second_reflection[1]:.2f}] ps "
+            f"({second_mask.sum()} samples kept)."
+        )
+
+        graph_records[filename] = dict(
+            time_seconds=time_seconds,
+            first=dict(raw=first_raw, isolated=first_isolated),
+            second=dict(raw=second_raw, isolated=second_isolated),
+        )
+
+    if show_graph and graph_records:
+        _plot_isolated_regions(graph_records)
+
+    return dataset
 
 
+def _plot_isolated_regions(graph_records: dict) -> None:
+    """Diagnostic: full trace (grey) with the isolated regions overlaid."""
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    fig.suptitle('isolate_reflection_regions — regions extracted from full trace')
+    for filename, record in graph_records.items():
+        time_ps = record['time_seconds'] * _S_TO_PS
+        axes[0].plot(time_ps, record['first']['raw'], color='0.75', lw=0.8)
+        axes[0].plot(time_ps, record['first']['isolated'], lw=1.3, label=filename)
+        axes[1].plot(time_ps, record['second']['raw'], color='0.75', lw=0.8)
+        axes[1].plot(time_ps, record['second']['isolated'], lw=1.3, label=filename)
+    axes[0].set_title('First reflection')
+    axes[1].set_title('Second reflection')
+    axes[0].legend(fontsize=7)
+    axes[1].legend(fontsize=7)
+    axes[1].set_xlabel('time (ps)')
+    plt.show()
 
+
+def window_reflection_pulses(
+    dataset: DataSet,
+    center_mode: str = 'crop',
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Apodize both reflections of each THzDataReflection with a peak-anchored window.
+
+    Plans and applies a Hann (or Tukey) window centred on the pulse peak for
+    both the first and second reflection of every ``THzDataReflection``.  The
+    window tapers to zero at both edges so both sides of the taper are smooth.
+
+    - ``center_mode='crop'``: symmetric window centred on the peak — half-width
+      is the SHORTER of pre/post peak.  No centroid shift.
+    - ``center_mode='pad'``: window spans the full region.  Keeps all region
+      data; mildly asymmetric about the peak when the region is.
+
+    Reads ``first_region`` / ``second_region`` (ps) from each object.  Call
+    ``isolate_reflection_regions`` first so that the peak search only sees the
+    target pulse.
+    """
+    config = config or {}
+    window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
+    if center_mode not in ('crop', 'pad'):
+        raise ValueError("center_mode must be 'crop' or 'pad'.")
+
+    reflection_items = [
+        (fn, obj) for fn, obj in dataset.data.items()
+        if isinstance(obj, THzDataReflection)
+    ]
+    if not reflection_items:
+        print("[window_reflection_pulses] No THzDataReflection objects found, skipping.")
+        return dataset
+
+    common_time_seconds = reflection_items[0][1].first_reflection.data[:, 0]
+
+    graph_records = {}
+    for filename, reflection_obj in reflection_items:
+        if reflection_obj.first_reflection is None or reflection_obj.second_reflection is None:
+            raise ValueError(
+                f"'{filename}' has no regions defined; run define_reflection_regions first."
+            )
+
+        first_holder = reflection_obj.first_reflection
+        second_holder = reflection_obj.second_reflection
+        time_seconds = first_holder.data[:, 0]
+
+        if time_seconds.shape != common_time_seconds.shape:
+            raise ValueError(
+                f"'{filename}' time axis is not aligned with the others "
+                f"({time_seconds.size} vs {common_time_seconds.size} samples); "
+                f"run global_truncate before windowing."
+            )
+
+        first_region_s = (reflection_obj.first_region[0] / _S_TO_PS,
+                          reflection_obj.first_region[1] / _S_TO_PS)
+        second_region_s = (reflection_obj.second_region[0] / _S_TO_PS,
+                           reflection_obj.second_region[1] / _S_TO_PS)
+
+        first_plan = _plan_centered_window(
+            time_seconds, first_holder.data[:, 1], first_region_s, center_mode,
+        )
+        second_plan = _plan_centered_window(
+            time_seconds, second_holder.data[:, 1], second_region_s, center_mode,
+        )
+
+        first_amplitude = first_holder.data[:, 1].copy()
+        second_amplitude = second_holder.data[:, 1].copy()
+
+        first_windowed, first_window_fn = _windowed_pulse_on_common_axis(
+            time_seconds, first_amplitude, first_plan, window_config,
+        )
+        second_windowed, second_window_fn = _windowed_pulse_on_common_axis(
+            time_seconds, second_amplitude, second_plan, window_config,
+        )
+
+        first_holder.data = np.column_stack((time_seconds, first_windowed))
+        second_holder.data = np.column_stack((time_seconds, second_windowed))
+        first_holder.processing_dict['window_plan'] = first_plan
+        second_holder.processing_dict['window_plan'] = second_plan
+
+        _print_isolate_decision(filename, 'first_reflection', first_plan, window_config)
+        _print_isolate_decision(filename, 'second_reflection', second_plan, window_config)
+
+        graph_records[filename] = dict(
+            time_seconds=time_seconds,
+            first=dict(pre_window=first_amplitude, windowed=first_windowed,
+                       window_fn=first_window_fn),
+            second=dict(pre_window=second_amplitude, windowed=second_windowed,
+                        window_fn=second_window_fn),
+        )
+
+    if show_graph and graph_records:
+        _plot_windowed_pulses(graph_records)
+
+    return dataset
+
+
+def _plot_windowed_pulses(graph_records: dict) -> None:
+    """Diagnostic: windowed pulses with their window functions on a sample-index axis."""
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    fig.suptitle('window_reflection_pulses — apodized pulses (sample index)')
+    for filename, record in graph_records.items():
+        sample_index = np.arange(record['time_seconds'].size)
+        peak_amp = max(
+            np.max(np.abs(record['first']['windowed'])),
+            np.max(np.abs(record['second']['windowed'])),
+            1e-30,
+        )
+        axes[0].plot(sample_index, record['first']['windowed'], lw=1.3, label=filename)
+        axes[0].plot(sample_index, record['first']['window_fn'] * peak_amp,
+                     '--', lw=1, alpha=0.5)
+        axes[1].plot(sample_index, record['second']['windowed'], lw=1.3, label=filename)
+        axes[1].plot(sample_index, record['second']['window_fn'] * peak_amp,
+                     '--', lw=1, alpha=0.5)
+    axes[0].set_title('First reflection')
+    axes[1].set_title('Second reflection')
+    axes[0].legend(fontsize=7)
+    axes[1].legend(fontsize=7)
+    axes[1].set_xlabel('sample index')
+    plt.show()
 
 
 
@@ -467,6 +697,9 @@ def isolate_and_window(
     show_graph: bool = False,
 ) -> DataSet:
     """Isolate + apodize BOTH reflections on one shared axis (the coupling step).
+
+    Kept for backwards compatibility.  For explicit, inspectable pipelines call
+    ``isolate_reflection_regions`` then ``window_reflection_pulses`` instead.
 
     Replaces ``centering_manual`` + ``center_pulse`` + per-segment windowing.
     Reads each object's ``first_region`` / ``second_region`` (set by
@@ -512,13 +745,13 @@ def isolate_and_window(
             raise ValueError(
                 f"'{filename}' has no regions defined; run define_reflection_regions first."
             )
-        shared_time_seconds = reflection_obj.first_segment.data[:, 0]
+        shared_time_seconds = reflection_obj.first_reflection.data[:, 0]
         first_region_seconds = (reflection_obj.first_region[0] / _S_TO_PS,
                                 reflection_obj.first_region[1] / _S_TO_PS)
         second_region_seconds = (reflection_obj.second_region[0] / _S_TO_PS,
                                  reflection_obj.second_region[1] / _S_TO_PS)
         window_plans[filename] = (
-            _plan_centered_window(shared_time_seconds, reflection_obj.first_segment.data[:, 1],
+            _plan_centered_window(shared_time_seconds, reflection_obj.first_reflection.data[:, 1],
                                   first_region_seconds, center_mode),
             _plan_centered_window(shared_time_seconds, reflection_obj.data[:, 1],
                                   second_region_seconds, center_mode),
@@ -527,13 +760,13 @@ def isolate_and_window(
     # All files already share one axis (global_truncate trimmed them to a common
     # length), and every window now stays inside the region (inside that axis), so
     # we window IN PLACE — no axis extension, no padding zeros, no common-grid step.
-    common_time_seconds = reflection_items[0][1].first_segment.data[:, 0]
+    common_time_seconds = reflection_items[0][1].first_reflection.data[:, 0]
 
     graph_records = {}
     for filename, reflection_obj in reflection_items:
         first_plan, second_plan = window_plans[filename]
-        first_holder = reflection_obj.first_segment
-        second_holder = reflection_obj  # the primary object IS the second reflection
+        first_holder = reflection_obj.first_reflection
+        second_holder = reflection_obj.second_reflection
 
         if first_holder.data[:, 0].shape != common_time_seconds.shape:
             raise ValueError(
@@ -654,6 +887,206 @@ def _plot_isolate_windowing(graph_records: dict) -> None:
     axes[1].set_ylabel('amplitude')
     axes[0].legend(fontsize=7)
     axes[1].legend(fontsize=7)
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
+# Fixed-width symmetric window (prototype / low-level path)
+#
+# Simpler, more transparent alternative to isolate_and_window. The window width
+# is a single number (half_width_ps) shared by EVERY pulse, so the per-bin
+# apodization weighting is identical for every file and every reflection — the
+# region is used ONLY to locate the pulse (peak search), never to size the
+# window. The data is never time-shifted: the window is centred on each pulse's
+# peak on the existing shared axis and everything outside is zeroed, so the
+# first<->second inter-pulse delay and the inter-file timing (set upstream by
+# align_to_reference) are preserved exactly.
+# ---------------------------------------------------------------------------
+
+
+def _build_symmetric_window(length_samples: int, window_type: str, alpha: float) -> np.ndarray:
+    """One symmetric apodization window of exactly ``length_samples`` samples.
+
+    Mirrors the window shapes thz_core.window_time offers (hann / tukey / boxcar)
+    so the prototype path stays consistent with the rest of the pipeline, but the
+    LENGTH is fixed by the caller (not the gate). 'hann' is the default and the
+    expression below is identical to ``scipy.signal.windows.hann(length_samples)``.
+    """
+    window_type = str(window_type).lower()
+    if window_type == 'boxcar':
+        return np.ones(length_samples)
+    if window_type == 'tukey':
+        from scipy.signal.windows import tukey
+        return tukey(length_samples, alpha=alpha)
+    if window_type != 'hann':
+        raise ValueError("window type must be 'hann', 'tukey', or 'boxcar'.")
+    sample_index = np.arange(length_samples)
+    return 0.5 * (1.0 - np.cos(2.0 * np.pi * sample_index / (length_samples - 1)))
+
+
+def window_pulses_fixed_width(
+    dataset: DataSet,
+    half_width_ps: float,
+    config: dict | None = None,
+    segments: tuple = ('first_reflection', 'second_reflection'),
+    show_graph: bool = False,
+) -> DataSet:
+    """Apply ONE identical fixed-width symmetric window to every reflection pulse.
+
+    For each segment of each ``THzDataReflection`` (already on a common shared axis
+    from ``build_full_trace_reflection``), the pulse peak is located inside its
+    region, then a symmetric Hann of a FIXED length — ``2*N+1`` samples where
+    ``N = round(half_width_ps / dt)`` — is centred on that peak and everything
+    outside is zeroed. The window length is the same for every pulse, so the
+    apodization weighting is byte-identical across all files and both reflections;
+    the only thing that differs under the envelope is the data.
+
+    The data is NOT shifted: the window rides the existing time axis, so the
+    inter-pulse delay and inter-file timing are preserved (no phase bookkeeping).
+    The region bounds (``first_region`` / ``second_region``) are used only to
+    constrain the peak search.
+
+    Parameters
+    ----------
+    half_width_ps : float
+        Half-width of the window in picoseconds (single value for all pulses).
+    config : dict, optional
+        ``config['window']`` keys ``type`` ('hann' default / 'tukey' / 'boxcar')
+        and ``alpha`` (tukey only).
+    segments : tuple
+        Which segments to window. Defaults to both reflections.
+
+    Notes
+    -----
+    Original data saved under ``processing_dict['pre_fixed_window']``; the window
+    plan under ``processing_dict['fixed_window']``. If a pulse sits too close to a
+    trace edge for the full half-width, the overlapping bins still use the
+    identical window weights and a clip warning is printed (shrink ``half_width_ps``).
+    """
+    config = config or {}
+    window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
+    window_type = window_config.get('type', 'hann')
+    alpha = float(window_config.get('alpha', 1.0))
+
+    reflection_items = [
+        (filename, obj) for filename, obj in dataset.data.items()
+        if isinstance(obj, THzDataReflection)
+    ]
+    if not reflection_items:
+        print("[window_pulses_fixed_width] No THzDataReflection objects found, skipping.")
+        return dataset
+
+    # One dt for the whole dataset -> one fixed sample count -> one window length.
+    reference_time_seconds = reflection_items[0][1].first_reflection.data[:, 0]
+    dt_seconds = float(np.median(np.diff(reference_time_seconds)))
+    half_width_samples = int(round(half_width_ps * 1e-12 / dt_seconds))
+    if half_width_samples < 2:
+        raise ValueError(
+            f"half_width_ps={half_width_ps} is < 2 samples at dt={dt_seconds * _S_TO_PS:.4f} ps."
+        )
+    window_length = 2 * half_width_samples + 1
+    window_core = _build_symmetric_window(window_length, window_type, alpha)
+
+    graph_records = {}
+    applied_lengths = []
+    for filename, reflection_obj in reflection_items:
+        record = {}
+        for segment in segments:
+            holder = getattr(reflection_obj, segment)
+            region_ps = getattr(reflection_obj, segment.replace('reflection', 'region'))
+            if holder is None or region_ps is None:
+                raise ValueError(
+                    f"'{filename}' {segment}: holder/region missing; "
+                    f"run build_full_trace_reflection + define_reflection_regions first."
+                )
+
+            time_seconds = holder.data[:, 0]
+            amplitude = holder.data[:, 1]
+            n_samples = amplitude.size
+            if time_seconds.shape != reference_time_seconds.shape:
+                raise ValueError(
+                    f"'{filename}' {segment} axis ({n_samples}) differs from the first file "
+                    f"({reference_time_seconds.size}); all files must share one axis."
+                )
+
+            region_seconds = (region_ps[0] / _S_TO_PS, region_ps[1] / _S_TO_PS)
+            in_region = (time_seconds >= region_seconds[0]) & (time_seconds <= region_seconds[1])
+            region_indices = np.where(in_region)[0]
+            if region_indices.size < 4:
+                raise ValueError(
+                    f"'{filename}' {segment}: region [{region_ps[0]:.2f}, {region_ps[1]:.2f}] ps "
+                    f"selects < 4 samples."
+                )
+            peak_index = region_indices[int(np.argmax(np.abs(amplitude[region_indices])))]
+
+            # Drop the identical window_core at [peak-N, peak+N]; clip to the axis
+            # but keep matching window weights on the bins that do exist.
+            lo = peak_index - half_width_samples
+            hi = peak_index + half_width_samples + 1
+            data_lo, data_hi = max(lo, 0), min(hi, n_samples)
+            core_lo = data_lo - lo
+            core_hi = core_lo + (data_hi - data_lo)
+            window_function = np.zeros(n_samples)
+            window_function[data_lo:data_hi] = window_core[core_lo:core_hi]
+            windowed = amplitude * window_function
+            clipped = (lo < 0) or (hi > n_samples)
+
+            holder.processing_dict['pre_fixed_window'] = holder.data.copy()
+            holder.processing_dict['fixed_window'] = dict(
+                peak_index=int(peak_index),
+                peak_time_seconds=float(time_seconds[peak_index]),
+                half_width_samples=half_width_samples,
+                window_length=window_length,
+                clipped=bool(clipped),
+            )
+            holder.data = np.column_stack((time_seconds, windowed))
+            applied_lengths.append(window_length)
+
+            clip_note = "  *** CLIPPED at trace edge — reduce half_width_ps ***" if clipped else ""
+            print(
+                f"[window_pulses_fixed_width] '{filename}' {segment}: "
+                f"peak {time_seconds[peak_index] * _S_TO_PS:.2f} ps, "
+                f"window {window_length} samples "
+                f"(+/- {half_width_samples * dt_seconds * _S_TO_PS:.2f} ps).{clip_note}"
+            )
+            record[segment] = dict(time_seconds=time_seconds, windowed=windowed,
+                                   window_function=window_function,
+                                   peak_index=int(peak_index))
+        graph_records[filename] = record
+
+    identical = len(set(applied_lengths)) == 1
+    print(
+        f"[window_pulses_fixed_width] applied an IDENTICAL {window_type} window of "
+        f"{window_length} samples to {len(applied_lengths)} pulses across "
+        f"{len(reflection_items)} files (uniform length: {identical})."
+    )
+
+    if show_graph and graph_records:
+        _plot_fixed_width_window(graph_records, segments)
+    return dataset
+
+
+def _plot_fixed_width_window(graph_records: dict, segments: tuple) -> None:
+    """Overlay every windowed pulse + its (identical) window function per segment."""
+    fig, axes = plt.subplots(len(segments), 1, sharex=True, squeeze=False)
+    fig.suptitle('window_pulses_fixed_width — identical fixed-width Hann on every pulse')
+    axes = axes[:, 0]
+    for axis, segment in zip(axes, segments):
+        peak_amplitude = 1e-30
+        for record in graph_records.values():
+            if segment in record:
+                peak_amplitude = max(peak_amplitude, np.max(np.abs(record[segment]['windowed'])))
+        for filename, record in graph_records.items():
+            if segment not in record:
+                continue
+            time_ps = record[segment]['time_seconds'] * _S_TO_PS
+            axis.plot(time_ps, record[segment]['windowed'], lw=1.3, label=filename)
+            axis.plot(time_ps, record[segment]['window_function'] * peak_amplitude,
+                      '--', lw=0.9, alpha=0.5)
+        axis.set_title(segment)
+        axis.set_ylabel('amplitude')
+        axis.legend(fontsize=7)
+    axes[-1].set_xlabel('time (ps)')
     plt.show()
 
 
@@ -807,7 +1240,72 @@ def _plot_with_snr_mask(
 # pipeline steps
 # ---------------------------------------------------------------------------
 
-def subtract_baseline(
+def _subtract_baseline_reflection(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Specific pipeline step to subtract baseline from both reflections in a THzDataReflection."""
+    config = config or {}
+    n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
+
+    show_graph = bool(config.get('show_graph', False))
+
+    flattened_data_dict = {}
+    for filename, data_obj in dataset.data.items():
+        first_holder = _resolve_segment(data_obj, 'first_reflection')
+        second_holder = _resolve_segment(data_obj, 'second_reflection')
+        if first_holder is None or second_holder is None:
+            continue
+        flattened_data_dict[f"{filename}__first"] = first_holder.data
+        flattened_data_dict[f"{filename}__second"] = second_holder.data
+
+    corrected, metrics = core.subtract_baseline(flattened_data_dict, config)
+
+    if show_graph:
+        fig, ax = plt.subplots(2, 1, layout='constrained')
+        for filename, data in corrected.items():
+            basename, segment = filename.split('__')
+            ax[1].plot(data[:, 1], label=f'{filename} (corrected)')
+            ax[0].plot(flattened_data_dict[filename][:, 1], label=f'{filename} (original)',
+                       linestyle='--', lw=1, alpha=0.5)
+        ax[0].set_title(f'Original Traces — {segment} reflection')
+        ax[1].set_title('Baseline-Corrected Traces')
+        ax[1].set_xlabel('Time Point Index')
+        plt.show()
+
+    for filename, data_obj in dataset.data.items():
+        first_name = filename + '__first'
+        data_obj.first_reflection.data = corrected[first_name]
+        second_name = filename + '__second'
+        data_obj.second_reflection.data = corrected[second_name]
+
+        data_obj.processing_dict['baseline_metrics_first'] = metrics
+        # Mirror baseline subtraction onto the per-scan matrix so the
+        # per-scan working data stays consistent with the averaged trace.
+        # (first_reflection is already an averaged trace; no per-scan matrix.)
+        scan_matrix = _ensure_scan_matrix(data_obj)
+        scan_columns = scan_matrix[:, 1:]
+        scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
+
+    return dataset
+
+def subtract_baseline(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Subtract baseline from data, depending on the type of data object. For THzDataReflection, it processes both reflections."""
+
+    config = dataset.config or config or {}
+    n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
+
+    show_graph = bool(config.get('show_graph', False))
+
+    if all(isinstance(data_obj, THzDataReflection) for data_obj in dataset.data.values()):
+        baselined_dataset = _subtract_baseline_reflection(dataset, config)
+    elif all(isinstance(data_obj, THzData) for data_obj in dataset.data.values()):
+        baselined_dataset = _subtract_baseline(dataset, segment='second_reflection', config=config, show_graph=show_graph)
+    
+    else:
+        print("Warning: Dataset contains mixed or unrecognized data object types. No baseline subtraction applied.")
+        baselined_dataset = dataset
+    return baselined_dataset
+
+
+def _subtract_baseline(
     dataset: DataSet,
     segment: str = 'second_reflection',
     config: dict | None = None,
@@ -820,8 +1318,10 @@ def subtract_baseline(
     segment : ``'second_reflection'`` (default) or ``'first_reflection'``
         Which segment to process. Call twice to process both.
     """
-    config = config or {}
+    config = dataset.config or config or {}
     n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
+
+    show_graph = show_graph or bool(config.get('show_graph', False))
 
     data_dict = _build_segment_data_dict(dataset, segment)
     corrected, metrics = core.subtract_baseline(data_dict, config)
@@ -847,7 +1347,7 @@ def subtract_baseline(
         if segment == 'second_reflection':
             # Mirror baseline subtraction onto the per-scan matrix so the
             # per-scan working data stays consistent with the averaged trace.
-            # (first_segment is already an averaged trace; no per-scan matrix.)
+            # (first_reflection is already an averaged trace; no per-scan matrix.)
             scan_matrix = _ensure_scan_matrix(data_obj)
             scan_columns = scan_matrix[:, 1:]
             scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
@@ -1746,7 +2246,7 @@ def align_to_reference(
         # When timing via the first reflection, also shift the first segment so
         # the inter-pulse delay is preserved exactly.
         if timing_segment == 'first_reflection' and isinstance(data_obj, THzDataReflection):
-            first_seg = data_obj.first_segment
+            first_seg = data_obj.first_reflection
             shifted_first = first_seg.data.copy()
             shifted_first[:, 0] = first_seg.data[:, 0] + integer_shift
             first_seg.data = shifted_first
@@ -2163,12 +2663,12 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
     def _get_first_spectrum(data_object, freq: np.ndarray) -> np.ndarray:
         """Retrieve or compute the first-reflection spectrum for a data object.
 
-        Prefers ``first_segment.processing_dict['fft_spectrum']`` when the object
+        Prefers ``first_reflection.processing_dict['fft_spectrum']`` when the object
         is a ``THzDataReflection`` (already computed by the pipeline). Falls back
         to loading from disk via the legacy ``_first_reflection_spectrum`` path.
         """
         if isinstance(data_object, THzDataReflection):
-            stored = data_object.first_segment.processing_dict.get('fft_spectrum')
+            stored = data_object.first_reflection.processing_dict.get('fft_spectrum')
             if stored is not None:
                 return stored
         fname = data_object.filename

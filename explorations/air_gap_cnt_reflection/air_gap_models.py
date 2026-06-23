@@ -20,7 +20,7 @@ Pipeline-as-machinery: the fitters import `load_measured_reflection` (runs the t
 reflection pipeline); the conditioning report itself is pure synthetic so it needs no data.
 
 Sign convention: thz_core n_hat = n - i k (k>=0), exp(-i omega t).
-Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/air_gap_models.py
+Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/air_gap_cnt_reflection/air_gap_models.py
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import numpy as np
 
 import thz_core.thz_core as core
+from scipy.special import erf
 from explore_air_gap_deembedding import (
     SPEED_OF_LIGHT_M_PER_S, REFRACTIVE_INDEX_SIO2, REFRACTIVE_INDEX_AIR, internal_angles,
 )
@@ -111,6 +112,81 @@ def rough_gap_reflection(frequency_hz, material_params, gap_mean_m, gap_sigma_m,
 
 def deembed_gap(reflection_measured, r_front):
     return (reflection_measured - r_front) / (1.0 - r_front * reflection_measured)
+
+
+# ── Route B: graded effective-medium (Bruggeman) layer ──────────────────────
+
+
+def _normal_cdf(x):
+    return 0.5 * (1.0 + erf(x / np.sqrt(2.0)))
+
+
+def _bruggeman_roots(eps_inclusion, eps_host, fill_inclusion):
+    """Both roots of the 2-component Bruggeman equation (per-frequency arrays)."""
+    fa = fill_inclusion
+    fb = 1.0 - fill_inclusion
+    b = (3.0 * fa - 1.0) * eps_inclusion + (3.0 * fb - 1.0) * eps_host
+    disc = np.sqrt(b * b + 8.0 * eps_inclusion * eps_host)
+    return (b + disc) / 4.0, (b - disc) / 4.0
+
+
+def graded_emt_reflection(
+    frequency_hz, material_params, roughness_sigma_m, offset_z0_m, sio2_angle_rad,
+    n_sub_layers=40, extent_sigma=6.0,
+):
+    """Reflection from SiO2 into a graded air->CNT effective-medium layer | bulk CNT.
+
+    Fill fraction of CNT vs depth z (from the window, z=0): f(z) = Phi((z - z0)/sigma_h),
+    the Gaussian CDF (an Aspnes EMA roughness layer; z0 = mean surface position, so a near-
+    pure-air region exists when z0 >> sigma_h). Per-sublayer effective permittivity by
+    Bruggeman (root chosen by continuity in depth, starting from air). s-pol recursive Airy
+    through the stack. Returns the SiO2-side reflection (same quantity the pipeline measures).
+    """
+    omega = 2.0 * np.pi * frequency_hz
+    wavenumber = omega / SPEED_OF_LIGHT_M_PER_S
+    transverse = REFRACTIVE_INDEX_SIO2 * np.sin(sio2_angle_rad)   # conserved n*sin(theta)
+    eps_cnt = drude_smith_permittivity(
+        frequency_hz, material_params["eps_inf"], material_params["plasma_omega"],
+        material_params["scattering_time_s"], material_params["persistence_c"],
+    )
+    eps_air = np.ones_like(eps_cnt)
+
+    total_thickness = offset_z0_m + extent_sigma * roughness_sigma_m
+    layer_dz = total_thickness / n_sub_layers
+    depths = (np.arange(n_sub_layers) + 0.5) * layer_dz
+    fills = _normal_cdf((depths - offset_z0_m) / max(roughness_sigma_m, 1e-12))
+
+    # z-wavevector factor q = sqrt(eps - transverse^2) for each medium.
+    def q_of(eps):
+        return np.sqrt(eps - transverse**2)
+    q_sio2 = q_of(REFRACTIVE_INDEX_SIO2**2 + 0j)
+    q_cnt = q_of(eps_cnt)
+
+    # Build the sublayer permittivities, Bruggeman root tracked by continuity (start air).
+    previous = eps_air
+    q_layers = []
+    for fill in fills:
+        root_plus, root_minus = _bruggeman_roots(eps_cnt, eps_air, fill)
+        eps_eff = np.where(np.abs(root_plus - previous) <= np.abs(root_minus - previous),
+                           root_plus, root_minus)
+        previous = eps_eff
+        q_layers.append(q_of(eps_eff))
+
+    def fresnel(q_above, q_below):
+        return (q_above - q_below) / (q_above + q_below)
+
+    # Recursive Airy from the bottom (last sublayer -> bulk CNT) upward to SiO2.
+    reflection = fresnel(q_layers[-1], q_cnt)
+    for i in range(n_sub_layers - 1, 0, -1):
+        propagation = np.exp(-1j * wavenumber * q_layers[i] * layer_dz)
+        interface = fresnel(q_layers[i - 1], q_layers[i])
+        reflection = (interface + reflection * propagation**2) / (
+            1.0 + interface * reflection * propagation**2)
+    propagation0 = np.exp(-1j * wavenumber * q_layers[0] * layer_dz)
+    interface0 = fresnel(q_sio2, q_layers[0])
+    reflection = (interface0 + reflection * propagation0**2) / (
+        1.0 + interface0 * reflection * propagation0**2)
+    return reflection
 
 
 # ── Pipeline loader (used by the fitter scripts, not the conditioning report) ─

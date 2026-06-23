@@ -119,7 +119,7 @@ def main():
 
     def snapshot(obj):
         """Return (t, y) for the (first, second) segments of obj at the current step."""
-        return ((obj.first_segment.data[:, 0].copy(), obj.first_segment.data[:, 1].copy()),
+        return ((obj.first_reflection.data[:, 0].copy(), obj.first_reflection.data[:, 1].copy()),
                 (obj.data[:, 0].copy(), obj.data[:, 1].copy()))
 
     pre = {"sample": snapshot(sample_obj), "ref": snapshot(ref_obj)}

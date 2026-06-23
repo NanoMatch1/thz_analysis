@@ -61,12 +61,12 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     )
 
     # --- baseline off the genuine pre-pulse, on the full trace (both holders) ---
-    thz.subtract_baseline(dataset, segment='second_reflection')
-    thz.subtract_baseline(dataset, segment='first_reflection')
+    # thz.subtract_baseline(dataset, segment='second_reflection')
+    thz.subtract_baseline(dataset)
 
     # --- one common time axis across all files (needed so the FFT grids match) ---
-    thz.global_truncate(dataset, segment='second_reflection')
-    thz.global_truncate(dataset, segment='first_reflection')
+    # thz.global_truncate(dataset, segment='second_reflection')
+    # thz.global_truncate(dataset, segment='first_reflection')
 
     # --- define BOTH reflection regions (preset bounds or SpanSelector) ---
     thz.define_reflection_regions(dataset, config)
@@ -74,20 +74,31 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
     # --- THE coupling step: isolate + symmetric window both reflections on one
     #     shared axis. center_mode 'pad' keeps the full pulse (pads the short side
     #     with zeros); 'crop' shrinks to the short side. ---
-    # thz.isolate_and_window(
-    #     dataset,
-    #     config={'window': config['window']},
-    #     center_mode=config.get('center_mode', 'crop'),
-    #     show_graph=True,
+    # thz.centering_manual(
+    #     dataset, segment='second_reflection',
+    #     auto_range_ps=config['regions'].get('second_reflection'), show_graph=show,
     # )
-    thz.cent
+    # thz.centering_manual(
+    #     dataset, segment='first_reflection',
+    #     auto_range_ps=config['regions'].get('first_reflection'), show_graph=show,
+    # )
+    # for filename, data_obj in dataset.data.items():
+    #     print(filename)
+    #     breakpoint()
+    thz.isolate_and_window(
+        dataset,
+        config={'window': config['window']},
+        center_mode=config.get('center_mode', 'crop'),
+        show_graph=True,
+    )
+
     # breakpoint()
     # thz.isolate_regions(dataset, config)
     # thz.center_pulses(dataset, mode=config.get('center_mode', 'crop'), show_graph=show)
 
 
 
-    dataset.plot_current(title="isolated + windowed reflections")
+    # dataset.plot_current(title="isolated + windowed reflections")
     # --- FFT both reflections onto ONE frequency grid (zero-pad inside the FFT via
     #     n_fft — no separate zero_pad / pad_to_common_grid step needed). ---
     shared_n_fft = config.get('n_fft', 4096)
@@ -107,6 +118,7 @@ def process_shared_axis(dataset: DataSet, config: dict, show: bool) -> DataSet:
         polarization=config['polarization'],
         n_window=config['n_sio2'],
     )
+        
     thz.derive_eps_sigma(dataset)
     return dataset
 
@@ -214,11 +226,11 @@ if __name__ == '__main__':
 
     pipeline_config = {
         # ---- path selection ----
-        # 'processing_path': 'shared_axis',   # 'shared_axis' (new) or 'segmented' (old)
-        'processing_path': 'segmented',   # 'shared_axis' (new) or 'segmented' (old)
+        'processing_path': 'shared_axis',   # 'shared_axis' (new) or 'segmented' (old)
+        # 'processing_path': 'segmented',   # 'shared_axis' (new) or 'segmented' (old)
         'root_dir': ROOT_DIR,
         'headless': False,                  # True -> no SpanSelectors / plot windows
-        'show_graphs': True,
+        'show_graphs': False,
 
         # ---- geometry / inversion ----
         'theta_external_deg': 45.0,
@@ -226,7 +238,7 @@ if __name__ == '__main__':
         'n_sio2': 1.95,
 
         # ---- shared-axis path ----
-        'centering': {'peak_mode': {}, 'taper_ps': 1.0},
+        'centering': {'peak_mode': 'auto', 'taper_ps': 1.0},
         'center_mode': 'crop',               # 'pad' keeps the pulse tail; 'crop' shrinks
         'n_fft': 500,                      # FFT length (zero-pad for display resolution)
         'regions': {                        # first/second reflection regions (ps)
@@ -274,3 +286,24 @@ if __name__ == '__main__':
     thz.result_viewer(result)
 
     dataset.save_database()
+
+    # def eps_series(eps_range=np.arange(1, 12, 1)):
+    #     eps_results = {}
+    #     for filename, data_obj in dataset.data.items():
+    #         eps_results[filename] = {}
+    #         if dataset.data.is_reference(filename):
+    #             continue
+    #         for value in eps_range:
+    #             config = {"eps_background": value}
+    #             thz.derive_eps_sigma(dataset, config=config)
+    #             eps = data_obj.processing_dict['eps'] = eps
+    #             sigma = data_obj.processing_dict['sigma']
+    #             metrics = data_obj.processing_dict['derive_metrics']
+    #             eps_results[filename][value] = {
+    #                 "eps": eps,
+    #                 "sigma": sigma,
+    #                 "metrics": metrics,
+    #             }
+    #     return eps_results
+    
+    # return eps_series()

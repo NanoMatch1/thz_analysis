@@ -538,46 +538,116 @@ class THzData:
             plt.show()
 
 
-class THzDataReflection(THzData):
-    """THzData for window-coupled reflection measurements with two reflection gates.
+class THzDataReflection:
+    """Container for window-coupled reflection measurements with two reflection gates.
 
-    Inherits ``THzData`` unchanged — the ``data`` property, all pipeline
-    operations, and the processing_dict always act on the second reflection
-    (sample/window interaction), so existing code is fully backwards compatible.
+    Holds ``first_reflection`` and ``second_reflection`` as plain ``THzData``
+    objects.  The container delegates common data-access attributes to
+    ``second_reflection`` so that pipeline functions that treat it like a
+    ``THzData`` continue to work unchanged — direct reads/writes to ``.data``,
+    ``.processing_dict``, ``.filename``, etc. route through to the second segment.
 
-    The ``first_segment`` attribute holds the front-face (window-only) reflection
-    as a plain ``THzData``.  Pipeline functions that know about this class call
-    ``all_segments()`` to process both gates in parallel.
+    Use ``all_segments()`` to iterate both gates when a pipeline step must be
+    applied to each separately.
 
     Construction
     ------------
-    Use the ``from_thzdata`` classmethod to promote two already-loaded
-    ``THzData`` objects (e.g. from a segmented acquisition directory) without
-    re-averaging the raw scans.
+    Use ``from_thzdata`` to promote two already-loaded ``THzData`` objects into a
+    ``THzDataReflection`` without re-averaging the raw scans.
     """
 
     def __init__(
         self,
-        data: list,
-        header: list,
-        *,
-        first_segment: THzData,
-        **kwargs,
+        first_reflection: THzData,
+        second_reflection: THzData,
     ) -> None:
-        super().__init__(data, header, **kwargs)
-        self.first_segment = first_segment
+        self.first_reflection = first_reflection
+        self.second_reflection = second_reflection
+
+    # ------------------------------------------------------------------
+    # Delegation to second_reflection
+    # ------------------------------------------------------------------
+
+    @property
+    def data(self) -> np.ndarray:
+        return self.second_reflection.data
+
+    @data.setter
+    def data(self, value: np.ndarray) -> None:
+        self.second_reflection.data = value
+
+    @property
+    def processing_dict(self) -> dict:
+        return self.second_reflection.processing_dict
+
+    @property
+    def filename(self) -> str:
+        return self.second_reflection.filename
+
+    @filename.setter
+    def filename(self, value: str) -> None:
+        self.second_reflection.filename = value
+
+    @property
+    def data_type(self) -> str:
+        return self.second_reflection.data_type
+
+    @property
+    def current_state(self) -> str:
+        return self.second_reflection.current_state
+
+    @current_state.setter
+    def current_state(self, value: str) -> None:
+        self.second_reflection.current_state = value
+
+    @property
+    def reference_filename(self):
+        return self.second_reflection.reference_filename
+
+    @reference_filename.setter
+    def reference_filename(self, value) -> None:
+        self.second_reflection.reference_filename = value
+
+    @property
+    def raw_data(self) -> np.ndarray:
+        return self.second_reflection.raw_data
+
+    @property
+    def data_list(self) -> list:
+        return self.second_reflection.data_list
+
+    # ------------------------------------------------------------------
+    # Construction and pickle compatibility
+    # ------------------------------------------------------------------
 
     @classmethod
     def from_thzdata(cls, second: THzData, first: THzData) -> 'THzDataReflection':
-        """Promote two THzData objects into a THzDataReflection without re-averaging.
+        """Promote two THzData objects into a THzDataReflection without re-averaging."""
+        return cls(first_reflection=first, second_reflection=second)
 
-        Copies the second-reflection object's state into the new instance so no
-        re-computation of averages or statistics is needed.
+    def __setstate__(self, state: dict) -> None:
+        """Migrate pickles saved under the old THzData-subclass design.
+
+        Old pickles contain all THzData internals inlined in __dict__ plus
+        'first_segment'.  New pickles contain 'first_reflection' and
+        'second_reflection'.  Detect and convert transparently.
         """
-        new_obj = object.__new__(cls)
-        new_obj.__dict__.update(second.__dict__)
-        new_obj.first_segment = first
-        return new_obj
+        if 'second_reflection' in state:
+            self.__dict__.update(state)
+            return
+        # Old format: reconstruct a THzData from the inlined state and wire it
+        # as second_reflection; move first_segment → first_reflection.
+        second = object.__new__(THzData)
+        second.__dict__.update({
+            k: v for k, v in state.items()
+            if k not in ('first_segment', 'second_segment')
+        })
+        self.second_reflection = second
+        self.first_reflection = state.get('first_segment')
+
+    # ------------------------------------------------------------------
+    # API
+    # ------------------------------------------------------------------
 
     def all_segments(self) -> list:
         """Return all reflection segments as ``[(name, THzData), ...]``.
@@ -586,39 +656,12 @@ class THzDataReflection(THzData):
         The second reflection is listed last so it is always processed after the
         first (no dependency either way, but keeps the canonical order).
         """
-        return [('first_reflection', self.first_segment), ('second_reflection', self)]
+        return [('first_reflection', self.first_reflection), ('second_reflection', self.second_reflection)]
 
     def __repr__(self) -> str:
         return (
             f"\nTHzDataReflection:{self.filename}\n"
-            f"   -> Second-reflection scans: {len(self.data_list)}\n"
-            f"   -> First-reflection scans:  {len(self.first_segment.data_list)}\n"
+            f"   -> Second-reflection scans: {len(self.second_reflection.data_list)}\n"
+            f"   -> First-reflection scans:  {len(self.first_reflection.data_list)}\n"
             f"   -> Data type: {self.data_type}\n"
         )
-
-
-        """Plot both reflection segments on two subplots.  Accepts the same kwargs as THzData.plot_current."""
-        import matplotlib.pyplot as plt
-
-        if figure_obj is None:
-            fig, axes = plt.subplots(2, 1, figsize=kwargs.get('figsize', (10, 8)), sharex=True)
-            show_plot = True
-        else:
-            axes = getattr(figure_obj, 'axes', None)
-            if axes is None or len(axes) < 2:
-                fig, axes = plt.subplots(2, 1, figsize=kwargs.get('figsize', (10, 8)), sharex=True)
-                show_plot = True
-            else:
-                show_plot = False
-
-        # Plot first reflection
-        self.first_segment.plot_current(figure_obj=type('FigureObject', (), {'ax': axes[0]}), **kwargs)
-        axes[0].set_title(kwargs.get('first_title', 'First Reflection (Window Only)'))
-
-        # Plot second reflection
-        super().plot_current(figure_obj=type('FigureObject', (), {'ax': axes[1]}), **kwargs)
-        axes[1].set_title(kwargs.get('second_title', 'Second Reflection (Sample Interaction)'))
-
-        if show_plot:
-            plt.tight_layout()
-            plt.show()

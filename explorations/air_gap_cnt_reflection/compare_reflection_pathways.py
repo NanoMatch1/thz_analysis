@@ -12,7 +12,7 @@ transfer_function). Headless — presets only, no SpanSelectors.
 
 Outputs n, k, and conductivity (real + imag) per sample, both pathways overlaid.
 
-Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/compare_reflection_pathways.py
+Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/air_gap_cnt_reflection/compare_reflection_pathways.py
 """
 
 from __future__ import annotations

@@ -30,7 +30,7 @@ round-trip DELAY (cross-correlation) — the cleanest, deferred to the pipeline-
 
 Nothing here is a settled method.  It is scaffolding for tomorrow's plan.
 
-Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/deembed_air_gap_iterative.py
+Run:  PYTHONPATH=. ../.venv/Scripts/python.exe explorations/air_gap_cnt_reflection/deembed_air_gap_iterative.py
 """
 
 from __future__ import annotations

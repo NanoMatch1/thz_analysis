@@ -56,7 +56,7 @@ def run_new_path(center_mode):
 
     # shared-axis check
     any_obj = next(o for f, o in dataset.data.items() if not dataset.data.is_reference(f))
-    first_axis = any_obj.first_segment.data[:, 0]
+    first_axis = any_obj.first_reflection.data[:, 0]
     second_axis = any_obj.data[:, 0]
     assert first_axis.shape == second_axis.shape, "first/second axes differ in length"
     assert np.allclose(first_axis, second_axis), "first/second axes are not identical"

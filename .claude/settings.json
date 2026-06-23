@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe tests/*)",
+      "Bash(.venv/Scripts/python.exe -m pytest *)",
+      "Bash(PYTHONPATH=. .venv/Scripts/python.exe tests/*)",
+      "PowerShell(git *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(.venv/Scripts/python.exe tests/*)",
+      "PowerShell(& \".venv\\Scripts\\python.exe\" -m pytest *)",
+      "PowerShell(cd C:\\Users\\Samuel\\matchbook\\thz; .venv\\Scripts\\python.exe tests/*)"
+    ]
+  }
+}

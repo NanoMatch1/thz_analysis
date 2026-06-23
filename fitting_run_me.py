@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 
-from thz_core.build.lib.thz_core.fit_gui import FitGUI
+from thz_core.thz_core.fit_gui import FitGUI
 from thz_core.thz_core.fitting._models import drude_conductivity
 import acquisition_editor
 from dataset_core.dataset import DataSet
