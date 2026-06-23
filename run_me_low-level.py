@@ -29,8 +29,7 @@ from dataset_core.adapters import thz_adapter as thz
 
 # ── Data paths ──────────────────────────────────────────
 data_dir = r'C:\Users\Samuel\Data\THz\CNTs\CNT-20'
-ref_path = os.path.join(data_dir, "reference_air_au_mount_1.acc")
-samp_path = os.path.join(data_dir, "sample_window-substrate_1_realign_backup.acc")
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export'
 
 # ── Physical parameters ─────────────────────────────────
 THICKNESS_M = 2.08e-3  # metres (quartz window thickness, measured 2.08 mm)
@@ -47,8 +46,8 @@ config: dict = {
         "n_sio2": 1.95,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        "first_reflection": (153.3, 160.3),  # (start_ps, end_ps) or None for auto
-        "second_reflection": (176.25, 185.0),  # (start_ps, end_ps) or None for auto
+        "first_reflection": (152.5, 159),  # (start_ps, end_ps) or None for auto
+        "second_reflection": (177, 183.8),  # (start_ps, end_ps) or None for auto
     },
     "centering": {
         "mode": "crop",  # 'crop' or 'pad'
@@ -64,7 +63,7 @@ config: dict = {
     "fft": {
         "norm": "backward",
         "amplitude_scale": 1.0,
-        "n_fft": 1000,            # shared FFT length (zero-pad for display resolution)
+        "n_fft": 2000,            # shared FFT length (zero-pad for display resolution)
     },
     "transfer": {
         "min_ref_amp_rel": 1e-3,
@@ -79,12 +78,13 @@ config: dict = {
     "invert": {
         "max_iterations": 30,
         "convergence_tol": 1e-12,
-        "eps_inf": 1
+        "eps_background": 11.7# Si 
     },
 }
 
-# data_dict = load_raw_data(samp_path, ref_path)
-# baseline_correct = step_baseline(data_dict, config)
+# import acquisition_editor
+# acquisition_editor.process_directory(data_dir)
+
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
 # dataset.plot_current()
@@ -125,7 +125,20 @@ thz.window_pulses_fixed_width(
 # --- FFT both reflections onto ONE frequency grid. Same n_fft for both segments
 #     so the grids match exactly; zero-padding happens inside the FFT (no separate
 #     zero_pad / pad_to_common_grid step on the shared-axis path). ---
+# Guard against silent truncation: the windowed trace keeps its FULL shared-axis
+# length (the window zeros outside the pulse but does not crop), and rfft(y, n)
+# truncates when n < len(y) — which would cut off the pulses, since they sit late
+# in the trace. n_fft must be at least the longest segment array.
+required_n_fft = thz.minimum_fft_length(dataset)
+# TODO: auto-derive n_fft from the data — when config['fft']['n_fft'] is None, set it
+#       to the next power of two >= minimum_fft_length(dataset) instead of asserting a
+#       hand-typed value (same "derive from the data" idea as the half-width TODO above).
 shared_n_fft = config['fft']['n_fft']
+assert shared_n_fft >= required_n_fft, (
+    f"config['fft']['n_fft'] = {shared_n_fft} would TRUNCATE the windowed trace "
+    f"({required_n_fft} samples) and cut off the reflection pulses. "
+    f"Set n_fft >= {required_n_fft} (zero-pads above that for finer frequency spacing)."
+)
 thz.fft_spectrum(dataset, segment='second_reflection', n_fft=shared_n_fft)
 thz.fft_spectrum(dataset, segment='first_reflection', n_fft=shared_n_fft)
 
@@ -136,7 +149,7 @@ if config['general']['show_graph']:
 #     self_reference=True forms the front/back ratio within each acquisition first,
 #     so the sample<->reference timing cancels structurally. ---
 thz.transfer_function(
-    dataset, config={'transfer': {'self_reference': False}}, ref_type='reference',
+    dataset, config={'transfer': {'self_reference': True}}, ref_type='reference',
 )
 
 # --- reflection-mode inversion: H -> n, k for the back-face (SiO2->sample)
@@ -152,10 +165,10 @@ thz.invert_nk_reflection(
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
 
-dataset.save_database()
+# dataset.save_database()
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)
 
-breakpoint()
+# breakpoint()
 

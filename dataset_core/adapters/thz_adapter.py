@@ -2487,6 +2487,37 @@ def zero_pad(
     return dataset
 
 
+def minimum_fft_length(
+    dataset: DataSet,
+    segments: tuple = ('first_reflection', 'second_reflection'),
+) -> int:
+    """Smallest ``n_fft`` that transforms every segment without truncation.
+
+    ``fft_spectrum`` calls ``np.fft.rfft(y, n=n_fft)``, which *truncates* ``y``
+    when ``n_fft < len(y)``. On the shared-axis path the windowed trace keeps its
+    full length — ``window_pulses_fixed_width`` zeros the samples outside the
+    pulse but never crops — so the FFT input spans the whole acquisition. If
+    ``n_fft`` is shorter than that, the tail of the trace (which is where the
+    reflection pulses actually sit) is silently cut off.
+
+    Returns the largest sample count across every file and segment (references
+    included — they are transformed too). Use it to assert/derive ``n_fft``::
+
+        required = thz.minimum_fft_length(dataset)
+        assert n_fft >= required
+
+    Returns 0 if no matching segment holders are present.
+    """
+    max_samples = 0
+    for filename, data_obj in dataset.data.items():
+        for segment in segments:
+            holder = _resolve_segment(data_obj, segment)
+            if holder is None:
+                continue
+            max_samples = max(max_samples, int(holder.data.shape[0]))
+    return max_samples
+
+
 def fft_spectrum(
     dataset: DataSet,
     segment: str = 'second_reflection',
@@ -3348,9 +3379,10 @@ def _grid_invert_substrate_sandwich(dataset, config):
         _store_nk_grid(data_obj, freq, n, k, metrics)
 
 
-def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:
+def derive_eps_sigma(dataset: DataSet) -> DataSet:
     """Derive complex permittivity and optical conductivity from n, k."""
-    config = config or {}
+    # config = config or {}
+    config = dataset.config or {}
 
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):

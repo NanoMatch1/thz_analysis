@@ -22,6 +22,7 @@ sys.path.insert(0, REPO_ROOT)
 from dataset_core.data_structures.thz import BaseTHzData, THzData, THzDataReflection
 from dataset_core.adapters.thz_adapter import (
     window_pulses_fixed_width,
+    minimum_fft_length,
     _build_symmetric_window,
 )
 
@@ -152,6 +153,37 @@ def test_clip_flag_set_when_window_runs_off_edge():
     assert refl.first_reflection.processing_dict['fixed_window']['clipped'] is True
 
 
+def test_minimum_fft_length_is_full_trace_length():
+    """The windowed trace keeps its full length, so the FFT minimum is that length.
+
+    This is the guard against silent rfft truncation cutting off the pulses.
+    """
+    refl, time_s = _make_reflection("s.acc", first_peak_ps=10.0, second_peak_ps=25.0)
+    full_length = refl.first_reflection.data.shape[0]
+    window_pulses_fixed_width(_fake_dataset({"s.acc": refl}), half_width_ps=2.0)
+
+    required = minimum_fft_length(_fake_dataset({"s.acc": refl}))
+    # window zeros outside the pulse but never crops -> still the full trace length
+    assert required == full_length
+    assert required == time_s.size
+
+
+def test_minimum_fft_length_takes_max_across_files():
+    """The required length is the largest segment array over every file."""
+    refl_short, _ = _make_reflection("a.acc", first_peak_ps=10.0, second_peak_ps=25.0)
+    refl_long, _ = _make_reflection("b.acc", first_peak_ps=10.0, second_peak_ps=25.0)
+    # make b's trace genuinely longer so it must drive the result
+    longer = np.vstack([refl_long.second_reflection.data,
+                        refl_long.second_reflection.data[-5:]])
+    refl_long.second_reflection.data = longer
+    expected = longer.shape[0]
+
+    required = minimum_fft_length(
+        _fake_dataset({"a.acc": refl_short, "b.acc": refl_long}),
+    )
+    assert required == expected
+
+
 # ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
@@ -164,6 +196,8 @@ _TESTS = [
     test_time_axis_unchanged_no_shift,
     test_other_pulse_is_zeroed,
     test_clip_flag_set_when_window_runs_off_edge,
+    test_minimum_fft_length_is_full_trace_length,
+    test_minimum_fft_length_takes_max_across_files,
 ]
 
 

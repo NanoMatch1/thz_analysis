@@ -34,6 +34,7 @@ from dataset_core.adapters import thz_adapter as thz
 thz.SUBSAMPLE_TIMING_CORRECTION = True
 
 ROOT_DIR = r"C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_19_CNT\test1\export"
+ROOT_DIR = r"C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export"
 
 # Reflection regions for the NEW (thicker-window) data: first pulse ~155.85 ps,
 # second ~180.8 ps (inspected from the scan-averaged traces).
@@ -77,8 +78,7 @@ def run_shared_axis(config: dict, eps_infinity: float) -> DataSet:
         roi=config["regions"]["first_reflection"],
         subsample_correction=True, show_graph=False,
     )
-    thz.subtract_baseline(dataset, segment="second_reflection")
-    thz.subtract_baseline(dataset, segment="first_reflection")
+    thz.subtract_baseline(dataset)  # processes BOTH reflections (current adapter API)
     thz.global_truncate(dataset, segment="second_reflection")
     thz.global_truncate(dataset, segment="first_reflection")
 
