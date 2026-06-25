@@ -657,6 +657,7 @@ def make_figure(shared: dict, substrate_results: dict, sample_results: dict, out
 
         np.savetxt(os.path.splitext(output_path)[0] + f"_{label}_Cu_sigma_real.dat", np.column_stack([frequency_thz, np.real(sigma)]))
         np.savetxt(os.path.splitext(output_path)[0] + f"_{label}_Cu_sigma_imag.dat", np.column_stack([frequency_thz, np.imag(sigma)]))
+        
 
     axes[0, 1].set_title("Sample n"); axes[0, 1].set_ylabel("n"); axes[0, 1].legend(fontsize=7)
     axes[1, 1].set_title("Sample k"); axes[1, 1].set_ylabel("k"); axes[1, 1].set_xlabel("THz")

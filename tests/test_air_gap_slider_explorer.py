@@ -31,6 +31,8 @@ from air_gap_slider_explorer import (
     deembed_reflection,
     invert_air_incidence,
     conductivity_from_nk,
+    samples_from_dataset,
+    _short_sample_name,
 )
 
 _, GAP_ANGLE_RAD = internal_and_gap_angles()
@@ -130,6 +132,82 @@ def test_width_correction_boosts_high_frequency_magnitude():
     assert lift[0] < 1.01                # negligible lift at the bottom of the band
 
 
+class _FakeDataAccess:
+    def __init__(self, items, references):
+        self._items = items
+        self._references = set(references)
+
+    def items(self):
+        return list(self._items.items())
+
+    def is_reference(self, name):
+        return name in self._references
+
+
+class _FakeObj:
+    def __init__(self, processing):
+        self.processing_dict = processing
+
+
+class _FakeDataset:
+    def __init__(self, items, references):
+        self.data = _FakeDataAccess(items, references)
+
+
+def _processed_sample(n_value=3.0):
+    return _FakeObj({
+        "fft_freq": FREQ_HZ,
+        "transfer_mask": FULL_MASK,
+        "reflection_r": _planted_cnt_reflection(n_value, 0.5),
+        "r_reference": R_FRONT,
+        "n": n_value * np.ones(FREQ_HZ.size),
+        "k": 0.5 * np.ones(FREQ_HZ.size),
+    })
+
+
+def test_short_sample_name_handles_si_and_cnt():
+    assert _short_sample_name("sample_CNT-0-deg_camera-align-T0.acc") == "CNT-0-deg"
+    assert _short_sample_name("sample_Si-0-deg_camera-align-T0.acc") == "Si-0-deg"
+    assert _short_sample_name("reference_silicon_x.acc") == "silicon"
+
+
+def test_samples_from_dataset_extracts_records():
+    """Builds one record per non-reference sample with the keys the de-embed needs."""
+    ds = _FakeDataset(
+        {"sample_CNT-0-deg_x.acc": _processed_sample(3.0),
+         "reference_sio2_x.acc": _FakeObj({})},  # reference skipped before processing read
+        references={"reference_sio2_x.acc"},
+    )
+    samples = samples_from_dataset(ds)
+    assert len(samples) == 1
+    record = samples[0]
+    assert record["name"] == "CNT-0-deg"
+    assert record["frequency_hz"].shape == FREQ_HZ.shape
+    assert record["r_meas"].dtype == complex
+    assert isinstance(record["r_front"], complex)
+    # the extracted record must drive the de-embed chain without error
+    n, k = invert_air_incidence(record["frequency_hz"],
+                                deembed_reflection(record["r_meas"], record["r_front"],
+                                                   record["frequency_hz"], 0.0, 0.0, GAP_ANGLE_RAD),
+                                record["mask"], GAP_ANGLE_RAD)
+    assert np.all(np.isfinite(n))
+
+
+def test_samples_from_dataset_raises_when_no_inverted_samples():
+    """A dataset without reflection_r (inversion not run) is a clear error, not empty silence."""
+    ds = _FakeDataset(
+        {"sample_x.acc": _FakeObj({"fft_freq": FREQ_HZ})},  # no reflection_r
+        references=set(),
+    )
+    raised = False
+    try:
+        samples_from_dataset(ds)
+    except RuntimeError as error:
+        raised = True
+        assert "invert_nk_reflection" in str(error)
+    assert raised
+
+
 # ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
@@ -142,6 +220,9 @@ _TESTS = [
     test_sigma_real_independent_of_eps_inf,
     test_debye_waller_is_unity_at_zero_and_monotone_down,
     test_width_correction_boosts_high_frequency_magnitude,
+    test_short_sample_name_handles_si_and_cnt,
+    test_samples_from_dataset_extracts_records,
+    test_samples_from_dataset_raises_when_no_inverted_samples,
 ]
 
 

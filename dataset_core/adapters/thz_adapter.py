@@ -1003,10 +1003,24 @@ def window_pulses_fixed_width(
             time_seconds = holder.data[:, 0]
             amplitude = holder.data[:, 1]
             n_samples = amplitude.size
-            if time_seconds.shape != reference_time_seconds.shape:
+            # Traces may differ in LENGTH across files (different record windows): the
+            # window is applied per-file on its own axis, and fft_spectrum(n_fft=...)
+            # later zero-pads/truncates every trace to the SAME n_fft, so all files land
+            # on one frequency grid (freq = rfftfreq(n_fft, dt)) regardless of raw length.
+            # The only cross-file invariant that matters is the sample step dt — equal dt
+            # (+ n_fft >= longest trace, asserted via minimum_fft_length) is necessary and
+            # sufficient for the grids to match. So we check dt, not shape.
+            segment_dt_seconds = float(np.median(np.diff(time_seconds)))
+            # atol=0.0 is essential: dt is ~1e-13 s, so np.isclose's default atol=1e-8
+            # would call every dt "close". Relative tolerance must govern here.
+            if not np.isclose(segment_dt_seconds, dt_seconds, rtol=1e-4, atol=0.0):
                 raise ValueError(
-                    f"'{filename}' {segment} axis ({n_samples}) differs from the first file "
-                    f"({reference_time_seconds.size}); all files must share one axis."
+                    f"'{filename}' {segment} sample step "
+                    f"dt={segment_dt_seconds * _S_TO_PS:.5f} ps differs from the reference "
+                    f"dt={dt_seconds * _S_TO_PS:.5f} ps; all files must share one time step "
+                    f"so their FFTs land on the same frequency grid. Trace LENGTHS may "
+                    f"differ ({n_samples} vs {reference_time_seconds.size} samples) — n_fft "
+                    f"reconciles them — but the step must match."
                 )
 
             region_seconds = (region_ps[0] / _S_TO_PS, region_ps[1] / _S_TO_PS)
@@ -1088,6 +1102,266 @@ def _plot_fixed_width_window(graph_records: dict, segments: tuple) -> None:
         axis.legend(fontsize=7)
     axes[-1].set_xlabel('time (ps)')
     plt.show()
+
+
+def window_single_pulse_fixed_width(
+    dataset: DataSet,
+    half_width_ps: float,
+    region_ps: tuple | None = None,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Fixed-width symmetric window on the SINGLE main pulse of each plain ``THzData``.
+
+    The single-reflection counterpart of :func:`window_pulses_fixed_width`. Same
+    philosophy: an identical ``2N+1``-sample symmetric window (``N`` from
+    ``half_width_ps`` and the shared ``dt``) is dropped on each trace's peak and the
+    data is **never shifted** — so the absolute arrival time, and therefore the
+    relative sample-vs-reference timing, is preserved exactly. That preserved timing
+    is essential for a plain reflection ratio ``H = Y_sample / Y_reference``: a
+    misalignment that delays one pulse shows up as a linear phase in ``H`` (and a
+    corrupted n,k) rather than being silently centred away.
+
+    Unlike the two-reflection version this operates on plain ``THzData`` (it skips
+    ``THzDataReflection`` objects). The peak is located within ``region_ps`` if given,
+    else over the whole trace.
+
+    Parameters
+    ----------
+    half_width_ps : float
+        Half-width of the window in picoseconds (identical for every trace).
+    region_ps : tuple or None
+        ``(start_ps, end_ps)`` to constrain the peak search, or ``None`` for the
+        whole trace.
+    config : dict, optional
+        ``config['window']`` keys ``type`` ('hann' default / 'tukey' / 'boxcar')
+        and ``alpha`` (tukey only).
+
+    Notes
+    -----
+    Original data saved under ``processing_dict['pre_fixed_window']``; the window plan
+    under ``processing_dict['fixed_window']`` (mirrors the two-reflection version, so
+    the same downstream code reads either).
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
+    window_type = window_config.get('type', 'hann')
+    alpha = float(window_config.get('alpha', 1.0))
+
+    plain_items = [
+        (filename, obj) for filename, obj in dataset.data.items()
+        if not isinstance(obj, THzDataReflection)
+    ]
+    if not plain_items:
+        print("[window_single_pulse_fixed_width] No plain THzData objects found, skipping.")
+        return dataset
+
+    # One dt for the whole dataset -> one fixed sample count -> one window length.
+    reference_time_seconds = plain_items[0][1].data[:, 0]
+    dt_seconds = float(np.median(np.diff(reference_time_seconds)))
+    half_width_samples = int(round(half_width_ps * 1e-12 / dt_seconds))
+    if half_width_samples < 2:
+        raise ValueError(
+            f"half_width_ps={half_width_ps} is < 2 samples at dt={dt_seconds * _S_TO_PS:.4f} ps."
+        )
+    window_length = 2 * half_width_samples + 1
+    window_core = _build_symmetric_window(window_length, window_type, alpha)
+
+    graph_records = {}
+    for filename, data_obj in plain_items:
+        time_seconds = data_obj.data[:, 0]
+        amplitude = data_obj.data[:, 1]
+        n_samples = amplitude.size
+
+        segment_dt_seconds = float(np.median(np.diff(time_seconds)))
+        if not np.isclose(segment_dt_seconds, dt_seconds, rtol=1e-4, atol=0.0):
+            raise ValueError(
+                f"'{filename}' sample step dt={segment_dt_seconds * _S_TO_PS:.5f} ps differs "
+                f"from the reference dt={dt_seconds * _S_TO_PS:.5f} ps; all traces must share "
+                f"one time step so their FFTs land on the same frequency grid."
+            )
+
+        if region_ps is not None and None not in region_ps:
+            region_seconds = (region_ps[0] / _S_TO_PS, region_ps[1] / _S_TO_PS)
+            in_region = (time_seconds >= region_seconds[0]) & (time_seconds <= region_seconds[1])
+            search_indices = np.where(in_region)[0]
+            if search_indices.size < 4:
+                raise ValueError(
+                    f"'{filename}': region [{region_ps[0]:.2f}, {region_ps[1]:.2f}] ps "
+                    f"selects < 4 samples."
+                )
+        else:
+            search_indices = np.arange(n_samples)
+        peak_index = search_indices[int(np.argmax(np.abs(amplitude[search_indices])))]
+
+        # Drop the identical window_core at [peak-N, peak+N]; clip to the axis but keep
+        # matching window weights on the bins that do exist. Data is NOT shifted.
+        lo = peak_index - half_width_samples
+        hi = peak_index + half_width_samples + 1
+        data_lo, data_hi = max(lo, 0), min(hi, n_samples)
+        core_lo = data_lo - lo
+        core_hi = core_lo + (data_hi - data_lo)
+        window_function = np.zeros(n_samples)
+        window_function[data_lo:data_hi] = window_core[core_lo:core_hi]
+        windowed = amplitude * window_function
+        clipped = (lo < 0) or (hi > n_samples)
+
+        data_obj.processing_dict['pre_fixed_window'] = data_obj.data.copy()
+        data_obj.processing_dict['fixed_window'] = dict(
+            peak_index=int(peak_index),
+            peak_time_seconds=float(time_seconds[peak_index]),
+            half_width_samples=half_width_samples,
+            window_length=window_length,
+            clipped=bool(clipped),
+        )
+        data_obj.data = np.column_stack((time_seconds, windowed))
+
+        clip_note = "  *** CLIPPED at trace edge — reduce half_width_ps ***" if clipped else ""
+        print(
+            f"[window_single_pulse_fixed_width] '{filename}': "
+            f"peak {time_seconds[peak_index] * _S_TO_PS:.2f} ps, window {window_length} samples "
+            f"(+/- {half_width_samples * dt_seconds * _S_TO_PS:.2f} ps).{clip_note}"
+        )
+        graph_records[filename] = dict(time_seconds=time_seconds, windowed=windowed,
+                                       window_function=window_function)
+
+    print(
+        f"[window_single_pulse_fixed_width] applied an IDENTICAL {window_type} window of "
+        f"{window_length} samples to {len(graph_records)} traces."
+    )
+
+    if show_graph and graph_records:
+        figure, axis = plt.subplots(layout='constrained')
+        figure.suptitle('window_single_pulse_fixed_width — identical fixed-width window per trace')
+        peak_amplitude = max(np.max(np.abs(r['windowed'])) for r in graph_records.values())
+        for filename, record in graph_records.items():
+            time_ps = record['time_seconds'] * _S_TO_PS
+            axis.plot(time_ps, record['windowed'], lw=1.3, label=filename)
+            axis.plot(time_ps, record['window_function'] * peak_amplitude, '--', lw=0.9, alpha=0.5)
+        axis.set_xlabel('time (ps)'); axis.set_ylabel('amplitude'); axis.legend(fontsize=7)
+        plt.show()
+
+    return dataset
+
+
+def recenter_peaks_to_common_t0(
+    dataset: DataSet,
+    target_t0_ps: float | None = None,
+    region_ps: tuple | None = None,
+    subsample: bool = True,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Shift every plain ``THzData`` so its peak lands at a common time T0.
+
+    A "centering recalibration": it RESETS all pulses to the same peak time, removing
+    the relative timing between traces. This is the deliberate OPPOSITE of the no-shift
+    windowing — use it to SIMULATE correcting the delay that angular misalignment
+    introduces. A misaligned mirror both (a) delays the pulse and (b) distorts its
+    amplitude/spectrum (cone/focus). Re-centering removes only (a); whatever survives in
+    the transfer function afterwards is the part a pure delay-correction CANNOT fix.
+
+    Target T0: ``target_t0_ps`` if given, else the reference trace's peak time (so the
+    reference stays put and samples move onto it), else the first trace's peak.
+
+    Shift method: sub-sample by linear interpolation onto the SAME time axis (the grid is
+    preserved, so the shared-grid FFT still works), or integer-sample ``np.roll`` when
+    ``subsample=False``. Baseline-subtracted edges fill with zero.
+
+    Parameters
+    ----------
+    target_t0_ps : float or None
+        Common peak time (ps). None -> reference peak (or first trace).
+    region_ps : tuple or None
+        ``(start_ps, end_ps)`` to constrain the peak search, or None for the whole trace.
+    subsample : bool
+        True -> precise interpolation shift; False -> nearest-sample roll.
+
+    Notes
+    -----
+    Original data saved under ``processing_dict['pre_recenter']``; the applied shift (s)
+    and target under ``processing_dict['recenter']``.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+
+    plain_items = [
+        (filename, obj) for filename, obj in dataset.data.items()
+        if not isinstance(obj, THzDataReflection)
+    ]
+    if not plain_items:
+        print("[recenter_peaks_to_common_t0] No plain THzData objects found, skipping.")
+        return dataset
+
+    def _peak_time_seconds(data_obj):
+        time_seconds = data_obj.data[:, 0]
+        amplitude = data_obj.data[:, 1]
+        if region_ps is not None and None not in region_ps:
+            in_region = ((time_seconds >= region_ps[0] / _S_TO_PS)
+                         & (time_seconds <= region_ps[1] / _S_TO_PS))
+            search_indices = np.where(in_region)[0]
+            if search_indices.size < 1:
+                raise ValueError(f"region [{region_ps[0]}, {region_ps[1]}] ps selects no samples.")
+        else:
+            search_indices = np.arange(amplitude.size)
+        peak_index = search_indices[int(np.argmax(np.abs(amplitude[search_indices])))]
+        return float(time_seconds[peak_index])
+
+    peak_times = {fn: _peak_time_seconds(obj) for fn, obj in plain_items}
+
+    if target_t0_ps is not None:
+        target_t0_seconds = float(target_t0_ps) / _S_TO_PS
+        target_source = f"config target {target_t0_ps:.3f} ps"
+    else:
+        reference_name = next(
+            (fn for fn, _ in plain_items if dataset.data.is_reference(fn)), None)
+        anchor = reference_name if reference_name is not None else plain_items[0][0]
+        target_t0_seconds = peak_times[anchor]
+        target_source = f"reference '{anchor}'" if reference_name else f"first trace '{anchor}'"
+
+    for filename, data_obj in plain_items:
+        time_seconds = data_obj.data[:, 0]
+        amplitude = data_obj.data[:, 1]
+        shift_seconds = target_t0_seconds - peak_times[filename]
+
+        if subsample:
+            # new_y(t) = old_y(t - shift) so the peak moves from its time to the target.
+            shifted = np.interp(time_seconds - shift_seconds, time_seconds, amplitude,
+                                left=0.0, right=0.0)
+        else:
+            dt_seconds = float(np.median(np.diff(time_seconds)))
+            shifted = np.roll(amplitude, int(round(shift_seconds / dt_seconds)))
+
+        data_obj.processing_dict['pre_recenter'] = data_obj.data.copy()
+        data_obj.processing_dict['recenter'] = dict(
+            shift_seconds=float(shift_seconds),
+            target_t0_seconds=float(target_t0_seconds),
+            subsample=bool(subsample),
+        )
+        extra = data_obj.data[:, 2:] if data_obj.data.shape[1] > 2 else None
+        new_data = np.column_stack((time_seconds, shifted))
+        if extra is not None:
+            new_data = np.column_stack((new_data, extra))
+        data_obj.data = new_data
+
+        print(
+            f"[recenter_peaks_to_common_t0] '{filename}': peak "
+            f"{peak_times[filename] * _S_TO_PS:.3f} ps -> {target_t0_seconds * _S_TO_PS:.3f} ps "
+            f"(shift {shift_seconds * _S_TO_PS:+.3f} ps, {'subsample' if subsample else 'integer'})."
+        )
+    print(f"[recenter_peaks_to_common_t0] all peaks reset to T0 = {target_source}.")
+
+    if show_graph:
+        figure, axis = plt.subplots(layout='constrained')
+        figure.suptitle('recenter_peaks_to_common_t0 — all peaks reset to common T0')
+        for filename, data_obj in plain_items:
+            pre = data_obj.processing_dict['pre_recenter']
+            axis.plot(pre[:, 0] * _S_TO_PS, pre[:, 1], '--', lw=0.8, alpha=0.4)
+            axis.plot(data_obj.data[:, 0] * _S_TO_PS, data_obj.data[:, 1], lw=1.3, label=filename)
+        axis.axvline(target_t0_seconds * _S_TO_PS, color='k', ls=':', lw=0.8, label='target T0')
+        axis.set_xlabel('time (ps)'); axis.set_ylabel('amplitude'); axis.legend(fontsize=7)
+        plt.show()
+
+    return dataset
 
 
 # ---------------------------------------------------------------------------
@@ -1499,6 +1773,44 @@ def _plot_pad_start(pad_records: dict, segment: str) -> None:
 
 def global_truncate(
     dataset: DataSet,
+    show_graph: bool = False,
+) -> DataSet:
+    """Truncate all traces to their common time range
+    """
+    holders = [(fn, data_obj) for fn, data_obj in dataset.data.items()]
+
+    min_t = max(float(np.nanmin(h.data[:, 0])) for _, h in holders)
+    max_t = min(float(np.nanmax(h.data[:, 0])) for _, h in holders)
+
+    # Mask by value first, then trim ALL holders to the common minimum length. A
+    # float boundary sample can land in some traces but not others (off-by-one),
+    # which would leave files on slightly different-length axes; trimming to the
+    # shortest common count guarantees one identical axis for every file.
+    masked = []
+    for fn, h in holders:
+        kept_indices = np.where((h.data[:, 0] >= min_t) & (h.data[:, 0] <= max_t))[0]
+        masked.append((fn, h, kept_indices))
+    target_length = min(len(kept_indices) for _, _, kept_indices in masked)
+
+    for fn, h, kept_indices in masked:
+        h.data = h.data[kept_indices[:target_length], :]
+        if show_graph:
+            plt.plot(h.data[:, 0] * _S_TO_PS, h.data[:, 1], label=fn)
+
+    print(f"[global_truncate] truncated to common time range "
+          f"({target_length} samples).")
+    if show_graph:
+        plt.legend()
+        plt.xlabel('Time (ps)')
+        plt.title(f'Globally Truncated Traces')
+        plt.show()
+    return dataset
+
+    
+
+
+def global_truncate_segments(
+    dataset: DataSet,
     segment: str = 'second_reflection',
     show_graph: bool = False,
 ) -> DataSet:
@@ -1599,6 +1911,10 @@ def define_alignment_regions(
 
     return config
 
+def zero_all_time_axes(dataset: DataSet, align_first: bool = True) -> DataSet:
+    """Zero all time axes in the dataset to remove any instrumental """
+    
+
 
 def centering_manual(
     dataset: DataSet,
@@ -1639,31 +1955,31 @@ def centering_manual(
 
     aligned = core.align_on_peak(data_dict, auto_range=auto_range_idx)
 
-    # if recalibrate:
-    #     print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
-    #     print(" Select which file's time axis to use:")
-    #     while True:
-    #         for i, filename in enumerate(aligned.keys()):
-    #             print(f"  {i}: {filename}")
-    #         selection = input(f"Enter a number from 0 to {len(aligned)-1}: ")
-    #         try:            
-    #             idx = int(selection)
-    #             if idx < 0 or idx >= len(aligned):
-    #                 print("Must be a valid number from the list.")
-    #                 continue
-    #             selected_filename = list(aligned.keys())[idx]
-    #             break
-    #         except ValueError:
-    #             print("Must be a valid number from the list.")
-    #     print(f"Selected '{selected_filename}' as the T0 reference. Recalibrating all files to share its time axis.")
+    if recalibrate:
+        print("Recalibrating time axis for all files to share same T0, i.e. no instrumental timing offset remains.")
+        print(" Select which file's time axis to use:")
+        while True:
+            for i, filename in enumerate(aligned.keys()):
+                print(f"  {i}: {filename}")
+            selection = input(f"Enter a number from 0 to {len(aligned)-1}: ")
+            try:            
+                idx = int(selection)
+                if idx < 0 or idx >= len(aligned):
+                    print("Must be a valid number from the list.")
+                    continue
+                selected_filename = list(aligned.keys())[idx]
+                break
+            except ValueError:
+                print("Must be a valid number from the list.")
+        print(f"Selected '{selected_filename}' as the T0 reference. Recalibrating all files to share its time axis.")
 
-    #     ref_data = aligned[selected_filename]
-    #     ref_axis = ref_data[:, 0]
+        ref_data = aligned[selected_filename]
+        ref_axis = ref_data[:, 0]
 
-    #     for filename, data in aligned.items():
-    #         if filename == selected_filename:
-    #             continue
-    #         aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
+        for filename, data in aligned.items():
+            if filename == selected_filename:
+                continue
+            aligned[filename] = np.column_stack((ref_axis, data[:, 1]))
 
     if show_graph:
         for filename, data in aligned.items():
@@ -2567,9 +2883,17 @@ def fft_spectrum(
         else:
             freq, spectrum, metrics = core.fft_spectrum(t, y, config)
 
-        if segment == 'first_reflection':
-            # Absolute-time phase reference: encodes the true inter-pulse delay
-            # in W = Y₂/Y₁ without time-domain resampling.
+        if isinstance(data_obj, THzDataReflection):
+            # Absolute-time phase reference for the reflection W = Y₂/Y₁. Apply it to
+            # BOTH segments, each w.r.t. its OWN trace origin t[0], so each spectrum
+            # carries its pulse's ABSOLUTE arrival phase. Then
+            #   W = Y₂/Y₁ = (A₂/A₁)·exp(-2πi f (t₂-t₁))
+            # encodes only the physical inter-pulse delay and is INVARIANT to a rigid
+            # shift of the whole trace (a relabel of t[0]). Applying it to the first
+            # segment ALONE (the previous behaviour) left an uncancelled exp(+2πi f t₀)
+            # in W, so align_to_reference — which shifts only the sample's axis — leaked
+            # a spurious linear phase into the self-referenced H (ANALYSIS_NOTES; Audit 1).
+            # Plain THzData (transmission) is excluded: its phase must stay trace-relative.
             spectrum = spectrum * np.exp(-2j * np.pi * freq * t[0])
 
         holder.processing_dict['fft_freq'] = freq
@@ -2734,39 +3058,39 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
         Y_samp = data_obj.processing_dict['fft_spectrum']
         Y_ref = ref_obj.processing_dict['fft_spectrum']
 
-        H, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
-
-        # Apply the sub-sample timing residual left over by align_to_reference, as
-        # an exact spectral phase ramp (Fourier shift theorem). This completes the
-        # T0 alignment to sub-sample precision without ever interpolating the
-        # time-domain trace. It is a no-op (residual = 0) when alignment was not
-        # run, or when the SUBSAMPLE_TIMING_CORRECTION toggle was off.
-        subsample_shift = data_obj.processing_dict.get('subsample_shift_seconds', 0.0)
-        if self_reference and subsample_shift:
-            print(
-                f"[sub-sample] '{filename}': ramp for {subsample_shift * _S_TO_PS:+.4f} ps "
-                f"skipped — self-referencing carries the front-pulse timing itself."
-            )
-        elif subsample_shift:
-            H = H * core.phase_ramp(freq, subsample_shift)
-            print(
-                f"[sub-sample] '{filename}': applied spectral phase ramp for "
-                f"{subsample_shift * _S_TO_PS:+.4f} ps residual timing."
-            )
-
+        # ── Transfer function: self-referenced (window-coupled) or plain ratio ──
+        # The MATH lives in thz_core; this wrapper only fetches spectra from the
+        # dataset and hands them over. Self-reference forms the full
+        #     H = (Y2_s/Y1_s) / (Y2_r/Y1_r)
+        # in one call (core.self_referenced_transfer); the plain branch is the
+        # ordinary single ratio H = Y2_s/Y2_r. Here Y_samp/Y_ref are the BACK
+        # (second-reflection) spectra; front_samp/front_ref are the FRONT pulses.
         front_samp = front_ref = None
         if self_reference:
             front_samp = _get_first_spectrum(data_obj, freq)
             front_ref = _get_first_spectrum(ref_obj, freq)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                selfref_correction = front_ref / front_samp
-            H = H * selfref_correction
-            data_obj.processing_dict['selfref_correction'] = selfref_correction
-            band = np.isfinite(selfref_correction)
-            print(
-                f"[self-ref] '{filename}': applied front-pulse correction "
-                f"(|C| median {np.nanmedian(np.abs(selfref_correction[band])):.3f})."
+            H, finite_mask, tf_metrics = core.self_referenced_transfer(
+                freq, Y_samp, front_samp, Y_ref, front_ref, config,
             )
+            selfref_correction = tf_metrics['diagnostics']['front_correction']
+            data_obj.processing_dict['selfref_correction'] = selfref_correction
+            finite_band = np.isfinite(selfref_correction)
+            print(
+                f"[self-ref] '{filename}': H = (Y2_s/Y1_s)/(Y2_r/Y1_r); front-pulse drift "
+                f"correction |C| median {np.nanmedian(np.abs(selfref_correction[finite_band])):.3f}."
+            )
+        else:
+            H, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
+            # Sub-sample timing residual (from align_to_reference) as an exact spectral
+            # phase ramp — Fourier shift theorem, no time-domain interpolation. Self-ref
+            # needs no ramp: the front pulse carries the relative timing structurally.
+            subsample_shift = data_obj.processing_dict.get('subsample_shift_seconds', 0.0)
+            if subsample_shift:
+                H = H * core.phase_ramp(freq, subsample_shift)
+                print(
+                    f"[sub-sample] '{filename}': applied spectral phase ramp for "
+                    f"{subsample_shift * _S_TO_PS:+.4f} ps residual timing."
+                )
 
         data_obj.processing_dict['transfer_H'] = H
         data_obj.processing_dict['transfer_metrics'] = tf_metrics
@@ -2803,6 +3127,106 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
         ))
 
     return dataset
+
+
+def selfref_quality(dataset: DataSet, config: dict | None = None) -> dict:
+    """Flag self-referenced acquisitions whose front-pulse correction C is unstable.
+
+    Diagnostic only — prints a warning, changes no data. The self-reference
+    correction ``C = Y1_ref / Y1_sample`` (stored by ``transfer_function`` as
+    ``processing_dict['selfref_correction']``) should be a flat ``|C| ≈ 1`` when
+    the FRONT reflection spots of the sample and reference acquisitions land on
+    the same focus. A structured ``|C|`` means the front spot drifted between
+    acquisitions (e.g. the SiO2 window rotated and sent the front spot off the
+    gate focus), which corrupts the self-referenced ``H``.
+
+    Crucially this is a DIAGNOSTIC, not a correction: dividing ``H`` by ``C``
+    does NOT recover the result — algebraically ``H/C = Y2_s/Y2_r``, which
+    discards the self-referencing and re-injects the absolute back-pulse timing
+    offset that self-referencing correctly cancels (audited 2026-06-24: plain
+    ``H`` beats every ``C``-division on both the Si=3.418 benchmark and the
+    CNT-0°/90° complex-transfer agreement). So we warn and let the operator
+    re-align or discard, rather than silently "fixing" it.
+
+    Metric (over the trusted band): ``std(|C|)`` is the discriminator — it
+    cleanly separated good (~0.01) from misaligned (~0.53) acquisitions in the
+    alignment audit. ``|median(|C|) − 1|`` is reported too but is a weaker
+    signal (a wildly structured |C| can still have a median near 1).
+
+    Parameters
+    ----------
+    config : dict, optional
+        ``config['selfref_quality']`` keys (all optional):
+
+        ``band_thz`` : tuple[float, float], default ``(0.2, 2.5)``
+            Frequency band over which the metric is evaluated.
+        ``std_threshold`` : float, default ``0.1``
+            Flag when ``std(|C|)`` over the band exceeds this.
+        ``median_dev_threshold`` : float, default ``0.15``
+            Flag when ``|median(|C|) − 1|`` exceeds this.
+        ``use_snr_mask`` : bool, default True
+            Intersect the band with each sample's trusted SNR mask.
+
+    Returns
+    -------
+    dict
+        ``{filename: {'std': float, 'median_dev': float, 'flagged': bool,
+        'n_bins': int}}`` for every self-referenced sample. Empty if the run
+        was not self-referenced (no ``selfref_correction`` present).
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    quality_cfg = config.get('selfref_quality', {})
+    band_thz = quality_cfg.get('band_thz', (0.2, 2.5))
+    std_threshold = float(quality_cfg.get('std_threshold', 0.1))
+    median_dev_threshold = float(quality_cfg.get('median_dev_threshold', 0.15))
+    use_snr_mask = quality_cfg.get('use_snr_mask', True)
+
+    results: dict = {}
+    for filename, data_obj in _sample_items(dataset):
+        processing = data_obj.processing_dict
+        front_correction = processing.get('selfref_correction')  # C = Y1_r / Y1_s
+        freq = processing.get('fft_freq')
+        if front_correction is None or freq is None:
+            continue  # not a self-referenced run
+
+        in_band = (
+            (freq * _HZ_TO_THZ >= band_thz[0])
+            & (freq * _HZ_TO_THZ <= band_thz[1])
+            & np.isfinite(front_correction)
+        )
+        trusted_mask = processing.get('transfer_mask')
+        if use_snr_mask and trusted_mask is not None:
+            in_band = in_band & trusted_mask
+        if not np.any(in_band):
+            continue
+
+        correction_magnitude = np.abs(front_correction[in_band])
+        magnitude_std = float(np.std(correction_magnitude))
+        magnitude_median_dev = float(np.abs(np.median(correction_magnitude) - 1.0))
+        flagged = (magnitude_std > std_threshold) or (magnitude_median_dev > median_dev_threshold)
+        results[filename] = dict(
+            std=magnitude_std,
+            median_dev=magnitude_median_dev,
+            flagged=flagged,
+            n_bins=int(np.count_nonzero(in_band)),
+        )
+
+        status = "WARN" if flagged else "ok"
+        message = (
+            f"[selfref_quality] {status}  '{filename}': "
+            f"std(|C|)={magnitude_std:.3f} (thr {std_threshold:.2f}), "
+            f"|median|C|-1|={magnitude_median_dev:.3f} (thr {median_dev_threshold:.2f}) "
+            f"over {band_thz[0]:.1f}-{band_thz[1]:.1f} THz."
+        )
+        print(message)
+        if flagged:
+            print(
+                f"    -> front-pulse correction C is structured: the FRONT reflection spot "
+                f"likely drifted between this sample and its reference. Self-referenced H is "
+                f"suspect. Re-align to the back reflection (do NOT divide H by C — that only "
+                f"trades the front-spot error for a worse timing error)."
+            )
+    return results
 
 
 def remove_phase_offset(
@@ -3377,6 +3801,98 @@ def _grid_invert_substrate_sandwich(dataset, config):
         }
         n, k, metrics = core.invert_nk_grid(freq, H, mask, sample_config)
         _store_nk_grid(data_obj, freq, n, k, metrics)
+
+
+_SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
+
+
+def deembed_air_gap_reflection(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Route-A air-gap de-embed: strip a contact gap from the reflection, then re-invert.
+
+    The CNT is pressed against the SiO2 back face but a thin (rough) contact gap
+    remains: SiO2 | air d | CNT. The window-geometry inversion (``invert_nk_reflection``)
+    folds that gap into n, k — and because the reflection sits near |r|=1, even a tiny
+    gap phase walks r through the Fresnel-inversion singularity and manufactures a fake
+    peak (the spurious "Lorentzian"; see reports/lineshape_and_inversion_tutorial.md).
+
+    This step removes the gap and re-inverts with AIR incidence at the in-gap angle:
+
+      1. de-embed the SiO2/air front interface:  x = (r_meas − r_front)/(1 − r_front·r_meas)
+         (the EXACT single-gap inverse — for one gap, x = r_back·e^{−i2β}).
+      2. POSITION strip: multiply by e^{+i2β}, 2β = (ω/c)·2d·cosθ_gap (exact phase undo).
+      3. WIDTH (roughness) un-suppression: divide by the single-bounce Debye-Waller factor
+         W = exp(−2((ω/c)cosθ_gap·σ_d)²) (an APPROXIMATION; 1/W clipped at ``max_boost``).
+      4. invert r_back with n_incident=1 at θ_gap → de-embedded n, k.
+
+    Gap parameters come from ``config['air_gap']`` (single source of truth):
+    ``position_um`` (d), ``width_um`` (σ_d), ``max_boost``. The in-gap angle equals the
+    external incidence angle (the air gap returns the beam to θ_external), read from
+    ``config['geometry']['theta_external_deg']``.
+
+    The window-geometry n, k are preserved as ``processing_dict['n_window']`` /
+    ``['k_window']`` and the de-embedded values OVERWRITE ``['n']`` / ``['k']`` so the
+    downstream ``derive_eps_sigma`` / save / viewer all use the gap-corrected result.
+    Run AFTER ``invert_nk_reflection`` (which provides ``reflection_r`` and
+    ``r_reference``) and BEFORE ``derive_eps_sigma``.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    air_gap_config = config.get('air_gap', {})
+    gap_position_m = float(air_gap_config.get('position_um', 0.0)) * 1e-6
+    gap_width_m = float(air_gap_config.get('width_um', 0.0)) * 1e-6
+    max_boost = float(air_gap_config.get('max_boost', 1.0e3))
+    gap_angle_rad = np.deg2rad(float(config.get('geometry', {}).get('theta_external_deg', 45.0)))
+    cos_gap = np.cos(gap_angle_rad)
+
+    for filename, data_obj in _sample_items(dataset):
+        processing = data_obj.processing_dict
+        freq = processing.get('fft_freq')
+        reflection_measured = processing.get('reflection_r')
+        reflection_front = processing.get('r_reference')
+        mask = processing.get('transfer_mask')
+        if freq is None or reflection_measured is None or reflection_front is None:
+            print(f"Warning: '{filename}' missing reflection_r/r_reference; "
+                  f"run invert_nk_reflection before deembed_air_gap_reflection. Skipping.")
+            continue
+
+        omega = 2.0 * np.pi * freq
+        x = (reflection_measured - reflection_front) / (
+            1.0 - reflection_front * reflection_measured)
+        phase_strip = np.exp(1j * omega / _SPEED_OF_LIGHT_M_PER_S * 2.0 * gap_position_m * cos_gap)
+        if gap_width_m > 0.0:
+            debye_waller = np.exp(-2.0 * (omega / _SPEED_OF_LIGHT_M_PER_S * cos_gap * gap_width_m) ** 2)
+            magnitude_boost = np.minimum(1.0 / debye_waller, max_boost)
+        else:
+            magnitude_boost = 1.0
+        reflection_back = x * phase_strip * magnitude_boost
+
+        if mask is None:
+            mask = np.isfinite(reflection_back)
+        n_deembedded, k_deembedded, invert_metrics = core.invert_nk_reflection(
+            freq, reflection_back, mask, config,
+            theta_rad=gap_angle_rad, polarization='s', n_incident=1.0,
+        )
+
+        # Preserve the window-geometry inversion; de-embedded values become the primary n, k.
+        processing['n_window'] = processing.get('n')
+        processing['k_window'] = processing.get('k')
+        processing['reflection_r_deembedded'] = reflection_back
+        processing['n'] = n_deembedded
+        processing['k'] = k_deembedded
+        processing['air_gap_deembed'] = dict(
+            position_um=gap_position_m * 1e6, width_um=gap_width_m * 1e6,
+            gap_angle_deg=float(np.rad2deg(gap_angle_rad)),
+        )
+        processing['invert_metrics_deembedded'] = invert_metrics
+        data_obj.data = np.column_stack((freq, n_deembedded, k_deembedded))
+
+        band = mask & np.isfinite(n_deembedded)
+        n_median = float(np.nanmedian(n_deembedded[band])) if np.any(band) else float('nan')
+        print(
+            f"[deembed_air_gap_reflection] '{filename}': d_mean {gap_position_m * 1e6:.1f} um, "
+            f"sigma_d {gap_width_m * 1e6:.1f} um -> de-embedded n median {n_median:.2f} "
+            f"(window-geometry n stored as 'n_window')."
+        )
+    return dataset
 
 
 def derive_eps_sigma(dataset: DataSet, config: dict | None = None) -> DataSet:

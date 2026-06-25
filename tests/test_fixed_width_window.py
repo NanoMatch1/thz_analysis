@@ -35,13 +35,17 @@ def _gaussian_pulse(time_ps: np.ndarray, peak_ps: float, width_ps: float = 0.3) 
     return 1.0 + 5.0 * np.exp(-0.5 * ((time_ps - peak_ps) / width_ps) ** 2)
 
 
-def _make_reflection(filename: str, first_peak_ps: float, second_peak_ps: float):
+def _make_reflection(filename: str, first_peak_ps: float, second_peak_ps: float,
+                     trace_end_ps: float = 40.0, dt_ps: float = _DT_PS):
     """Full-trace reflection object: both segments share one axis, two pulses on it.
 
     The raw trace is built in PICOSECONDS (the file convention); THzData converts
     column 0 to SI seconds when it averages. Returns the resulting seconds axis.
+
+    ``trace_end_ps`` / ``dt_ps`` let a test build traces of DIFFERENT length (same
+    dt) or different dt, to exercise the cross-file compatibility checks.
     """
-    time_ps = np.arange(0.0, 40.0, _DT_PS)
+    time_ps = np.arange(0.0, trace_end_ps, dt_ps)
     amplitude = (_gaussian_pulse(time_ps, first_peak_ps)
                  + (_gaussian_pulse(time_ps, second_peak_ps) - 1.0))  # keep one +1 baseline
     trace = np.column_stack([time_ps, amplitude])
@@ -184,6 +188,48 @@ def test_minimum_fft_length_takes_max_across_files():
     assert required == expected
 
 
+def test_mixed_length_traces_window_with_matching_dt():
+    """Files of DIFFERENT trace length but SAME dt must window without error.
+
+    Different acquisitions can record different time spans (e.g. 660 vs 340
+    samples). The window is applied per-file on its own axis; n_fft reconciles
+    them onto one frequency grid downstream. Only the sample step must match.
+    """
+    refl_long, _ = _make_reflection("long.acc", first_peak_ps=10.0, second_peak_ps=25.0,
+                                    trace_end_ps=40.0)
+    refl_short, _ = _make_reflection("short.acc", first_peak_ps=10.0, second_peak_ps=25.0,
+                                     trace_end_ps=30.0)
+    long_length = refl_long.first_reflection.data.shape[0]
+    short_length = refl_short.first_reflection.data.shape[0]
+    assert long_length != short_length, "test must actually use mismatched lengths"
+
+    # must NOT raise despite the length mismatch
+    window_pulses_fixed_width(
+        _fake_dataset({"long.acc": refl_long, "short.acc": refl_short}), half_width_ps=2.0,
+    )
+    # each file keeps its own length; both got a window plan
+    assert refl_long.first_reflection.data.shape[0] == long_length
+    assert refl_short.first_reflection.data.shape[0] == short_length
+    assert 'fixed_window' in refl_short.second_reflection.processing_dict
+
+
+def test_mismatched_dt_raises():
+    """Different sample step across files DOES raise (grids would not match)."""
+    refl_a, _ = _make_reflection("a.acc", first_peak_ps=10.0, second_peak_ps=25.0,
+                                 dt_ps=0.05)
+    refl_b, _ = _make_reflection("b.acc", first_peak_ps=10.0, second_peak_ps=25.0,
+                                 dt_ps=0.04)  # different time step
+    raised = False
+    try:
+        window_pulses_fixed_width(
+            _fake_dataset({"a.acc": refl_a, "b.acc": refl_b}), half_width_ps=2.0,
+        )
+    except ValueError as error:
+        raised = True
+        assert "sample step" in str(error)
+    assert raised, "mismatched dt must raise"
+
+
 # ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
@@ -198,6 +244,8 @@ _TESTS = [
     test_clip_flag_set_when_window_runs_off_edge,
     test_minimum_fft_length_is_full_trace_length,
     test_minimum_fft_length_takes_max_across_files,
+    test_mixed_length_traces_window_with_matching_dt,
+    test_mismatched_dt_raises,
 ]
 
 

@@ -67,7 +67,7 @@ def _build_preprocessed(tmpdir, rng):
     dataset = DataSet(tmpdir)
     dataset.load_all_data(case_insensitive=True)
     dataset.group_files(keywords=["type"])
-    thz.subtract_baseline(dataset, show_graph=False)
+    thz.subtract_baseline(dataset)
     thz.align_to_reference(
         dataset, ref_type="reference", roi=(FIRST_PS - 2, FIRST_PS + 2),
         subsample_correction=True, show_graph=False,

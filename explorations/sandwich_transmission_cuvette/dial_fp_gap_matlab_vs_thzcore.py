@@ -26,19 +26,24 @@ The ripple period (free spectral range) is set by the gap thickness:
 
     FSR = c / (2 * n_air * d_gap)
 
-so the air gap is the one parameter you dial to make the modelled FP correction line up
-with the ripple actually present in the measured |H_sample|.  This script exposes that gap
-as ``REFERENCE_GAP_THICKNESS_M`` (overridable on the command line) and overlays the FSR
-comb on the measured |H| so you can read off the right value by eye, then confirm it
-flattens the residual ripple in n / k / sigma.
+LOCKED SPACER
+-------------
+One physical spacer sets the cuvette thickness everywhere, so the filled region (sample)
+and the empty reference region share the SAME thickness.  This script LOCKS them: a single
+``SPACER_THICKNESS_M`` drives both the sample layer and the empty air gap.  That keeps the
+sample/reference propagation paths symmetric, so dialing the spacer changes the FP etalon
+FSR and the overall thickness scale WITHOUT the asymmetric reference-vs-sample path tilt
+that an independent gap would introduce (which otherwise drags the extracted n).  The FSR
+comb is overlaid on the measured |H_sample| so you can read the right spacer off the
+ripple by eye, then confirm it flattens the residual ripple in n / k / sigma.
 
-Run (default gap):
+Run (default spacer):
     PYTHONPATH=. ../.venv/Scripts/python.exe \
         explorations/sandwich_transmission_cuvette/dial_fp_gap_matlab_vs_thzcore.py
 
-Run with a specific gap in micrometres (e.g. 90 um), for quick dialing:
+Run with a specific spacer in micrometres (e.g. 90 um), for quick dialing:
     PYTHONPATH=. ../.venv/Scripts/python.exe \
-        explorations/sandwich_transmission_cuvette/dial_fp_gap_matlab_vs_thzcore.py --gap-um 90
+        explorations/sandwich_transmission_cuvette/dial_fp_gap_matlab_vs_thzcore.py --spacer-um 90
 """
 
 from __future__ import annotations
@@ -60,15 +65,15 @@ except (AttributeError, ValueError):  # pragma: no cover
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  THE FP DIAL — empty-cuvette air-gap thickness (the dominant FP cavity)
+#  THE FP DIAL — single spacer thickness (locked: drives BOTH layers)
 # ════════════════════════════════════════════════════════════════════════════
-# Round-trip echo ~ 2*d_gap/c (air); FSR = c/(2*d_gap).  Same spacer sets the sample
-# thickness, so the true gap is ~ the sample thickness, but dial it freely here to match
-# the ripple seen in the measured |H_sample| panel.  Override with --gap-um.
-REFERENCE_GAP_THICKNESS_M = 0.13e-3      # <-- DIAL ME  (60-130 um is the plausible range)
-
-# Sample's own thickness (the layer that REPLACES the air gap in the filled cuvette).
-SAMPLE_LAYER_THICKNESS_M = 0.13e-3
+# One physical spacer sets the cuvette gap everywhere, so the filled region (sample) and
+# the empty reference region share the SAME thickness.  Locking them keeps the geometry
+# symmetric: dialing the spacer changes the FP etalon FSR (= c / (2 * d_spacer)) and the
+# overall thickness scale, WITHOUT introducing the asymmetric reference-vs-sample path tilt
+# that an independent gap would.  Round-trip air echo ~ 2*d_spacer/c.  Override with
+# --spacer-um.
+SPACER_THICKNESS_M = 0.13e-3             # <-- DIAL ME  (60-130 um is the plausible range)
 
 
 # ── Fixed experimental parameters ─────────────────────────────────────────────
@@ -208,15 +213,18 @@ def invert_thzcore_grid_sample_fp_on(
     mask: np.ndarray,
     substrate_n: np.ndarray,
     substrate_k: np.ndarray,
-    reference_gap_thickness_m: float,
+    spacer_thickness_m: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """thz_core ASMSA grid inversion, Fabry-Perot ON, fed n_sub(omega); returns (n, k>=0)."""
+    """thz_core ASMSA grid inversion, Fabry-Perot ON, fed n_sub(omega); returns (n, k>=0).
+
+    Locked spacer: the sample layer and the empty reference gap share ``spacer_thickness_m``.
+    """
     substrate_index = substrate_n + 1j * substrate_k
     config = {
         "invert_grid": {
             "geometry": "substrate_sandwich",
-            "thickness_sample_m": SAMPLE_LAYER_THICKNESS_M,
-            "thickness_ref_gap_m": reference_gap_thickness_m,
+            "thickness_sample_m": spacer_thickness_m,
+            "thickness_ref_gap_m": spacer_thickness_m,
             "n_substrate": substrate_index,
             "medium_index": AMBIENT_MEDIUM_INDEX,
             "fabry_perot": True,
@@ -240,12 +248,13 @@ def matlab_sample_model_fp_on(
     n_hat_grid: np.ndarray,
     n_substrate: complex,
     frequency_hz: float,
-    reference_gap_thickness_m: float,
+    spacer_thickness_m: float,
 ) -> np.ndarray:
     """sample_code E_sample/E_substrate model (ASMSA) with both FP etalons ON.
 
-    Sample etalon rides on the sample layer (d_sample); reference etalon rides on the empty
-    air gap (d_gap = ``reference_gap_thickness_m``) — the dominant, dialable FP term.
+    Locked spacer: the sample layer and the empty air gap share ``spacer_thickness_m``, so
+    both the sample etalon (on the sample layer) and the reference etalon (on the air gap)
+    use the same thickness, and the propagation phases stay path-symmetric.
     Textbook sign 1/(1 - r^2 P^2), here written 1/(1 + r23*r34*P^2) with r34 = -r23.
     """
     n_air = AMBIENT_MEDIUM_INDEX
@@ -261,8 +270,8 @@ def matlab_sample_model_fp_on(
     r34 = (n_sub - n_samp) / (n_samp + n_sub)
     r23ref = (n_air - n_sub) / (n_sub + n_air)
     r34ref = (n_sub - n_air) / (n_air + n_sub)
-    phase3 = np.exp(-1j * n_samp * omega * SAMPLE_LAYER_THICKNESS_M / c)
-    phase3ref = np.exp(-1j * n_air * omega * reference_gap_thickness_m / c)
+    phase3 = np.exp(-1j * n_samp * omega * spacer_thickness_m / c)
+    phase3ref = np.exp(-1j * n_air * omega * spacer_thickness_m / c)
     sample_etalon = 1 + r23 * r34 * phase3 ** 2
     reference_etalon = 1 + r23ref * r34ref * phase3ref ** 2
     numerator = phase3 * t23 * t34 / sample_etalon
@@ -306,7 +315,7 @@ def invert_matlab_port_sample_fp_on(
     transfer: np.ndarray,
     mask: np.ndarray,
     substrate_n: np.ndarray,
-    reference_gap_thickness_m: float,
+    spacer_thickness_m: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """MATLAB-port ASMSA grid inversion, FP on, fed n_sub(omega); returns (n, k>=0)."""
     band_indices = np.where(mask)[0]
@@ -320,7 +329,7 @@ def invert_matlab_port_sample_fp_on(
     for position, frequency_hz in enumerate(band_frequency):
         n_sub_here = complex(substrate_band[position])
         model = matlab_sample_model_fp_on(
-            n_hat_grid, n_sub_here, float(frequency_hz), reference_gap_thickness_m
+            n_hat_grid, n_sub_here, float(frequency_hz), spacer_thickness_m
         )
         measured = band_transfer[position]
         difference = np.abs(np.real(model - measured)) + np.abs(np.imag(model - measured))
@@ -363,29 +372,28 @@ def band_statistics(mask: np.ndarray, values: np.ndarray) -> dict:
     return {"median": float(np.median(finite)), "min": float(finite.min()), "max": float(finite.max())}
 
 
-def gap_free_spectral_range_hz(gap_thickness_m: float) -> float:
-    """FSR of the empty air-gap etalon: c / (2 * n_air * d_gap)."""
-    return SPEED_OF_LIGHT_M_PER_S / (2.0 * AMBIENT_MEDIUM_INDEX * gap_thickness_m)
+def etalon_free_spectral_range_hz(thickness_m: float) -> float:
+    """FSR of the empty air etalon of the given thickness: c / (2 * n_air * d)."""
+    return SPEED_OF_LIGHT_M_PER_S / (2.0 * AMBIENT_MEDIUM_INDEX * thickness_m)
 
 
 # ── Reporting / figure ─────────────────────────────────────────────────────────
 
 
 def print_report(
-    shared: dict, gap_thickness_m: float, sample_results: dict, substrate_n: np.ndarray
+    shared: dict, spacer_thickness_m: float, sample_results: dict, substrate_n: np.ndarray
 ) -> None:
     mask = shared["band_mask"]
     frequency = shared["frequency"]
-    fsr_thz = gap_free_spectral_range_hz(gap_thickness_m) / 1e12
-    round_trip_ps = 2.0 * gap_thickness_m / SPEED_OF_LIGHT_M_PER_S * 1e12
+    fsr_thz = etalon_free_spectral_range_hz(spacer_thickness_m) / 1e12
+    round_trip_ps = 2.0 * spacer_thickness_m / SPEED_OF_LIGHT_M_PER_S * 1e12
 
     n_sub_stats = band_statistics(mask, substrate_n)
     print("\n" + "=" * 78)
     print("FP-ON sample inversion: MATLAB-port vs thz_core ASMSA  (shared front-end)")
     print("=" * 78)
-    print(f"  air gap dialed:   {gap_thickness_m*1e6:7.1f} um   "
-          f"(round-trip {round_trip_ps:.2f} ps, etalon FSR {fsr_thz:.3f} THz)")
-    print(f"  sample thickness: {SAMPLE_LAYER_THICKNESS_M*1e6:7.1f} um")
+    print(f"  spacer dialed (locked sample = gap): {spacer_thickness_m*1e6:7.1f} um   "
+          f"(air round-trip {round_trip_ps:.2f} ps, etalon FSR {fsr_thz:.3f} THz)")
     print(f"  n_sub (shared input, gated ASASA): median {n_sub_stats['median']:.3f} "
           f"[{n_sub_stats['min']:.3f}, {n_sub_stats['max']:.3f}]")
     print(f"  band {REPORT_FREQUENCY_MIN_HZ/1e12:.1f}-{REPORT_FREQUENCY_MAX_HZ/1e12:.1f} THz, "
@@ -404,7 +412,7 @@ def print_report(
 
 
 def make_figure(
-    shared: dict, gap_thickness_m: float, sample_results: dict,
+    shared: dict, spacer_thickness_m: float, sample_results: dict,
     substrate_n: np.ndarray, output_path: str
 ) -> None:
     try:
@@ -418,25 +426,25 @@ def make_figure(
     frequency = shared["frequency"]
     frequency_thz = frequency / 1e12
     mask = shared["band_mask"]
-    fsr_thz = gap_free_spectral_range_hz(gap_thickness_m) / 1e12
+    fsr_thz = etalon_free_spectral_range_hz(spacer_thickness_m) / 1e12
 
     def plot_band(axis, values, label, **kwargs):
         axis.plot(frequency_thz, np.where(mask, values, np.nan), label=label, linewidth=1.4, **kwargs)
 
     figure, axes = plt.subplots(2, 3, figsize=(15, 8), layout="constrained")
     figure.suptitle(
-        f"FP-ON sample inversion — air gap {gap_thickness_m*1e6:.0f} um "
+        f"FP-ON sample inversion — locked spacer {spacer_thickness_m*1e6:.0f} um "
         f"(etalon FSR {fsr_thz:.3f} THz), MATLAB-port vs thz_core ASMSA (200 K)"
     )
 
-    # (0,0) measured |H_sample| with the gap-FSR comb — the dialing aid.
+    # (0,0) measured |H_sample| with the spacer-FSR comb — the dialing aid.
     measured_amplitude = np.abs(shared["transfer_sample"])
     plot_band(axes[0, 0], measured_amplitude, "|H_sample| measured", color="black")
     band_lo, band_hi = REPORT_FREQUENCY_MIN_HZ / 1e12, REPORT_FREQUENCY_MAX_HZ / 1e12
     comb = np.arange(np.ceil(band_lo / fsr_thz), band_hi / fsr_thz + 1) * fsr_thz
     for line_position in comb:
         axes[0, 0].axvline(line_position, color="tab:red", linestyle=":", linewidth=0.9)
-    axes[0, 0].set_title("measured |H| + gap-FSR comb (dial gap to match ripple)")
+    axes[0, 0].set_title("measured |H| + spacer-FSR comb (dial spacer to match ripple)")
     axes[0, 0].set_ylabel("|H_sample|"); axes[0, 0].legend(fontsize=7)
 
     # (0,1) n_sub shared input.
@@ -467,19 +475,21 @@ def make_figure(
 # ── Orchestration ─────────────────────────────────────────────────────────────
 
 
-def parse_gap_thickness_m() -> float:
-    """Read the air-gap dial from the command line (--gap-um), defaulting to the constant."""
-    parser = argparse.ArgumentParser(description="Dial the empty-cuvette air gap for the FP correction.")
+def parse_spacer_thickness_m() -> float:
+    """Read the spacer dial from the command line (--spacer-um), defaulting to the constant."""
+    parser = argparse.ArgumentParser(
+        description="Dial the locked cuvette spacer (sample = gap) for the FP correction."
+    )
     parser.add_argument(
-        "--gap-um", type=float, default=REFERENCE_GAP_THICKNESS_M * 1e6,
-        help="Empty-cuvette air-gap thickness in micrometres (the FP cavity to dial).",
+        "--spacer-um", type=float, default=SPACER_THICKNESS_M * 1e6,
+        help="Locked spacer thickness in micrometres (sets both the sample layer and the gap).",
     )
     arguments, _ = parser.parse_known_args()
-    return arguments.gap_um * 1e-6
+    return arguments.spacer_um * 1e-6
 
 
 def main() -> None:
-    gap_thickness_m = parse_gap_thickness_m()
+    spacer_thickness_m = parse_spacer_thickness_m()
 
     shared = build_shared_transfer_functions()
     frequency = shared["frequency"]
@@ -495,19 +505,19 @@ def main() -> None:
     sample_results: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     sample_results["thz_core ASMSA (FP on)"] = invert_thzcore_grid_sample_fp_on(
         frequency, shared["transfer_sample"], mask,
-        substrate_n_filled, substrate_k_filled, gap_thickness_m,
+        substrate_n_filled, substrate_k_filled, spacer_thickness_m,
     )
     sample_results["MATLAB-port (FP on)"] = invert_matlab_port_sample_fp_on(
-        frequency, shared["transfer_sample"], mask, substrate_n_filled, gap_thickness_m,
+        frequency, shared["transfer_sample"], mask, substrate_n_filled, spacer_thickness_m,
     )
 
-    print_report(shared, gap_thickness_m, sample_results, substrate_n_filled)
+    print_report(shared, spacer_thickness_m, sample_results, substrate_n_filled)
 
-    gap_tag = f"{gap_thickness_m*1e6:.0f}um"
+    spacer_tag = f"{spacer_thickness_m*1e6:.0f}um"
     figure_path = os.path.join(
-        os.path.dirname(__file__), f"dial_fp_gap_{gap_tag}.png"
+        os.path.dirname(__file__), f"dial_fp_spacer_{spacer_tag}.png"
     )
-    make_figure(shared, gap_thickness_m, sample_results, substrate_n_filled, figure_path)
+    make_figure(shared, spacer_thickness_m, sample_results, substrate_n_filled, figure_path)
 
 
 if __name__ == "__main__":

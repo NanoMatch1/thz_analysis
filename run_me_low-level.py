@@ -28,8 +28,10 @@ from dataset_core.adapters import thz_adapter as thz
 
 
 # ── Data paths ──────────────────────────────────────────
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\CNT-20'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\CNT' # CNT data
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests' # CNT data
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export\silicon' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-24_refl_testing\main_alignment_tests' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 
 # ── Physical parameters ─────────────────────────────────
 THICKNESS_M = 2.08e-3  # metres (quartz window thickness, measured 2.08 mm)
@@ -39,6 +41,7 @@ PS_TO_S = 1e-12
 config: dict = {
     "general": {
         'show_graph': True,
+        'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle
@@ -46,8 +49,8 @@ config: dict = {
         "n_sio2": 1.95,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        "first_reflection": (152.5, 159),  # (start_ps, end_ps) or None for auto
-        "second_reflection": (177, 183.8),  # (start_ps, end_ps) or None for auto
+        # "first_reflection": (152.5, 159),  # (start_ps, end_ps) or None for auto
+        # "second_reflection": (177, 183.8),  # (start_ps, end_ps) or None for auto
     },
     "centering": {
         "mode": "crop",  # 'crop' or 'pad'
@@ -66,21 +69,42 @@ config: dict = {
         "n_fft": 2000,            # shared FFT length (zero-pad for display resolution)
     },
     "transfer": {
-        "self_reference": True,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
+        "self_reference": False,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
         "apply_snr_mask": True,     # build the SNR-based trusted-band mask
         "min_ref_amp_rel": 1e-3,
         "regularization_eps": 1e-30,
         "unwrap_phase": True,
     },
     "mask": {
-        "snr_thresh_db": 6.0,
+        "snr_thresh_db": 10,
         "tail_fraction": 0.25,
         "min_contiguous_bins": 3,
+    },
+    "selfref_quality": {
+        # Front-pulse correction C = Y1_r/Y1_s quality gate (diagnostic only).
+        # Flags acquisitions whose front spot drifted (structured |C|). std(|C|)
+        # is the discriminator: good alignment ~0.01, misaligned ~0.53.
+        "band_thz": (0.2, 2.5),
+        "std_threshold": 0.1,
+        "median_dev_threshold": 0.15,
+        "use_snr_mask": True,
     },
     "derive": {
         # Background permittivity subtracted to isolate free-carrier conductivity:
         # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum; 11.7 = silicon.
-        "eps_background": 1,
+        "eps_background": 11.7,
+    },
+    "air_gap": {
+        # Route-A contact-gap de-embed (SiO2 | air d | CNT). When enabled, strips the gap
+        # and re-inverts with AIR incidence so the saved n,k,sigma are gap-corrected.
+        # Dial position_um / width_um with the slider, then paste the values here.
+        # NOTE: d is UNCALIBRATED — a forward Drude fit to r_back prefers a SMALL gap
+        # (~0-5 um); larger d over-strips and pushes n below 1. Pin d with the Si
+        # benchmark (known n=3.418) before trusting absolute numbers.
+        "enabled": True,
+        "position_um": 5.0,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
+        "width_um": 0.0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
+        "max_boost": 1.0e3,    # clip on 1/W so the suppressed high-f tail cannot explode.
     },
 }
 
@@ -89,29 +113,34 @@ config: dict = {
 
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
-# dataset.plot_current()
+dataset.plot_current()
+# thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
 # TODO: Define half-width from minimum max array length
 # --- wrap each raw trace as a full-trace reflection (both pulses on ONE shared
 #     axis; regions only locate the pulses, they do not size the window) ---
-thz.build_full_trace_reflection(dataset)
-
 
 
 # --- pair sample <-> reference ---
 dataset.group_files(keywords=['type'])
 dataset.grouping.show_matches()
 
-# --- T0 calibration on the FRONT pulse (roi locks the cross-correlation onto it) ---
-first_region = config['regions'].get('first_reflection')
-correlation_roi = first_region if (first_region and None not in first_region) else None
+# --- NO time alignment in the shared-axis self-reference path. ---
+# Self-referencing forms W = Y2/Y1 within each trace, cancelling the absolute time origin
+# structurally (the front pulse is each trace's own internal clock). With the symmetric
+# absolute-time phase reference in fft_spectrum, W is invariant to a rigid axis shift, so
+# align_to_reference is unnecessary here — and shifting only the sample used to LEAK a
+# spurious linear phase into H (Audit 1). Still used by the segmented (non-self-ref) path;
+# re-enable here only if you switch self_reference off.
+# first_region = config['regions'].get('first_reflection')
+# correlation_roi = first_region if (first_region and None not in first_region) else None
 # thz.align_to_reference(
-#     dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=True,
+#     dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=False,
 # )
-
+# thz.define_reflection_regions(dataset, config)
 thz.subtract_baseline(dataset)
 
+
 # if not already defined in the config, this prompts for region selection on the time trace.
-thz.define_reflection_regions(dataset, config)
 
 # --- THE window step: one identical fixed-width symmetric Hann on every pulse.
 #     half_width_ps sets the (shared) window length; the data is never shifted. ---
@@ -146,10 +175,70 @@ thz.fft_spectrum(dataset, segment='first_reflection', n_fft=shared_n_fft)
 if config['general']['show_graph']:
     thz.plot_fft(dataset, normalise=False, scale='')
 
-# --- self-referenced transfer function: H = (Y2/Y1)_sample / (Y2/Y1)_ref.
-#     transfer + mask settings (incl. self_reference) come from dataset.config so the
-#     SNR mask threshold etc. actually carry through (single source of truth). ---
+# --- self-referenced transfer function: H = (Y2/Y1)_sample / (Y2/Y1)_ref. ---
+# The MATH is one pure function, thz_core.self_referenced_transfer (two nested
+# divisions: W = Y2/Y1 per trace, then H = W_samp/W_ref); thz.transfer_function is
+# the THIN wrapper that fetches the four spectra from the dataset and calls it.
+# transfer + mask settings (incl. self_reference) come from dataset.config (single
+# source of truth). The wrapper stows the decomposition for inspection below.
 thz.transfer_function(dataset, ref_type='reference')
+
+# --- ALIGNMENT QUALITY GATE: warn if the front-pulse correction C is structured. ---
+# |C| ≈ 1 (flat) means the front reflection spots of sample and reference landed on the
+# same focus -> self-referencing is clean. A structured |C| means the front spot drifted
+# (e.g. window rotation sent it off the gate focus) and the self-referenced H is suspect.
+# Audit (2026-06-24): std(|C|) cleanly separates good (~0.01) from misaligned (~0.53).
+# Diagnostic only — it does NOT modify the data (dividing H by C does not recover shape;
+# H/C = Y2_s/Y2_r re-injects the timing offset self-referencing correctly cancels).
+thz.selfref_quality(dataset)
+
+# --- TRANSPARENCY: surface the self-reference decomposition the core function returns,
+#     so the two-division math is visible (W_samp, W_ref, the front-pulse drift
+#     correction C = Y1_r/Y1_s, and the result H). Pure inspection — no processing. ---
+for sample_filename, sample_obj in dataset.data.items():
+    if dataset.data.is_reference(sample_filename):
+        continue
+    processing = sample_obj.processing_dict
+    diagnostics = processing.get('transfer_metrics', {}).get('diagnostics', {})
+    frequency_hz = processing.get('fft_freq')
+    transfer_H = processing.get('transfer_H')
+    front_pulse_correction = processing.get('selfref_correction')  # C = Y1_r / Y1_s
+    W_sample = diagnostics.get('W_samp')        # Y2_s / Y1_s
+    W_reference = diagnostics.get('W_ref')       # Y2_r / Y1_r
+    if transfer_H is None or W_sample is None:
+        continue  # not a self-referenced run (plain ratio path)
+
+    trusted_band_mask = processing.get('transfer_mask')
+    finite_correction = np.isfinite(front_pulse_correction)
+    print(
+        f"[self-ref decomposition] {sample_filename}: "
+        f"H = (Y2_s/Y1_s)/(Y2_r/Y1_r);  |C| median "
+        f"{np.nanmedian(np.abs(front_pulse_correction[finite_correction])):.3f}  "
+        f"(C = Y1_r/Y1_s, the front-pulse drift correction)"
+    )
+
+    if config['general']['show_graph']:
+        frequency_thz = frequency_hz * 1e-12
+        band = (frequency_thz >= 0.2) & (frequency_thz <= 3.0)
+        if trusted_band_mask is not None:
+            band = band & trusted_band_mask
+        figure, (magnitude_axis, phase_axis) = plt.subplots(
+            1, 2, figsize=(13, 4.5), layout='constrained',
+        )
+        figure.suptitle(f'Self-reference decomposition — {sample_filename}', fontsize=11)
+        for series, label, style in (
+            (W_sample, 'W_samp = Y2_s/Y1_s', dict(color='C0')),
+            (W_reference, 'W_ref = Y2_r/Y1_r', dict(color='C1')),
+            (front_pulse_correction, 'C = Y1_r/Y1_s', dict(color='C2', ls=':')),
+            (transfer_H, 'H = W_samp/W_ref', dict(color='C3', lw=1.8)),
+        ):
+            magnitude_axis.plot(frequency_thz[band], np.abs(series)[band], label=label, **style)
+            phase_axis.plot(frequency_thz[band], np.angle(series)[band], label=label, **style)
+        magnitude_axis.set_title('magnitude'); magnitude_axis.set_xlabel('Frequency (THz)')
+        magnitude_axis.set_ylabel('|.|'); magnitude_axis.legend(fontsize=8); magnitude_axis.grid(alpha=0.3)
+        phase_axis.set_title('phase'); phase_axis.set_xlabel('Frequency (THz)')
+        phase_axis.set_ylabel('arg (rad)'); phase_axis.grid(alpha=0.3)
+        plt.show()
 
 # --- reflection-mode inversion: H -> n, k for the back-face (SiO2->sample)
 #     interface. geometry='window' uses the SiO2 window as the incidence medium. ---
@@ -161,8 +250,44 @@ thz.invert_nk_reflection(
     n_window=config['geometry']['n_sio2'],
 )
 
+# --- AIR-GAP DE-EMBED (Route A, non-interactive) ---
+# Strip the contact gap (SiO2 | air d | CNT) and re-invert with AIR incidence, so the
+# SAVED n,k,sigma are the gap-corrected values. Removes the inversion-singularity artifact
+# (the spurious ~0.6 THz "Lorentzian") that the residual gap phase manufactures near |r|=1.
+# Gap parameters come from config['air_gap'] (dial them with the slider below, then paste
+# here). Window-geometry n,k are preserved as processing['n_window']. Must run AFTER
+# invert_nk_reflection and BEFORE derive_eps_sigma.
+if config['air_gap'].get('enabled', False):
+    thz.deembed_air_gap_reflection(dataset)
+
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+
+# --- AIR-GAP DE-EMBED EXPLORER (interactive sliders) ---
+# The CNT is pressed against the SiO2 back face, but the rough surface leaves a thin,
+# uneven contact gap (SiO2 | air gap | CNT). The naive window-incidence inversion above
+# folds that gap into n,k (the source of n<1 and possibly the suspect Lorentzian). This
+# opens a slider GUI that de-embeds a trial gap and re-inverts live:
+#   * gap POSITION d_mean (um): strips the round-trip phase (exact single-gap inverse).
+#   * gap WIDTH sigma_d (um): undoes the Debye-Waller roughness magnitude loss (single-
+#     bounce approx — indicative, not a fitted value).
+# Good contact (no sample/reference back-reflection delay) => start near d_mean ~ 0 and
+# explore sigma_d for the roughness. Reuses the pipeline's own inverted dataset, so it
+# reflects every current correction (symmetric phase ref, fixed-width window, self-ref).
+if config['general'].get('air_gap_explorer', False):
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        'explorations', 'air_gap_cnt_reflection',
+    ))
+    import air_gap_slider_explorer
+    air_gap_slider_explorer.launch_from_dataset(
+        dataset,
+        n_sio2=config['geometry']['n_sio2'],
+        external_deg=config['geometry']['theta_external_deg'],
+        eps_background=config['derive']['eps_background'],
+        initial_position_um=0.0,   # good contact: little/no mean gap
+        initial_width_um=0.0,      # raise to explore roughness suppression
+    )
 
 dataset.save_database()
 

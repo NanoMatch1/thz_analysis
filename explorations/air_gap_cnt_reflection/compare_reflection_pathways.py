@@ -35,6 +35,7 @@ thz.SUBSAMPLE_TIMING_CORRECTION = True
 
 ROOT_DIR = r"C:\Users\Samuel\Data\THz\calibration\reflection\2026_06_19_CNT\test1\export"
 ROOT_DIR = r"C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export"
+ROOT_DIR = r"C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export\silicon"
 
 # Reflection regions for the NEW (thicker-window) data: first pulse ~155.85 ps,
 # second ~180.8 ps (inspected from the scan-averaged traces).

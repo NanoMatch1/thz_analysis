@@ -54,18 +54,61 @@ def drude_smith_permittivity(frequency_hz, eps_inf, plasma_omega, scattering_tim
     return eps
 
 
+def drude_permittivity(frequency_hz, eps_inf, plasma_omega, scattering_time_s):
+    """Pure Drude permittivity (Drude-Smith with persistence c = 0).
+
+    The free-carrier model the CNT is EXPECTED to follow: no back-scattering
+    persistence term, just a damped electron gas.
+    """
+    return drude_smith_permittivity(frequency_hz, eps_inf, plasma_omega, scattering_time_s, 0.0)
+
+
+def lorentz_permittivity_term(frequency_hz, strength, resonance_omega, damping_gamma):
+    """One Lorentz oscillator contribution to eps (thz_core n_hat = n - i k, exp(-i w t)).
+
+    eps_L(w) = strength * w0^2 / (w0^2 - w^2 - i gamma w).  `strength` is the static
+    contribution eps_L(0); at w = w0 the term is +i strength w0 / gamma (an absorption
+    peak -> positive Im(eps) for the n + i k branch). Use to TEST the persistent ~Lorentzian
+    peak Samuel sees in n: a non-negligible fitted strength at a stable w0 across models =
+    evidence the resonance is real material response, not a gap/roughness artefact.
+    """
+    omega = 2.0 * np.pi * frequency_hz
+    resonance = resonance_omega**2
+    return strength * resonance / (resonance - omega**2 - 1j * damping_gamma * omega)
+
+
+def drude_lorentz_permittivity(
+    frequency_hz, eps_inf, plasma_omega, scattering_time_s,
+    lorentz_strength, lorentz_resonance_omega, lorentz_damping_gamma,
+):
+    """Pure Drude (free carriers) + one Lorentz oscillator (bound resonance)."""
+    eps = drude_permittivity(frequency_hz, eps_inf, plasma_omega, scattering_time_s)
+    eps = eps + lorentz_permittivity_term(
+        frequency_hz, lorentz_strength, lorentz_resonance_omega, lorentz_damping_gamma)
+    return eps
+
+
+def index_hat_from_eps(eps):
+    """Complex index n_hat = n - i k (thz_core convention) from a permittivity array."""
+    return np.conj(np.sqrt(eps))              # principal sqrt -> n + i k; conj -> n - i k
+
+
 def cnt_index_hat(frequency_hz, material_params):
     """Complex index n_hat = n - i k (thz_core convention) from Drude-Smith params."""
     eps = drude_smith_permittivity(
         frequency_hz, material_params["eps_inf"], material_params["plasma_omega"],
         material_params["scattering_time_s"], material_params["persistence_c"],
     )
-    n_hat_plus = np.sqrt(eps)                 # principal branch -> n + i k
-    return np.conj(n_hat_plus)                # -> n - i k (thz_core)
+    return index_hat_from_eps(eps)
+
+
+def reflection_air_to_cnt_from_eps(frequency_hz, eps_cnt, gap_angle_rad):
+    """r_back = r_{air->CNT}(omega), s-pol, at the in-gap angle, from injected eps_cnt."""
+    return core.fresnel_reflection_s(REFRACTIVE_INDEX_AIR, index_hat_from_eps(eps_cnt), gap_angle_rad)
 
 
 def reflection_air_to_cnt(frequency_hz, material_params, gap_angle_rad):
-    """r_back = r_{air->CNT}(omega), s-pol, at the in-gap angle."""
+    """r_back = r_{air->CNT}(omega), s-pol, at the in-gap angle (Drude-Smith params)."""
     return core.fresnel_reflection_s(REFRACTIVE_INDEX_AIR, cnt_index_hat(frequency_hz, material_params), gap_angle_rad)
 
 
@@ -82,21 +125,21 @@ def gap_round_trip_phase(frequency_hz, gap_thickness_m, gap_angle_rad):
     return omega / SPEED_OF_LIGHT_M_PER_S * 2.0 * gap_thickness_m * np.cos(gap_angle_rad)
 
 
-def single_gap_reflection(frequency_hz, material_params, gap_thickness_m, r_front, gap_angle_rad):
-    """Exact single-gap Fabry-Perot reflection SiO2|air d|CNT."""
-    r_back = reflection_air_to_cnt(frequency_hz, material_params, gap_angle_rad)
+def single_gap_reflection_from_eps(frequency_hz, eps_cnt, gap_thickness_m, r_front, gap_angle_rad):
+    """Exact single-gap Fabry-Perot reflection SiO2|air d|CNT, from injected eps_cnt."""
+    r_back = reflection_air_to_cnt_from_eps(frequency_hz, eps_cnt, gap_angle_rad)
     bounce = np.exp(-1j * gap_round_trip_phase(frequency_hz, gap_thickness_m, gap_angle_rad))
     return (r_front + r_back * bounce) / (1.0 + r_front * r_back * bounce)
 
 
-def rough_gap_reflection(frequency_hz, material_params, gap_mean_m, gap_sigma_m, r_front, gap_angle_rad,
-                         n_quadrature=41):
-    """Spot-averaged reflection over a Gaussian gap distribution truncated at d>=0.
+def rough_gap_reflection_from_eps(frequency_hz, eps_cnt, gap_mean_m, gap_sigma_m, r_front, gap_angle_rad,
+                                  n_quadrature=41):
+    """Spot-averaged reflection over a Gaussian gap distribution (eps_cnt injected).
 
     Numerical average (keeps all bounces).  sigma=0 reduces to the single gap.
     """
     if gap_sigma_m <= 0:
-        return single_gap_reflection(frequency_hz, material_params, gap_mean_m, r_front, gap_angle_rad)
+        return single_gap_reflection_from_eps(frequency_hz, eps_cnt, gap_mean_m, r_front, gap_angle_rad)
     # Gauss-Hermite-like grid on a truncated Gaussian.
     grid = np.linspace(-4.0, 4.0, n_quadrature)
     gap_values = gap_mean_m + gap_sigma_m * grid
@@ -106,8 +149,27 @@ def rough_gap_reflection(frequency_hz, material_params, gap_mean_m, gap_sigma_m,
     weights = weights / weights.sum()
     accumulator = np.zeros(frequency_hz.size, dtype=complex)
     for gap_thickness_m, weight in zip(gap_values, weights):
-        accumulator += weight * single_gap_reflection(frequency_hz, material_params, gap_thickness_m, r_front, gap_angle_rad)
+        accumulator += weight * single_gap_reflection_from_eps(
+            frequency_hz, eps_cnt, gap_thickness_m, r_front, gap_angle_rad)
     return accumulator
+
+
+def single_gap_reflection(frequency_hz, material_params, gap_thickness_m, r_front, gap_angle_rad):
+    """Drude-Smith wrapper for single_gap_reflection_from_eps (backward compatible)."""
+    eps = drude_smith_permittivity(
+        frequency_hz, material_params["eps_inf"], material_params["plasma_omega"],
+        material_params["scattering_time_s"], material_params["persistence_c"])
+    return single_gap_reflection_from_eps(frequency_hz, eps, gap_thickness_m, r_front, gap_angle_rad)
+
+
+def rough_gap_reflection(frequency_hz, material_params, gap_mean_m, gap_sigma_m, r_front, gap_angle_rad,
+                         n_quadrature=41):
+    """Drude-Smith wrapper for rough_gap_reflection_from_eps (backward compatible)."""
+    eps = drude_smith_permittivity(
+        frequency_hz, material_params["eps_inf"], material_params["plasma_omega"],
+        material_params["scattering_time_s"], material_params["persistence_c"])
+    return rough_gap_reflection_from_eps(
+        frequency_hz, eps, gap_mean_m, gap_sigma_m, r_front, gap_angle_rad, n_quadrature)
 
 
 def deembed_gap(reflection_measured, r_front):
@@ -130,8 +192,8 @@ def _bruggeman_roots(eps_inclusion, eps_host, fill_inclusion):
     return (b + disc) / 4.0, (b - disc) / 4.0
 
 
-def graded_emt_reflection(
-    frequency_hz, material_params, roughness_sigma_m, offset_z0_m, sio2_angle_rad,
+def graded_emt_reflection_from_eps(
+    frequency_hz, eps_cnt, roughness_sigma_m, offset_z0_m, sio2_angle_rad,
     n_sub_layers=40, extent_sigma=6.0,
 ):
     """Reflection from SiO2 into a graded air->CNT effective-medium layer | bulk CNT.
@@ -141,14 +203,12 @@ def graded_emt_reflection(
     pure-air region exists when z0 >> sigma_h). Per-sublayer effective permittivity by
     Bruggeman (root chosen by continuity in depth, starting from air). s-pol recursive Airy
     through the stack. Returns the SiO2-side reflection (same quantity the pipeline measures).
+    `eps_cnt` (the bulk CNT permittivity) is injected, so any material model can be used.
     """
     omega = 2.0 * np.pi * frequency_hz
     wavenumber = omega / SPEED_OF_LIGHT_M_PER_S
     transverse = REFRACTIVE_INDEX_SIO2 * np.sin(sio2_angle_rad)   # conserved n*sin(theta)
-    eps_cnt = drude_smith_permittivity(
-        frequency_hz, material_params["eps_inf"], material_params["plasma_omega"],
-        material_params["scattering_time_s"], material_params["persistence_c"],
-    )
+    eps_cnt = np.asarray(eps_cnt, dtype=complex)
     eps_air = np.ones_like(eps_cnt)
 
     total_thickness = offset_z0_m + extent_sigma * roughness_sigma_m
@@ -187,6 +247,19 @@ def graded_emt_reflection(
     reflection = (interface0 + reflection * propagation0**2) / (
         1.0 + interface0 * reflection * propagation0**2)
     return reflection
+
+
+def graded_emt_reflection(
+    frequency_hz, material_params, roughness_sigma_m, offset_z0_m, sio2_angle_rad,
+    n_sub_layers=40, extent_sigma=6.0,
+):
+    """Drude-Smith wrapper for graded_emt_reflection_from_eps (backward compatible)."""
+    eps = drude_smith_permittivity(
+        frequency_hz, material_params["eps_inf"], material_params["plasma_omega"],
+        material_params["scattering_time_s"], material_params["persistence_c"])
+    return graded_emt_reflection_from_eps(
+        frequency_hz, eps, roughness_sigma_m, offset_z0_m, sio2_angle_rad,
+        n_sub_layers, extent_sigma)
 
 
 # ── Pipeline loader (used by the fitter scripts, not the conditioning report) ─

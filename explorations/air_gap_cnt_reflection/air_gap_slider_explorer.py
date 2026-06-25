@@ -159,11 +159,60 @@ def compute_curves(sample, gap_position_m, roughness_sigma_m, gap_angle_rad, eps
 
 
 def _short_sample_name(filename: str) -> str:
-    """Compact label, e.g. 'cnt-0-deg' (case-insensitive; falls back to the filename)."""
+    """Compact label, e.g. 'CNT-0-deg' / 'Si-0-deg' (case-insensitive; falls back to filename)."""
     for token in filename.split("_"):
-        if "cnt" in token.lower() or "si" == token.lower() or "silicon" in token.lower():
+        lowered = token.lower()
+        if (
+            "cnt" in lowered
+            or "silicon" in lowered
+            or lowered == "si"
+            or lowered.startswith("si-")  # e.g. 'Si-0-deg'
+        ):
             return token
     return filename
+
+
+def samples_from_dataset(dataset) -> list[dict]:
+    """Build de-embed sample records from an ALREADY-PROCESSED reflection dataset.
+
+    Dependency-injection counterpart to ``load_measured_samples``: instead of running a
+    pipeline internally, it reads the records straight off a dataset that the caller has
+    already pushed through ``transfer_function`` -> ``invert_nk_reflection`` (e.g.
+    ``run_me_low-level.py``). This is the way to drive the explorer with the LATEST
+    pipeline corrections rather than the standalone ``compare_reflection_pathways`` copy.
+
+    Requires each non-reference sample to carry ``reflection_r``, ``r_reference``, ``n``,
+    ``k`` (written by ``invert_nk_reflection``) plus ``fft_freq`` and ``transfer_mask``.
+    """
+    samples = []
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        processing = data_obj.processing_dict
+        if processing.get("reflection_r") is None:
+            continue
+        # Prefer the window-geometry inversion as the "naive" baseline: if the de-embed
+        # step (deembed_air_gap_reflection) has already run, it overwrote 'n'/'k' with the
+        # de-embedded values and stashed the originals under 'n_window'/'k_window'. Using
+        # those keeps the slider's dotted reference the true un-de-embedded curve (and keeps
+        # the live slider de-embedding r_meas from scratch, never double-correcting).
+        n_naive = processing.get("n_window", processing.get("n"))
+        k_naive = processing.get("k_window", processing.get("k"))
+        samples.append(dict(
+            name=_short_sample_name(filename),
+            frequency_hz=np.asarray(processing["fft_freq"], dtype=float),
+            mask=np.asarray(processing["transfer_mask"], dtype=bool),
+            r_meas=np.asarray(processing["reflection_r"], dtype=complex),
+            r_front=complex(processing["r_reference"]),
+            n_naive=np.asarray(n_naive, dtype=float),
+            k_naive=np.asarray(k_naive, dtype=float),
+        ))
+    if not samples:
+        raise RuntimeError(
+            "No non-reference samples with a reflection coefficient were found; run "
+            "transfer_function + invert_nk_reflection before samples_from_dataset()."
+        )
+    return samples
 
 
 def load_measured_samples(eps_infinity: float = 1) -> list[dict]:
@@ -311,6 +360,30 @@ def launch_gui(
         fontsize=12,
     )
     plt.show()
+
+
+def launch_from_dataset(
+    dataset, n_sio2: float = REFRACTIVE_INDEX_SIO2, external_deg: float = EXTERNAL_ANGLE_DEG,
+    eps_background: float = 11.7, initial_position_um: float = 0.0, initial_width_um: float = 0.0,
+):
+    """One-call launcher: open the slider on an already-processed reflection dataset.
+
+    Thin wrapper for pipeline scripts (``run_me_low-level.py``): extracts the sample
+    records, resolves the in-gap angle from the geometry, and opens the GUI. The gap
+    angle returns to ``external_deg`` (the air gap sees the same external incidence as
+    the beam entering the window), so it is geometry-consistent with the inversion.
+    """
+    samples = samples_from_dataset(dataset)
+    _, gap_angle_rad = internal_and_gap_angles(n_sio2=n_sio2, external_deg=external_deg)
+    print(
+        f"[air-gap explorer] {len(samples)} sample(s): "
+        f"{', '.join(s['name'] for s in samples)}; gap angle "
+        f"{np.rad2deg(gap_angle_rad):.2f} deg (cos {np.cos(gap_angle_rad):.3f})."
+    )
+    launch_gui(
+        samples, gap_angle_rad, eps_background=eps_background,
+        initial_position_um=initial_position_um, initial_width_um=initial_width_um,
+    )
 
 
 # ── Headless smoke test ─────────────────────────────────────────────────────

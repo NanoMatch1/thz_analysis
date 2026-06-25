@@ -430,10 +430,26 @@ class DataSet:
 
         return fig_obj
 
+    # Extensions that are never spectrum data — state/database pickles (written by
+    # save_state/save_database INTO the data dir), arrays, images, archives. Without
+    # this guard GenericTextLoader force-parses them as text, yielding garbage that
+    # crashes downstream (e.g. binary bytes parsed as a timestamp). Returning None
+    # makes load_all_data skip the file.
+    _NON_DATA_EXTENSIONS = frozenset({
+        '.pkl', '.pickle', '.npy', '.npz', '.png', '.jpg', '.jpeg', '.gif',
+        '.pdf', '.svg', '.db', '.sqlite', '.zip', '.gz', '.json', '.log',
+    })
+
     def load_any(self, path: str):
         """Load a single file, falling back to ``GenericTextLoader`` when no
-        registered loader matches the extension or the registered loader fails."""
+        registered loader matches the extension or the registered loader fails.
+
+        Non-spectrum files (see ``_NON_DATA_EXTENSIONS`` — e.g. ``_state.pkl``
+        written by ``save_state`` into the data directory) return ``None`` so the
+        caller skips them instead of force-parsing binary as text."""
         ext = Path(path).suffix  # includes the dot
+        if ext.lower() in self._NON_DATA_EXTENSIONS:
+            return None
         Loader = get_loader_for_extension(ext)
         if Loader is not None:
             try:
@@ -748,7 +764,13 @@ class DataSet:
         if seriesname is not None:
             self.seriesname = seriesname.strip()
         else:
-            seriesname = input("Enter a name for this dataset series (used for database filename): ").strip()
+            try:
+                seriesname = input("Enter a name for this dataset series (used for database filename): ").strip()
+            except EOFError:
+                # Non-interactive stdin (IDE run button, piped, headless): don't crash at
+                # the very end after all processing is done — fall back to a folder-derived name.
+                seriesname = os.path.basename(str(getattr(self, "file_dir", "")).rstrip("\\/")) or "unnamed_series"
+                print(f"No interactive input available; using default series name '{seriesname}'.")
             if not seriesname:
                 print("No name entered. Aborting save.")
                 return
@@ -766,7 +788,10 @@ class DataSet:
 
         filename = os.path.basename(db_path)
 
-        notes = input("Enter notes/comments for this save (or press Enter to skip): ").strip()
+        try:
+            notes = input("Enter notes/comments for this save (or press Enter to skip): ").strip()
+        except EOFError:
+            notes = ""
 
         state = {
             "data_dict": self.data.data_dict,

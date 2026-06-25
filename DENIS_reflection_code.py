@@ -15,7 +15,7 @@ from scipy.signal.windows import hann, hamming, flattop, boxcar, kaiser, tukey
 # =========================
 # Parámetros
 # =========================
-filepath = Path(r'C:\Users\IMDEA B26-01\Desktop\CNT-tape\CNT-2')
+filepath = Path(r'C:\Users\Samuel\Data\THz\CNTs\CNT-5')
 reference = 'gold.dat'
 sample = 'sample-P.dat'
 
