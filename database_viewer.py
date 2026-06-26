@@ -65,13 +65,16 @@ dataset.load_database ()
 plot_sigma(dataset, title="non-self-referenced")
 plot_nk(dataset, title="non-self-referenced")
 
-# --- Self-referenced versions --- 
-dataset = DataSet("C:/Users/Samuel/matchbook")
-dataset.load_database(index=53)
-plot_sigma(dataset, title="self-referenced")
-plot_nk(dataset, title="self-referenced")
+
+# # --- Self-referenced versions --- 
+# dataset = DataSet("C:/Users/Samuel/matchbook")
+# dataset.load_database(index=53)
+# plot_sigma(dataset, title="self-referenced")
+# plot_nk(dataset, title="self-referenced")
 
 
 
 
 plt.show()
+
+breakpoint()

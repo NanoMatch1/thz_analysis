@@ -29,8 +29,8 @@ from dataset_core.adapters import thz_adapter as thz
 
 # ── Data paths ──────────────────────────────────────────
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\CNT' # CNT data
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests' # CNT data
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-23_refl_CNT\export\silicon' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\Si' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-23_refl_CNT\export\silicon' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-24_refl_testing\main_alignment_tests' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 
 # ── Physical parameters ─────────────────────────────────
@@ -41,16 +41,17 @@ PS_TO_S = 1e-12
 config: dict = {
     "general": {
         'show_graph': True,
-        'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
+        'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
+        # 'save_database': True,          # save the dataset database after processing
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle
         "polarization": "s",          # s-pol (TE)
-        "n_sio2": 1.95,               # SiO2 window refractive index (reference medium)
+        "n_sio2": 1.96,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        # "first_reflection": (152.5, 159),  # (start_ps, end_ps) or None for auto
-        # "second_reflection": (177, 183.8),  # (start_ps, end_ps) or None for auto
+        "first_reflection": (152.5, 159),  # (start_ps, end_ps) or None for auto
+        "second_reflection": (177, 183.8),  # (start_ps, end_ps) or None for auto
     },
     "centering": {
         "mode": "crop",  # 'crop' or 'pad'
@@ -58,7 +59,7 @@ config: dict = {
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 3.0,    # fixed half-width — SAME window for every pulse
+        "half_width_ps": 4,    # fixed half-width — SAME window for every pulse
     },
     "pad": {
         "extend_factor": 1.0,
@@ -69,7 +70,7 @@ config: dict = {
         "n_fft": 2000,            # shared FFT length (zero-pad for display resolution)
     },
     "transfer": {
-        "self_reference": False,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
+        "self_reference": True,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
         "apply_snr_mask": True,     # build the SNR-based trusted-band mask
         "min_ref_amp_rel": 1e-3,
         "regularization_eps": 1e-30,
@@ -101,9 +102,9 @@ config: dict = {
         # NOTE: d is UNCALIBRATED — a forward Drude fit to r_back prefers a SMALL gap
         # (~0-5 um); larger d over-strips and pushes n below 1. Pin d with the Si
         # benchmark (known n=3.418) before trusting absolute numbers.
-        "enabled": True,
-        "position_um": 5.0,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
-        "width_um": 0.0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
+        "enabled": False,
+        "position_um": 10.0,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
+        "width_um": 5.0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
         "max_boost": 1.0e3,    # clip on 1/W so the suppressed high-f tail cannot explode.
     },
 }
@@ -113,8 +114,8 @@ config: dict = {
 
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
-dataset.plot_current()
-# thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
+# dataset.plot_current()
+thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
 # TODO: Define half-width from minimum max array length
 # --- wrap each raw trace as a full-trace reflection (both pulses on ONE shared
 #     axis; regions only locate the pulses, they do not size the window) ---
@@ -136,7 +137,7 @@ dataset.grouping.show_matches()
 # thz.align_to_reference(
 #     dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=False,
 # )
-# thz.define_reflection_regions(dataset, config)
+thz.define_reflection_regions(dataset, config)
 thz.subtract_baseline(dataset)
 
 
@@ -289,7 +290,8 @@ if config['general'].get('air_gap_explorer', False):
         initial_width_um=0.0,      # raise to explore roughness suppression
     )
 
-dataset.save_database()
+if config['general'].get('save_database', False):
+    dataset.save_database()
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)

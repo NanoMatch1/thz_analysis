@@ -26,7 +26,9 @@ from dataset_core.adapters import thz_adapter as thz
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Data paths ──────────────────────────────────────────
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT\test2'
+data_dir = r'C:\Users\Samuel\Data\THz\CNTs\CNT-5\test'
 
 # ── Configuration ───────────────────────────────────────
 config: dict = {
@@ -35,7 +37,7 @@ config: dict = {
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle (air -> sample)
-        "polarization": "s",          # s-pol (TE)
+        "polarization": "s",          # s-pol (TE)/
         "r_reference": -1.0,          # gold-mirror reference reflection coefficient
     },
     "regions": {
@@ -46,9 +48,9 @@ config: dict = {
         # Recalibration: reset every pulse to a common peak T0 (removes the relative
         # timing). Use it to SIMULATE correcting the delay from angular misalignment —
         # whatever still corrupts H afterwards is the part a delay-correction can't fix.
-        "recalibrate": True,        # True to align all peaks to a common T0
+        "recalibrate": False,        # True to align all peaks to a common T0
         "target_t0_ps": None,        # None = reference peak; else a fixed time
-        "subsample": True,           # precise interpolation shift vs integer roll
+        "subsample": False,           # precise interpolation shift vs integer roll
     },
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
@@ -66,17 +68,29 @@ config: dict = {
         "min_ref_amp_rel": 1e-3,
         "regularization_eps": 1e-30,
         "unwrap_phase": True,
+        "correct_linear_phase": False,  # remove the linear phase from H (misalignment delay)
     },
     "mask": {
         "snr_thresh_db": 10,
         "tail_fraction": 0.25,
         "min_contiguous_bins": 3,
     },
+    "invert": {
+        # Near-mirror singularity floor. The r->n inversion blows up at r=-1 (perfect
+        # mirror): a highly reflective sample (|H|~1, e.g. conductive CNT vs gold) makes n
+        # spike to infinity wherever H crosses 1+0i. Bins with |1+r| below this floor are
+        # ill-conditioned (n unrecoverable) and masked to NaN. 1e-12 = off (legacy);
+        # ~0.1 caps the blow-ups at n~10. |H|>1 (unphysical) signals a coupling artifact.
+        "min_one_plus_r": 0.1,
+    },
     "derive": {
         # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum.
-        "eps_background": 1.0,
+        "eps_background": 11,
     },
 }
+
+# import acquisition_editor
+# acquisition_editor.process_directory(data_dir)
 
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
@@ -125,6 +139,7 @@ assert shared_n_fft >= required_n_fft, (
 )
 thz.fft_spectrum(dataset, n_fft=shared_n_fft)
 
+
 if config['general']['show_graph']:
     thz.plot_fft(dataset, normalise=False, scale='')
 
@@ -133,6 +148,14 @@ if config['general']['show_graph']:
 # mirror between the two acquisitions delays/distorts the sample pulse -> linear phase
 # and amplitude error in H -> corrupted n,k below.
 thz.transfer_function(dataset, ref_type='reference')
+
+# --- EXPERIMENTAL: remove the LINEAR (group-delay) phase from H. A ~1 ps group delay from
+#     the distorted CNT pulse shape sweeps arg(H) through 0 every ~1 THz, pushing r toward
+#     the r=-1 pole and spiking n even when |H|<1. detrend_transfer_phase flattens that slope.
+#     It removes any real material group delay too -> for SEEING the fix, not quantitative n.
+#     (remove_phase_offset is the WRONG tool here: it strips the intercept and KEEPS the slope.)
+if config['transfer'].get('correct_linear_phase', False):
+    thz.detrend_transfer_phase(dataset, show_graph=config['general']['show_graph'])
 
 # --- reflection-mode inversion: H -> n, k for a single AIR -> sample bounce,
 #     referenced to a gold mirror (geometry='gold': n_incident = 1, r_reference = -1). ---

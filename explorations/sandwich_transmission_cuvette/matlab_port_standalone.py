@@ -65,25 +65,27 @@ except (AttributeError, ValueError):  # pragma: no cover
 
 CONFIG = {
     # ── Where the data lives ──────────────────────────────────────────────────
-    "data_directory": r"C:\Users\Samuel\Data\THz\Vasilis_Data\data",
+    "data_directory": r"C:\Users\Samuel\Data\THz\Sam\13-11-25_Co-HHTP",
 
     # ── The measurements to process ───────────────────────────────────────────
     # One ROW per air/substrate/sample triplet.  Add as many rows as you like to
     # process several samples or several temperatures in a single run.  "label" is
     # just a name used in the printout, figure title, and output filenames.
+    # Prefer the ".acc" files: they hold every raw acquisition, so the script keeps
+    # the statistical power of the repeats (a ".dat" is just the average, one scan).
     "measurement_sets": [
         {
-            "label": "200K",
-            "air":       "reference_200K_tr.dat",
-            "substrate": "Substrate_200K_tr.dat",
-            "sample":    "Sample_200K_tr.dat",
+            "label": "150K",
+            "air":       "reference_air.acc",
+            "substrate": "reference_substrate_150K.acc",
+            "sample":    "sample_Co-HHTP_150K.acc",
         },
-        # Example of a second set -- uncomment and edit the filenames to use it:
+        # Add more temperatures the same way, e.g.:
         # {
-        #     "label": "100K",
-        #     "air":       "reference_100K_tr.dat",
-        #     "substrate": "Substrate_100K_tr.dat",
-        #     "sample":    "Sample_100K_tr.dat",
+        #     "label": "225K",
+        #     "air":       "reference_air.acc",
+        #     "substrate": "reference_substrate_225K.acc",
+        #     "sample":    "sample_Co-HHTP_225K.acc",
         # },
     ],
 
@@ -155,35 +157,125 @@ CONFIG = {
 SPEED_OF_LIGHT_M_PER_S = physical_constants.c
 
 
-# ── Step 0: load the raw traces into a lightweight holder ──────────────────────
+# ── Step 0: load the raw traces into a lightweight container ───────────────────
+# The instrument writes two files per measurement:
+#   * a .acc file = EVERY individual acquisition (scan), one after another, each
+#     separated by a "%%" line.  This is the raw, unaveraged data.
+#   * a .dat file = the single AVERAGE of those acquisitions (one trace).
+# A .acc file therefore contains both: the raw scans AND (by averaging them) the
+# mean.  We load the .acc when we can, so we keep the statistical power of the
+# repeats; a .dat works too but then there is only one (already-averaged) scan.
+
+
+@dataclass
+class AcquisitionTrace:
+    """One measured trace: the time axis + every raw acquisition + their average.
+
+    - .time_seconds      : 1D time axis, SI seconds.
+    - .raw_acquisitions  : 2D array, shape (n_time, n_acquisitions) -- the raw scans.
+    - .averaged          : 1D mean across acquisitions.  USE THIS for the inversion.
+    - .standard_error    : 1D uncertainty on .averaged (scatter across scans / sqrt N).
+
+    Rule of thumb: use ``.averaged`` for all normal processing; reach into
+    ``.raw_acquisitions`` only when you want statistics (e.g. error bars from the
+    spread across the repeated scans).
+    """
+
+    time_seconds: np.ndarray
+    raw_acquisitions: np.ndarray   # (n_time, n_acquisitions)
+
+    @property
+    def averaged(self) -> np.ndarray:
+        """Mean field across all acquisitions -- the working trace."""
+        return np.mean(self.raw_acquisitions, axis=1)
+
+    @property
+    def n_acquisitions(self) -> int:
+        """How many raw scans were averaged."""
+        return self.raw_acquisitions.shape[1]
+
+    @property
+    def standard_error(self) -> np.ndarray:
+        """Uncertainty on .averaged: scatter across scans / sqrt(number of scans)."""
+        if self.n_acquisitions < 2:
+            return np.zeros(self.time_seconds.size)
+        spread = np.std(self.raw_acquisitions, axis=1, ddof=1)
+        return spread / np.sqrt(self.n_acquisitions)
 
 
 @dataclass
 class MeasurementSet:
     """One air/substrate/sample triplet, loaded and held in memory.
 
-    This is the lightweight stand-in for the heavy DataSet class: it just holds
-    the time axis (shared across the three traces) and the three field arrays.
+    Lightweight stand-in for the heavy DataSet class: it just holds the three
+    measured traces.  Each trace is an AcquisitionTrace (raw scans + average), so
+    the statistical power of the repeats is preserved.  The three traces may have
+    their own time axes; the front-end pads them to a common FFT length, so they
+    only need to share the same time STEP (which they do for one instrument).
     """
 
     label: str
-    time_seconds: np.ndarray
-    air_field: np.ndarray
-    substrate_field: np.ndarray
-    sample_field: np.ndarray
+    air: AcquisitionTrace
+    substrate: AcquisitionTrace
+    sample: AcquisitionTrace
 
 
-def _load_two_column_trace(directory: str, filename: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load a 2-column [time_ps, field] text file; return (time_in_seconds, field)."""
-    table = np.loadtxt(os.path.join(directory, filename))
-    time_seconds = table[:, 0] * 1e-12   # the files store picoseconds; convert to SI
-    field = table[:, 1]
-    return time_seconds, field
+def _parse_two_column_blocks(file_text: str) -> tuple[np.ndarray, np.ndarray]:
+    """Parse instrument text into (time_seconds, raw_acquisitions).
+
+    The file is split on "%%" into blocks (one per acquisition).  Header lines
+    start with "%" and are ignored; data lines are "time_ps  field".  A .dat file
+    has no "%%" so it parses as a single block (one acquisition).
+    """
+    acquisition_columns: list[np.ndarray] = []
+    time_picoseconds: np.ndarray | None = None
+
+    for block in file_text.split("%%"):
+        rows = []
+        for line in block.splitlines():
+            line = line.strip()
+            if not line or line.startswith("%"):
+                continue                       # skip blank + header lines
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                rows.append((float(parts[0]), float(parts[1])))
+            except ValueError:
+                continue                       # skip any unparseable row
+        if not rows:
+            continue
+        block_array = np.array(rows)
+        if time_picoseconds is None:
+            time_picoseconds = block_array[:, 0]
+        acquisition_columns.append(block_array[:, 1])
+
+    if time_picoseconds is None or not acquisition_columns:
+        raise ValueError("No numeric data rows found in file.")
+
+    # Guard against a truncated final scan: trim every column to the shortest length.
+    shortest = min(time_picoseconds.size, min(column.size for column in acquisition_columns))
+    time_seconds = time_picoseconds[:shortest] * 1e-12     # files store picoseconds
+    raw_acquisitions = np.column_stack([column[:shortest] for column in acquisition_columns])
+    return time_seconds, raw_acquisitions
 
 
-def _subtract_leading_baseline(field: np.ndarray, leading_points: int = 10) -> np.ndarray:
-    """Remove the DC offset, estimated from the first few (pre-pulse) samples."""
-    return field - np.mean(field[:leading_points])
+def load_acquisition_trace(directory: str, filename: str) -> AcquisitionTrace:
+    """Load one .acc (many scans) or .dat (one averaged scan) into an AcquisitionTrace.
+
+    A per-acquisition DC baseline is removed (each scan minus its own leading
+    samples).  Because averaging is linear, this leaves ``.averaged`` identical to
+    baselining the average, while also baseline-correcting the raw scans for stats.
+    """
+    with open(os.path.join(directory, filename), "r") as data_file:
+        file_text = data_file.read()
+    time_seconds, raw_acquisitions = _parse_two_column_blocks(file_text)
+
+    leading_points = 10
+    baseline_per_scan = np.mean(raw_acquisitions[:leading_points, :], axis=0)
+    raw_acquisitions = raw_acquisitions - baseline_per_scan[None, :]
+
+    return AcquisitionTrace(time_seconds=time_seconds, raw_acquisitions=raw_acquisitions)
 
 
 def load_all_measurement_sets(config: dict) -> list[MeasurementSet]:
@@ -195,17 +287,12 @@ def load_all_measurement_sets(config: dict) -> list[MeasurementSet]:
     directory = config["data_directory"]
     loaded_sets: list[MeasurementSet] = []
     for row in config["measurement_sets"]:
-        time_seconds, air_field = _load_two_column_trace(directory, row["air"])
-        _, substrate_field = _load_two_column_trace(directory, row["substrate"])
-        _, sample_field = _load_two_column_trace(directory, row["sample"])
-
         loaded_sets.append(
             MeasurementSet(
                 label=row["label"],
-                time_seconds=time_seconds,
-                air_field=_subtract_leading_baseline(air_field),
-                substrate_field=_subtract_leading_baseline(substrate_field),
-                sample_field=_subtract_leading_baseline(sample_field),
+                air=load_acquisition_trace(directory, row["air"]),
+                substrate=load_acquisition_trace(directory, row["substrate"]),
+                sample=load_acquisition_trace(directory, row["sample"]),
             )
         )
     return loaded_sets
@@ -248,14 +335,15 @@ def compute_transfer_functions(measurement: MeasurementSet, config: dict) -> dic
     Returns a dict with the frequency axis, both transfer functions, and a boolean
     band mask selecting the report band.
     """
+    # Use each trace's AVERAGED field (the mean across its raw acquisitions).
     frequency, air_spectrum = _windowed_padded_spectrum(
-        measurement.time_seconds, measurement.air_field, config
+        measurement.air.time_seconds, measurement.air.averaged, config
     )
     _, substrate_spectrum = _windowed_padded_spectrum(
-        measurement.time_seconds, measurement.substrate_field, config
+        measurement.substrate.time_seconds, measurement.substrate.averaged, config
     )
     _, sample_spectrum = _windowed_padded_spectrum(
-        measurement.time_seconds, measurement.sample_field, config
+        measurement.sample.time_seconds, measurement.sample.averaged, config
     )
 
     # SNR masking is left off here; we restrict to the report band explicitly below.

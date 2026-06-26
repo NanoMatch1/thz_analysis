@@ -1364,6 +1364,227 @@ def recenter_peaks_to_common_t0(
     return dataset
 
 
+def _build_fixed_width_window(window_config: dict, dt_seconds: float, half_width_ps: float) -> tuple:
+    """(half_width_samples, window_length, window_core) for a fixed-width symmetric window."""
+    window_type = window_config.get('type', 'hann')
+    alpha = float(window_config.get('alpha', 1.0))
+    half_width_samples = int(round(half_width_ps * 1e-12 / dt_seconds))
+    if half_width_samples < 2:
+        raise ValueError(
+            f"half_width_ps={half_width_ps} is < 2 samples at dt={dt_seconds * _S_TO_PS:.4f} ps."
+        )
+    window_length = 2 * half_width_samples + 1
+    return half_width_samples, window_length, _build_symmetric_window(window_length, window_type, alpha)
+
+
+def _local_max_index_near(time_seconds, amplitude, target_seconds, snap_halfwidth_ps) -> int:
+    """Index of max ``|amplitude|`` within ``±snap_halfwidth_ps`` of ``target_seconds``.
+
+    Snapping to a LOCAL max near a chosen time is what makes large inter-pulse delays
+    tractable: a single broad search region would grab the wrong (more intense) peak, but
+    a click/target plus a tight snap window lands on exactly the pulse you mean.
+    """
+    half = snap_halfwidth_ps / _S_TO_PS
+    in_window = (time_seconds >= target_seconds - half) & (time_seconds <= target_seconds + half)
+    search_indices = np.where(in_window)[0]
+    if search_indices.size < 1:
+        return int(np.argmin(np.abs(time_seconds - target_seconds)))
+    return int(search_indices[int(np.argmax(np.abs(amplitude[search_indices])))])
+
+
+def _select_pulse_peak_index(
+    time_seconds, amplitude, *, region_ps, peak_ps, interactive, snap_halfwidth_ps, filename,
+) -> int:
+    """Locate the pulse peak. Priority: interactive click > peak_ps > region_ps > global max.
+
+    ``interactive`` opens a click-picker (the user clicks the pulse they want) and snaps to
+    the nearest local max; ``peak_ps`` is the headless equivalent (a recorded target time).
+    """
+    if interactive:
+        clicked_ps = _pick_peak_manual(
+            time_seconds * _S_TO_PS, amplitude, f"Click the pulse to window — {filename}")
+        return _local_max_index_near(time_seconds, amplitude, clicked_ps / _S_TO_PS, snap_halfwidth_ps)
+    if peak_ps is not None:
+        return _local_max_index_near(time_seconds, amplitude, peak_ps / _S_TO_PS, snap_halfwidth_ps)
+    if region_ps is not None and None not in region_ps:
+        in_region = ((time_seconds >= region_ps[0] / _S_TO_PS)
+                     & (time_seconds <= region_ps[1] / _S_TO_PS))
+        search_indices = np.where(in_region)[0]
+        if search_indices.size < 4:
+            raise ValueError(
+                f"'{filename}': region [{region_ps[0]:.2f}, {region_ps[1]:.2f}] ps "
+                f"selects < 4 samples.")
+        return int(search_indices[int(np.argmax(np.abs(amplitude[search_indices])))])
+    return int(np.argmax(np.abs(amplitude)))
+
+
+def _center_peak_by_extending_axis(time_seconds, amplitude, extra_columns, peak_index, dt_seconds) -> tuple:
+    """Extend the axis so the peak sits at the midpoint; return (t, y, extra, peak_index).
+
+    Balances the samples on each side of the peak by prepending earlier-time zeros (early
+    pulse) or appending later-time zeros (late pulse). This does NOT move the pulse's
+    ABSOLUTE time — it only relabels the trace with more context — so the group delay that
+    carries n is preserved.
+    """
+    n_samples = amplitude.size
+    prepend = max((n_samples - 1 - peak_index) - peak_index, 0)
+    append = max(peak_index - (n_samples - 1 - peak_index), 0)
+    if prepend:
+        earlier = time_seconds[0] - dt_seconds * np.arange(prepend, 0, -1)
+        time_seconds = np.concatenate([earlier, time_seconds])
+        amplitude = np.concatenate([np.zeros(prepend), amplitude])
+        if extra_columns is not None:
+            extra_columns = np.concatenate(
+                [np.zeros((prepend, extra_columns.shape[1])), extra_columns], axis=0)
+        peak_index += prepend
+    if append:
+        later = time_seconds[-1] + dt_seconds * np.arange(1, append + 1)
+        time_seconds = np.concatenate([time_seconds, later])
+        amplitude = np.concatenate([amplitude, np.zeros(append)])
+        if extra_columns is not None:
+            extra_columns = np.concatenate(
+                [extra_columns, np.zeros((append, extra_columns.shape[1]))], axis=0)
+    return time_seconds, amplitude, extra_columns, peak_index
+
+
+def _apply_fixed_window_at(amplitude, peak_index, half_width_samples, window_core) -> tuple:
+    """Multiply by the fixed window centred on ``peak_index``; return (windowed, window, clipped)."""
+    n_samples = amplitude.size
+    lo = peak_index - half_width_samples
+    hi = peak_index + half_width_samples + 1
+    data_lo, data_hi = max(lo, 0), min(hi, n_samples)
+    core_lo = data_lo - lo
+    core_hi = core_lo + (data_hi - data_lo)
+    window_function = np.zeros(n_samples)
+    window_function[data_lo:data_hi] = window_core[core_lo:core_hi]
+    return amplitude * window_function, window_function, (lo < 0) or (hi > n_samples)
+
+
+def window_time_fixed_width(
+    dataset: DataSet,
+    half_width_ps: float,
+    region_ps: tuple | None = None,
+    peak_ps: float | None = None,
+    interactive: bool = False,
+    snap_halfwidth_ps: float = 2.0,
+    center_in_trace: bool = True,
+    segment: str = 'second_reflection',
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Center each pulse and apply a fixed-width symmetric window (transmission).
+
+    A cleaner ``window_time`` for the single-pulse (transmission) flow that uses the
+    reflection code's window-width logic. For each trace it:
+
+      1. selects the pulse peak (``_select_pulse_peak_index``);
+      2. (if ``center_in_trace``) extends the time axis so the peak sits at the midpoint
+         (``_center_peak_by_extending_axis``);
+      3. applies an identical ``2N+1``-sample symmetric window centred on the peak,
+         zeroing everything outside (``_apply_fixed_window_at``).
+
+    **Why centering here is timing-safe:** padding the axis does NOT move the pulse's
+    *absolute* arrival time — only ``align_to_common_time_axis`` (inside ``zero_pad``)
+    converts those absolute times into the FFT phase ramp ``invert_nk`` reads as n. So this
+    preserves n while giving a clean, peak-centred symmetric window. (Contrast
+    ``recenter_peaks_to_common_t0``, which deliberately *removes* the relative timing.)
+
+    Peak selection (priority order):
+      ``interactive=True`` opens a click-picker per trace (click the pulse you want — it
+      snaps to the nearest local max within ``snap_halfwidth_ps``). Use it when the wanted
+      pulse is NOT the global max and a single ``region_ps`` can't isolate it across a large
+      delay. ``peak_ps`` is the headless equivalent (a recorded target time). Otherwise
+      ``region_ps`` (max within a band), else the global max.
+
+    Parameters
+    ----------
+    half_width_ps : float
+        Half-width of the window in picoseconds (identical for every trace).
+    region_ps : tuple or None
+        ``(start_ps, end_ps)`` peak-search band, or None.
+    peak_ps : float or None
+        Target peak time (ps); snaps to the local max within ``snap_halfwidth_ps`` of it.
+    interactive : bool
+        Click-pick the peak per trace (snaps to the nearest local max).
+    snap_halfwidth_ps : float
+        Half-width (ps) of the local-max snap window for ``interactive`` / ``peak_ps``.
+    center_in_trace : bool
+        Extend the axis so the peak is centred. Absolute pulse time (group delay) preserved.
+    segment : str
+        Segment to process (default resolves to the main trace for plain THzData).
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    window_config = config.get('window', {'type': 'hann', 'alpha': 1.0})
+
+    holders = [(fn, _resolve_segment(obj, segment)) for fn, obj in dataset.data.items()]
+    holders = [(fn, h) for fn, h in holders if h is not None]
+    if not holders:
+        print("[window_time_fixed_width] No matching traces found, skipping.")
+        return dataset
+
+    dt_seconds = float(np.median(np.diff(holders[0][1].data[:, 0])))
+    half_width_samples, window_length, window_core = _build_fixed_width_window(
+        window_config, dt_seconds, half_width_ps)
+
+    graph_records = {}
+    for filename, holder in holders:
+        time_seconds = holder.data[:, 0]
+        amplitude = holder.data[:, 1]
+        extra_columns = holder.data[:, 2:] if holder.data.shape[1] > 2 else None
+
+        peak_index = _select_pulse_peak_index(
+            time_seconds, amplitude, region_ps=region_ps, peak_ps=peak_ps,
+            interactive=interactive, snap_halfwidth_ps=snap_halfwidth_ps, filename=filename)
+
+        if center_in_trace:
+            time_seconds, amplitude, extra_columns, peak_index = _center_peak_by_extending_axis(
+                time_seconds, amplitude, extra_columns, peak_index, dt_seconds)
+
+        windowed, window_function, clipped = _apply_fixed_window_at(
+            amplitude, peak_index, half_width_samples, window_core)
+
+        holder.processing_dict['pre_fixed_window'] = holder.data.copy()
+        holder.processing_dict['fixed_window'] = dict(
+            peak_index=int(peak_index),
+            peak_time_seconds=float(time_seconds[peak_index]),
+            half_width_samples=half_width_samples,
+            window_length=window_length,
+            clipped=bool(clipped),
+        )
+        new_data = np.column_stack((time_seconds, windowed))
+        if extra_columns is not None:
+            new_data = np.column_stack((new_data, extra_columns))
+        holder.data = new_data
+
+        clip_note = "  *** CLIPPED at trace edge — reduce half_width_ps ***" if clipped else ""
+        print(
+            f"[window_time_fixed_width] '{filename}': peak "
+            f"{time_seconds[peak_index] * _S_TO_PS:.2f} ps, window {window_length} samples "
+            f"(+/- {half_width_samples * dt_seconds * _S_TO_PS:.2f} ps).{clip_note}"
+        )
+        graph_records[filename] = dict(time_seconds=time_seconds, windowed=windowed,
+                                       window_function=window_function)
+
+    print(
+        f"[window_time_fixed_width] applied an IDENTICAL "
+        f"{window_config.get('type', 'hann')} window of {window_length} samples to "
+        f"{len(graph_records)} traces (center_in_trace={center_in_trace})."
+    )
+
+    if show_graph and graph_records:
+        figure, axis = plt.subplots(layout='constrained')
+        figure.suptitle('window_time_fixed_width — peak-centred fixed-width symmetric window')
+        peak_amplitude = max(np.max(np.abs(r['windowed'])) for r in graph_records.values())
+        for filename, record in graph_records.items():
+            time_ps = record['time_seconds'] * _S_TO_PS
+            axis.plot(time_ps, record['windowed'], lw=1.3, label=filename)
+            axis.plot(time_ps, record['window_function'] * peak_amplitude, '--', lw=0.9, alpha=0.5)
+        axis.set_xlabel('time (ps)'); axis.set_ylabel('amplitude'); axis.legend(fontsize=7)
+        plt.show()
+
+    return dataset
+
+
 # ---------------------------------------------------------------------------
 # Per-scan working matrix (preserves statistical power through preprocessing)
 #
@@ -3338,6 +3559,98 @@ def remove_phase_offset(
                 f"H left unchanged."
             )
 
+
+def detrend_transfer_phase(
+    dataset: DataSet,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """EXPERIMENTAL: remove the LINEAR (group-delay) component of arg(H) from transfer_H.
+
+    The mirror image of :func:`remove_phase_offset` — that one strips the intercept and
+    KEEPS the slope; this one strips the SLOPE (a group delay τ) and keeps the rest. It
+    fits a line to H's unwrapped phase over a trusted band and multiplies H by
+    ``exp(-i·slope·f)`` so the linear-in-frequency phase is flattened.
+
+    **Why / when:** for a near-mirror reflection (conductive sample vs gold) a group delay
+    sweeps arg(H) through 0 periodically, repeatedly pushing r = r_ref·H toward the r = -1
+    inversion pole and spiking n every ~1/τ. Removing the slope stops that periodic approach.
+
+    **This is a diagnostic / experimental knob, NOT for quantitative extraction.** A linear
+    phase is degenerate between a geometric timing offset (which you WANT to remove) and a
+    genuine material group delay (which carries n) — this removes BOTH. Use it to SEE the
+    pole-spikes disappear and inspect the before/after, not to report n.
+
+    Parameters
+    ----------
+    config : dict, optional
+        ``config['phase_detrend']`` keys: ``band_thz`` (default (0.3, 2.0)),
+        ``use_snr_mask`` (default True).
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    detrend_cfg = config.get('phase_detrend', {})
+    band_thz = detrend_cfg.get('band_thz', (0.3, 2.0))
+    use_snr_mask = detrend_cfg.get('use_snr_mask', True)
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        processing = data_obj.processing_dict
+        H = processing.get('transfer_H')
+        freq = processing.get('fft_freq')
+        if H is None or freq is None:
+            print(f"[detrend_transfer_phase] '{filename}': no transfer function, skipping.")
+            continue
+
+        in_band = ((freq * _HZ_TO_THZ >= band_thz[0]) & (freq * _HZ_TO_THZ <= band_thz[1])
+                   & np.isfinite(H))
+        mask = processing.get('transfer_mask') if use_snr_mask else None
+        if mask is not None:
+            in_band = in_band & mask
+        idx = np.where(in_band)[0]
+        if idx.size < 2:
+            print(f"[detrend_transfer_phase] '{filename}': fit band <2 trusted bins; unchanged.")
+            continue
+
+        unwrapped_phase = np.unwrap(np.angle(H[idx]))
+        slope_rad_per_hz = float(np.polyfit(freq[idx], unwrapped_phase, 1)[0])
+        delay_seconds = -slope_rad_per_hz / (2.0 * np.pi)
+        H_detrended = H * np.exp(-1j * slope_rad_per_hz * freq)
+
+        processing['transfer_H_pre_detrend'] = H
+        processing['transfer_H'] = H_detrended
+        processing['phase_detrend_metrics'] = dict(
+            slope_rad_per_hz=slope_rad_per_hz, delay_seconds=delay_seconds,
+            n_fit_bins=int(idx.size), band_thz=band_thz)
+        data_obj.data = np.column_stack((freq, np.abs(H_detrended), np.angle(H_detrended)))
+        print(
+            f"[detrend_transfer_phase] '{filename}': removed linear phase "
+            f"(group delay {delay_seconds * _S_TO_PS * 1000:+.0f} fs, {idx.size} fit bins, "
+            f"{band_thz[0]}-{band_thz[1]} THz).  ** experimental — removes material delay too **"
+        )
+
+        if show_graph:
+            f_thz = freq * _HZ_TO_THZ
+            band = in_band
+            before = np.full(freq.size, np.nan); after = np.full(freq.size, np.nan)
+            before[idx] = unwrapped_phase
+            after[idx] = np.unwrap(np.angle(H_detrended[idx]))
+            fig, (ax_ph, ax_mag) = plt.subplots(1, 2, figsize=(13, 4.5), layout='constrained')
+            fig.suptitle(f'detrend_transfer_phase — {filename} '
+                         f'(delay {delay_seconds * _S_TO_PS * 1000:+.0f} fs)')
+            ax_ph.plot(f_thz[band], before[band], color='steelblue', alpha=0.7, label='before')
+            ax_ph.plot(f_thz[band], after[band], color='darkorange', label='after (slope removed)')
+            ax_ph.axhline(0, color='gray', lw=0.5, ls='dashed')
+            ax_ph.set_xlabel('Frequency (THz)'); ax_ph.set_ylabel('unwrapped arg(H) (rad)')
+            ax_ph.set_title('phase'); ax_ph.legend(fontsize=8); ax_ph.grid(alpha=0.3)
+            ax_mag.plot(f_thz[band], np.abs(H[band]), color='steelblue', label='|H|')
+            ax_mag.axhline(1.0, color='k', ls=':', lw=0.8)
+            ax_mag.set_xlabel('Frequency (THz)'); ax_mag.set_ylabel('|H| (unchanged by detrend)')
+            ax_mag.set_title('magnitude'); ax_mag.legend(fontsize=8); ax_mag.grid(alpha=0.3)
+            plt.show()
+
+    return dataset
+
     return dataset
 
 
@@ -3510,6 +3823,24 @@ def invert_nk_reflection(
             theta_rad=theta_internal_rad, polarization=polarization,
             n_incident=n_incident,
         )
+
+        # Near-mirror diagnosis. The r->n inversion is singular at r=-1; a sample that
+        # reflects almost as strongly as the reference (|H| ~ 1) sits on that singularity
+        # and n spikes to infinity wherever H crosses 1+0i. |H| > 1 is unphysical for a
+        # passive sample (it cannot out-reflect the mirror) and flags a coupling/alignment
+        # artifact (the reference coupled worse — see the misalignment report). Warn so the
+        # spikes aren't mistaken for material features.
+        finite_H = np.isfinite(H)
+        unphysical_fraction = float(np.mean(np.abs(H[finite_H]) > 1.0)) if np.any(finite_H) else 0.0
+        n_singular = int(metrics.get('n_singular_bins', 0)) if isinstance(metrics, dict) else 0
+        if n_singular > 0 or unphysical_fraction > 0.05:
+            print(
+                f"[invert_nk_reflection] '{filename}': near-mirror inversion — "
+                f"{unphysical_fraction * 100:.0f}% of bins have |H|>1 (unphysical, coupling "
+                f"artifact) and {n_singular} bins are singular (|1+r|<min_one_plus_r). The "
+                f"sample reflects ~like the reference, so n is ill-conditioned there. Set "
+                f"config['invert']['min_one_plus_r'] (e.g. 0.05) to mask the blow-ups."
+            )
 
         data_obj.processing_dict['reflection_r'] = r_sample
         data_obj.processing_dict['reflection_geometry'] = geometry
