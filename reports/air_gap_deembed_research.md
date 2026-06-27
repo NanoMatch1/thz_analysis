@@ -35,6 +35,22 @@ F11, F13, F15) and `reports/reflection_interface_theory_tutorial.md`.
 So: **min-phase was the right instinct, but the production tool is "MEM phase retrieval + amplitude-KK
 gap-shift finder + Si anchor," on a Si-coupled measurement.**
 
+> **UPDATE 2026-06-27 (validated by implementation — supersedes the amplitude-KK emphasis above).**
+> We built MEM (`mem_phase_retrieval.py`) and amplitude-KK (`estimate_gap_amplitude_kk`) and tested
+> both on synthetic ground truth. Two corrections to the plan:
+> 1. **MEM's edge advantage is real (~6× better than Hilbert at the low band edge) but CONDITIONAL**
+>    on a band-limited spectrum with a near-edge feature. On a wide clean band it can be *worse*
+>    (opposite-edge AR wobble). Use it on band-limited data; report Hilbert alongside.
+> 2. **Amplitude-KK is NOT the estimator for our SMALL contact gap.** It has two failure modes the
+>    phase-slope estimator is immune to: the conductor **sign ambiguity** (min-phase drops the
+>    metal's ~π; fixed by a sign search) and **sub-fringe degeneracy** (our ≲13 µm good-contact
+>    gaps are far below the ~80 µm one-fringe scale, so |r| is flat in d). Its genuine value is
+>    **super-fringe gaps + immunity to alignment/misplacement** — a cross-check, not the main path.
+> **Corrected production tool for the small gap = the phase-excess estimator
+> (`estimate_gap_minimum_phase`) with MEM on band-limited data, hardened by a Drude/Drude-Smith +
+> HR-Si anchor constraint (curved material dispersion breaks the linear-phase degeneracy).** See
+> lab notebook F18.
+
 ---
 
 ## The literature, by stream

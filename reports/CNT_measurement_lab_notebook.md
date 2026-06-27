@@ -211,6 +211,59 @@ literature → `reports/air_gap_deembed_research.md`. Conclusions:
   — that may be our novel contribution. Worthy attempt to adapt: arXiv 2412.18662 + MEM + Si anchor.
 Next code: `mem_phase_retrieval`, `gap_shift_amplitude_kk`. See research report for full refs (RQ1–RQ4).
 
+### F17 — Mean gap d̄ is the enemy; contact-roughness spread σ_d is a secondary high-f effect *(2026-06-27, Samuel + me)*
+**Status: CURRENT** (refines F8/F9). Samuel's question: if bare reflection barely notices surface
+roughness, why fear roughness of *contact*? Resolution — they act through **different channels**:
+- **Bare single-interface reflection is insensitive to roughness because THz is sub-wavelength to it.**
+  λ ≈ 300 µm at 1 THz, so even 10–50 µm RMS gives spot phase variance `2kσcosθ ≪ 2π` →
+  Debye-Waller `exp(−2(kσcosθ)²) ≈ 1`, specular reflection intact. Large-scale undulation (L≫λ) only
+  *tilts* the wavefront → beam-steering/alignment (F4), not amplitude. THz simply can't scatter off
+  µm-scale features.
+- **The contact gap is sensitive through interference, not scattering** — opposite-sign two-beam
+  etalon. Split into two terms that scale differently:
+  - **Mean gap d̄** — deterministic frequency-dependent interference; *present even for a perfectly
+    smooth gap (roughness not required)*. This is what drags n<1 and corrupts the phase → the
+    **dominant, de-embeddable** term (target of `gap_shift_amplitude_kk`).
+  - **Spread σ_d** — averaging over a distribution of etalon phases → Debye-Waller loss of *fringe
+    contrast* `exp(−2(ω/c·σ_d cosθ)²)`, **∝ ω² → bites at HIGH f, negligible at the low f we care about.**
+- **Why contact "feels" rougher than bare = leverage, not larger scattering.** In the gap the signal
+  (`r_back`) is partly cancelled by the opposite-sign front reflection, so we work in the difference of
+  two large near-equal terms → any gap-phase error is amplified *fractionally*. But that leverage hits
+  **d̄ as much as σ_d** — a reason to kill the mean gap, not to fear the spread.
+**Implication for the build:** prioritise estimating/removing **d̄**; treat σ_d as a residual high-f
+Debye-Waller roll-off (Route A) and don't over-invest in roughness statistics. A smooth *small* gap is
+mostly de-embeddable; a smooth *large* gap is the real problem.
+
+### F18 — Validation overturns part of F16: amplitude-KK is for SUPER-fringe/misplacement, NOT the small contact gap *(2026-06-27)*
+**Status: CURRENT** (corrects the F16 emphasis on amplitude-KK as the gap estimator). Built MEM
+phase retrieval (`mem_phase_retrieval.py`) and the amplitude-KK gap-shift finder
+(`estimate_gap_amplitude_kk`) and tested both against synthetic ground truth. Results:
+- **MEM beats Hilbert ~6× at the low band EDGE on a TRUNCATED band** (the sub-1-THz region) —
+  validated (`mem_phase_validation.png`). But on a WIDE clean band MEM's opposite-(high-)edge
+  wobble can make it *worse* than Hilbert. MEM's win is conditional on band-limiting + a
+  near-edge feature, i.e. real low-f-cutoff data. Not a universal upgrade.
+- **Amplitude-KK (forward-FP magnitude match, the arXiv 2412.18662 idea adapted) has TWO failure
+  modes the phase-slope estimator is immune to:** (a) **conductor sign ambiguity** — min-phase
+  from |r| drops the metal's ~π (r_back≈−1); the forward model needs it (fixed by an automatic
+  sign search); (b) **sub-fringe degeneracy** — the gap enters |r_meas| only via FP fringes of
+  period Δf=c/(2d cosθ); for our band one fringe needs ~80 µm, so gaps below ~30 µm (our
+  good-contact target, ≲13 µm) are sub-fringe → |r_meas| nearly flat in d → degenerate. A
+  sub-fringe warning now fires and defers to the phase estimator.
+- **Where amplitude-KK DOES earn its keep:** super-fringe gaps (≳60 µm) AND it is **immune to
+  alignment/misplacement corruption** (a spurious linear phase leaves |r| unchanged), recovering
+  d≈120 µm even under an 8 µm misplacement that biases the phase-slope method. That is its real
+  (arXiv) regime: large residual gap + suspect alignment / cross-check.
+- **Corrected production plan for the SMALL good-contact gap:** the **phase-excess estimator**
+  (`estimate_gap_minimum_phase`, arg(x)−φ_minphase slope) is the right tool — immune to the
+  conductor sign and works sub-fringe. Its only weakness is the material-dispersion bias in the
+  slope, reduced by (i) **MEM** phase on band-limited data (edge advantage) and, more
+  importantly, (ii) constraining the material with a **Drude/Drude-Smith model + HR-Si anchor**
+  (curved dispersion breaks the linear-phase degeneracy, F11). The window geometry already
+  removes alignment, so amplitude-KK's robustness is largely pre-solved there.
+Code: `mem_phase_retrieval.py` (+7 tests), `estimate_gap_amplitude_kk`/`reconstruct_material_phase`
+in `deembed_air_gap_iterative.py` (+4 tests), `phase_engine='mem'|'hilbert'` selectable. All 123
+tests pass.
+
 ---
 
 ## Diagnostics & tools built for this work
