@@ -564,6 +564,11 @@ class THzDataReflection:
         self.first_reflection = first_reflection
         self.second_reflection = second_reflection
 
+
+    def get_attr(self, attr: str):
+        """Get an attribute from the second_reflection segment."""
+        return getattr(self.second_reflection, attr)
+
     # ------------------------------------------------------------------
     # Delegation to second_reflection
     # ------------------------------------------------------------------

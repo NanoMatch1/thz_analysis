@@ -26,11 +26,41 @@ from dataset_core.adapters import thz_adapter as thz
 #     extend_grid,
 # )
 
+def display_crop_regions(dataset):
+    """Display the crop regions for each trace in the dataset."""
+    config = dataset.config
+
+    for filename, data_obj in dataset.data.items():
+        # if dataset.data.is_reference(filename):
+            # continue
+        dataX = data_obj.data[:, 0] / PS_TO_S  # Assuming the first column is time
+        dataY = data_obj.data[:, 1]  # Assuming the second column is amplitude
+        first_region = config['regions'].get('first_reflection')
+        second_region = config['regions'].get('second_reflection')
+        
+        plt.plot(dataX, dataY, label='Raw Data')
+        # plt.show()
+        if first_region is not None:
+            start_ps, end_ps = first_region
+            plt.axvspan(start_ps, end_ps, color='tab:blue', alpha=0.1, label='First Reflection Region')
+            # plt.axvline(x=start_ps, color='r', linestyle='--', label='Start Region')
+            # plt.axvline(x=end_ps, color='g', linestyle='--', label='End Region')
+        if second_region is not None:
+            start_ps, end_ps = second_region
+            plt.axvspan(start_ps, end_ps, color='tab:orange', alpha=0.1, label='Second Reflection Region')
+            # plt.axvline(x=start_ps, color='b', linestyle='--', label='Start Region 2')
+            # plt.axvline(x=end_ps, color='c', linestyle='--', label='End Region 2')
+            plt.title(f'Crop Regions for {filename}')
+    plt.xlabel('Time (ps)')
+    plt.ylabel('Amplitude')
+    plt.legend()
+    plt.show()
+
 
 # ── Data paths ──────────────────────────────────────────
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\CNT' # CNT data
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\Si' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-23_refl_CNT\export\silicon' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-23_refl_CNT\export\silicon' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-24_refl_testing\main_alignment_tests' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 
 # ── Physical parameters ─────────────────────────────────
@@ -50,16 +80,18 @@ config: dict = {
         "n_sio2": 1.96,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        "first_reflection": (152.5, 159),  # (start_ps, end_ps) or None for auto
-        "second_reflection": (177, 183.8),  # (start_ps, end_ps) or None for auto
+        "first_reflection": (145, 157.3),  # (start_ps, end_ps) or None for auto
+        "second_reflection": (174, 183),  # (start_ps, end_ps) or None for auto
     },
     "centering": {
         "mode": "crop",  # 'crop' or 'pad'
+        "peak_mode": "auto", #, 'auto' or 'manual'
+        "taper_ps": 1.0,  # half-cosine taper length in ps
     },
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 4,    # fixed half-width — SAME window for every pulse
+        "half_width_ps": 'max',    # fixed half-width — SAME window for every pulse
     },
     "pad": {
         "extend_factor": 1.0,
@@ -111,11 +143,14 @@ config: dict = {
 
 # import acquisition_editor
 # acquisition_editor.process_directory(data_dir)
-
+# 
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
 # dataset.plot_current()
+# display_crop_regions(dataset)
 thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
+thz.taper_and_pad_traces(dataset, show_graph=True)
+# thz.center_pulse(dataset, show_graph=True)  # center the pulses in the trace (no crop, no pad)
 # TODO: Define half-width from minimum max array length
 # --- wrap each raw trace as a full-trace reflection (both pulses on ONE shared
 #     axis; regions only locate the pulses, they do not size the window) ---

@@ -2365,7 +2365,47 @@ def _plot_centering_result(filename: str, pre_arr: np.ndarray, new_arr: np.ndarr
         ax.set_title(panel_title)
         ax.legend(fontsize=8)
 
+def taper_and_pad_traces(
+    dataset: DataSet,
+    segment: str = 'both',
+    config: dict | None = None,
+    show_graph: bool = False,
+    taper_ps: float = 0.5,
+) -> DataSet:
+    """For extending the start or end of a time trace where the array length is asymmetric about the main pulse (normal situation is that the pre-pulse region is deliberately shorter to save time or remove pre-pulse contaminaton. 
+    
+    Apply a half-cosine taper and pad with zeros to the start and end of each trace. Operate on the segments specified in the 'segment' argument. 
+    
+    Operates on the dataset in place, using THzDataReflection objects. Call once overall."""
+    config = config or getattr(dataset, 'config', None) or {}
+    centering_cfg = config.get('centering', {})
+    peak_mode = centering_cfg.get('peak_mode', 'auto')
+    taper_ps = centering_cfg.get('taper_ps', 0.5)
 
+    for filename, data_obj in dataset.data.items():
+        segment_id = '_reflection'
+        segment_keys = [key for key in data_obj.__dict__.keys() if key.endswith(segment_id)]
+
+        segments = {segment: getattr(data_obj, segment) for segment in segment_keys}
+
+        for segment_name, holder in segments.items():
+            if segment == 'both' or segment_name == segment:
+                if holder is not None:
+                    t = holder.data[:, 0]
+                    y = holder.data[:, 1]
+                    t_new, y_new, info = _center_pulse_trace(
+                        t, y, peak_mode=peak_mode, taper_ps=taper_ps,
+                        picker_title=f"'{filename}' [{segment_name}] — pick main pulse peak",
+                    )
+                    holder.processing_dict['pre_centering'] = np.column_stack((t, y))
+                    holder.processing_dict['centering_info'] = info
+                    holder.data = np.column_stack((t_new, y_new))
+
+                    if show_graph:
+                        _plot_centering_result(f"{filename} [{segment_name}]", holder.processing_dict['pre_centering'], holder.data, info)
+        
+    if show_graph:
+        plt.show()
 
 def center_pulse(
     dataset: DataSet,
