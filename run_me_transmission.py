@@ -38,7 +38,7 @@ def clone_and_export(data_obj, dest_path, time_shift_ps=0.0):
 # ── Data paths ──────────────────────────────────────────
 data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\2025-06-25_silicon_transmission'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\chris'
-data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\denis'
+# data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\denis'
 # Chris data centering info:
 # [window_time_fixed_width] 'reference_rt.txt': peak 122.35 ps, window 161 samples (+/- 4.00 ps).
 # [window_time_fixed_width] 'sample_rt.txt': peak 125.05 ps, window 161 samples (+/- 4.00 ps).

@@ -143,6 +143,74 @@ toward different geometries. **Working plan:** a flat **HR-Si** base substrate, 
 gap-free contact together, with a simultaneous alignment reference to the flat plane (to be tested).
 Design the jig around Si specifically (F7), not a generic flat plane.
 
+### F14 — The low-frequency n taper in Si window-reflection is an artifact, not conductivity *(2026-06-26)*
+**Status: CURRENT.** Samuel saw Si `n` taper toward 0 below ~0.7–1 THz in the window self-ref
+geometry and wondered if it looked "conductive." It is an **instrumental/inversion artifact**, not a
+material response — three reasons: (a) it is present in BOTH the clean `main_alignment_tests\Si`
+(camera-align) set, which is flat n≈3.4 / k≈0.2 *above* ~0.7 THz, and the poorer
+`2026-06-23 export\silicon` (colinear) set; (b) we independently know this Si is high-resistivity
+(transmission + the flat region here); (c) **n→0 at low f is the *opposite* of a conductor's
+signature** — a Drude conductor goes to *large* n toward DC. Mechanism: for clean Si the Fresnel
+ratio |H| should be flat ~0.66, but both sets **sag below it toward low frequency** — the low-f THz
+beam is large/divergent so front vs back (and sample vs reference) couple differently, the self-ref
+no longer fully cancels it, |H| and the phase corrupt, and inverting that low-f r drives n→0.
+⇒ **trust only ~0.7–2 THz** in this reflection geometry. Separately, the colinear set is a WORSE
+measurement overall (n sloped downward, k large & oscillating, 28% |H|>1 vs 16%, FP-ripple in |H| =
+worse air gap/contact), so its taper is the systematic low-f artifact *plus* degraded coupling. The
+"good remembered" dataset is the **camera-align** one. Config was fine (n_sio2=1.96, half_width 4,
+air_gap off, eps_background only affects σ); the SNR mask just keeps marginal low-f bins. Figure
+`explorations/reflection_theory/si_lowf_taper.png`. Relates to F2/F5/F6 (coupling→phase) and F7.
+
+### F15 — Strategy: window (Si) is the path; bare reflection is a high-f cross-check *(2026-06-27)*
+**Status: CURRENT** (strategic synthesis; refines/uses F1–F14). Decision after working through the
+physics with Samuel:
+- **Bare and window are NOT parallel options.** The science goal is **carrier dynamics**, whose most
+  diagnostic content (Drude peak shape, scattering time τ; 1/τ ~ THz) lives **at/below 1–2 THz**.
+  Bare air|CNT reflection loses that band — and not as a fixable processing weakness but as
+  **fundamental air-incidence conditioning on a conductor** (r on the −1 pole, F1/F2). So bare is
+  *structurally mismatched* to the question: even perfectly aligned it can't deliver the needed band.
+- **The bare-reflection pipeline (run_me_reflection_single, gold-ref) only behaves after stripping the
+  linear phase entirely** — a fragile band-aid that also removes real material group delay (F5). This
+  is the bare path's signature failure. **The SiO₂ window pipeline (run_me_reflection.py, self-ref) is
+  fine** — its W=Y2/Y1 cancels the timing structurally, no linear-phase strip needed. (Earlier I wrongly
+  attributed the blow-up to the window path; corrected here — Samuel.)
+- **Conditioning (bare) is fundamental physics; the gap (window) is a technical contact/de-embed
+  problem.** Technical problems yield to engineering; fundamental ones don't. ⇒ **commit to the window
+  geometry — ideally Si (n=3.4 ≫ SiO₂ 1.95 → far more conditioning headroom, F7) — and spend the effort
+  on the gap.** A flat HR-Si substrate is simultaneously the alignment plane *and* the best shot at
+  gap-free contact (press/deposit directly) — one jig, three problems (F13).
+- **Alignment (Samuel's untested method) fixes the rigid plane → reliability/reproducibility, NOT
+  bandwidth.** It doesn't touch the air-incidence conditioning, and residual paper-surface aberrations
+  (wavefront) become the new noise floor. Necessary, not sufficient, for bare.
+- **Role of bare reflection:** keep as a **>2 THz cross-check** + carrier-density sanity anchor, not the
+  primary instrument.
+- **Code flag (run_me_reflection.py):** `n_fft=500` is likely too small for the shared-axis path (the
+  windowed trace keeps full length; rfft truncates if n_fft < trace length → cuts the late pulses). The
+  `minimum_fft_length` assert from run_me_low-level.py should be ported here. [check]
+
+**Next (2026-06-27):** deep literature recanvas + verify the analytical de-embed approach (min-phase
+the current candidate); Samuel tinkering the mount in parallel. See `reports/air_gap_deembed_research.md`
+(in progress).
+
+### F16 — De-embed approach refined by literature recanvas *(2026-06-27)*
+**Status: CURRENT** (advances F11). Recanvassed the THz reflection / de-embed / phase-retrieval
+literature → `reports/air_gap_deembed_research.md`. Conclusions:
+- **Geometry is the primary fix and is field-standard: high-index coupling on HR-Si (ATR / Si-window),
+  sample deposited/intimately pressed.** This is *the* established way to do conductive-film THz —
+  fixes conditioning (F7) and removes the gap if deposited (F13). Build effort goes here.
+- **Min-phase de-embed was the right FAMILY (causality phase retrieval) but the wrong implementation.**
+  Upgrade: (a) reconstruct the causal phase with **MEM (maximum-entropy)** not Hilbert(ln|r|) — MEM is
+  far better at the spectrum *edges* (our low-f weak spot) and is specifically recommended for
+  conductors; (b) pin the gap's linear (timing) phase by **amplitude-KK minimisation** (the robust
+  method of arXiv 2412.18662, *designed for highly reflective/conductive samples* — find the shift that
+  makes |r| KK-consistent, instead of fitting the corrupted measured phase as our detrend does); (c)
+  **anchor with HR-Si** (known n — both KK and MEM improve markedly with 1–2 anchor points).
+- The statistical-gap Fabry-Pérot (Route A) stays as the *residual amplitude* model (Debye-Waller +
+  fringes), small with good contact. `detrend_transfer_phase` / time-delay is demoted to a diagnostic.
+- **Gap found NOT to be addressed in the literature for a ROUGH/distributed gap** (only uniform offset)
+  — that may be our novel contribution. Worthy attempt to adapt: arXiv 2412.18662 + MEM + Si anchor.
+Next code: `mem_phase_retrieval`, `gap_shift_amplitude_kk`. See research report for full refs (RQ1–RQ4).
+
 ---
 
 ## Diagnostics & tools built for this work

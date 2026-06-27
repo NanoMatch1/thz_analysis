@@ -27,8 +27,9 @@ from dataset_core.adapters import thz_adapter as thz
 
 # ── Data paths ──────────────────────────────────────────
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT\test2'
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\CNT-5\test'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT\test2'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT\aligned' # 90 and 0 deg
+# data_dir = r'C:\Users\Samuel\Data\THz\CNTs\CNT-5\test'
 
 # ── Configuration ───────────────────────────────────────
 config: dict = {
@@ -48,9 +49,9 @@ config: dict = {
         # Recalibration: reset every pulse to a common peak T0 (removes the relative
         # timing). Use it to SIMULATE correcting the delay from angular misalignment —
         # whatever still corrupts H afterwards is the part a delay-correction can't fix.
-        "recalibrate": False,        # True to align all peaks to a common T0
+        "recalibrate": True,        # True to align all peaks to a common T0
         "target_t0_ps": None,        # None = reference peak; else a fixed time
-        "subsample": False,           # precise interpolation shift vs integer roll
+        "subsample": True,           # precise interpolation shift vs integer roll
     },
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
@@ -68,7 +69,7 @@ config: dict = {
         "min_ref_amp_rel": 1e-3,
         "regularization_eps": 1e-30,
         "unwrap_phase": True,
-        "correct_linear_phase": False,  # remove the linear phase from H (misalignment delay)
+        "correct_linear_phase": True,  # remove the linear phase from H (misalignment delay)
     },
     "mask": {
         "snr_thresh_db": 10,
