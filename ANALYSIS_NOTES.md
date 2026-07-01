@@ -749,10 +749,18 @@ window_time → zero_pad (pad_to_common_grid)` chain for reflection data with th
 transparent functions (`dataset_core/adapters/thz_adapter.py`), kept **alongside**
 the old path for A/B.
 
-- **`build_full_trace_reflection(dataset)`** — wraps each raw trace into a
-  `THzDataReflection` where BOTH segments start as independent copies of the *whole*
-  trace on one shared axis. No gate cropping, no echo crop (the echo is handled by the
-  region, below). Sets `first_region`/`second_region = None`.
+- **`build_full_trace_reflection(dataset, config=None)`** — wraps each raw trace into a
+  `THzDataReflection` where BOTH segments are copies of ONE shared trace, isolated to the
+  two pulses. `config['regions']` holds *generous, dataset-independent* search ranges; the
+  function finds the non-zero data extent inside each (trimming zero-pad / region overhang),
+  clips the shared axis to `[first_start, second_end]`, zeros the between-pulse gap (the
+  inter-pulse delay is preserved as zeros, which self-referencing needs), and **self-modifies
+  `config['regions']`** to the found (tightened) ranges — so the general search window never
+  needs hand-tuning per dataset. Cross-file it uses the *intersection* of per-file found
+  ranges (guaranteeing real data in every file's kept window). No echo crop is needed: the
+  echo is excluded by the second-region trailing edge + the outside-region zeroing. If
+  regions are absent/`None`, it falls back to the old whole-trace behaviour and leaves
+  `first_region`/`second_region = None` for `define_reflection_regions` (interactive path).
 - **`define_reflection_regions(dataset, config)`** — one function, both regions, from
   preset ps bounds or a `SpanSelector`. Writes the (start, stop) ps tuples onto every
   object as `first_region`/`second_region` and mirrors them into `config['regions']`.

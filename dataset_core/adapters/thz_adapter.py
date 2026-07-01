@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import thz_core.thz_core as core
 import matplotlib.pyplot as plt
@@ -254,38 +256,206 @@ def define_reflection_gates(
 # phase relationship is structural — no common-grid step, no absolute-time factor.
 # ---------------------------------------------------------------------------
 
-def build_full_trace_reflection(dataset: DataSet) -> DataSet:
-    """Wrap each loaded full trace into a THzDataReflection WITHOUT cropping to gates.
+def _find_data_bounds_in_region(
+    time_ps: np.ndarray,
+    amplitude: np.ndarray,
+    region_start_ps: float,
+    region_stop_ps: float,
+    amplitude_tolerance: float = 0.0,
+) -> tuple[float, float] | None:
+    """Return the (first, last) ps of *real* (non-zero) data inside a search range.
 
-    Both segments (``first_reflection`` and ``second_reflection``) start as
-    independent copies of the **whole** trace on one shared time axis. The
-    reflection regions are isolated later by ``isolate_and_window`` — so the two
-    pulses keep a single, shared axis and their true inter-pulse delay.
+    The configured region is a generous, dataset-independent search window; the
+    actual acquired pulse only fills part of it (the record may start after the
+    region's leading edge, or a shorter acquisition may have been zero-padded up to
+    a common grid). This locates the outermost non-zero samples within
+    ``[region_start_ps, region_stop_ps]`` so the trace can be tightened to the data
+    that genuinely exists.
 
-    No echo cropping happens here: any GaP echo is excluded by the second-reflection
-    region's trailing edge, and ``isolate_and_window`` zeros everything outside each
-    region before windowing — so the region selection is the only echo filter needed.
+    Interior zeros — genuine signal zero-crossings — are irrelevant: only the first
+    and last non-zero samples set the bounds, so a zero in the middle of the pulse
+    never truncates it. Returns ``None`` if the range holds no non-zero samples.
 
-    Each object gets ``first_region``/``second_region`` attributes initialised to
-    ``None`` for ``define_reflection_regions`` to fill.
+    ``amplitude_tolerance`` defaults to 0.0 (exact-zero test) so deliberate
+    zero-padding is trimmed while genuinely small acquired samples are kept.
     """
-    for filename, data_obj in list(dataset.data.items()):
-        raw_time_ps = np.asarray(data_obj.raw_data, dtype=float)[:, 0]
-        start_ps = float(raw_time_ps.min())
-        stop_ps = float(raw_time_ps.max())
+    in_region = (time_ps >= region_start_ps) & (time_ps <= region_stop_ps)
+    is_real_data = in_region & (np.abs(amplitude) > amplitude_tolerance)
+    if not np.any(is_real_data):
+        return None
+    data_indices = np.nonzero(is_real_data)[0]
+    return float(time_ps[data_indices[0]]), float(time_ps[data_indices[-1]])
 
-        first_full_copy = _crop_thzdata_to_gate(data_obj, start_ps, stop_ps)
-        second_full_copy = _crop_thzdata_to_gate(data_obj, start_ps, stop_ps)
-        reflection_obj = THzDataReflection.from_thzdata(second_full_copy, first_full_copy)
-        reflection_obj.first_region = None
-        reflection_obj.second_region = None
-        dataset.data[filename] = reflection_obj
 
-        print(
-            f"[build_full_trace_reflection] '{filename}': full trace "
-            f"[{start_ps:.1f}, {stop_ps:.1f}] ps ({len(first_full_copy.data)} samples) "
-            f"wrapped on a shared axis; regions not yet defined."
+def _isolate_regions_to_full_trace(
+    data_obj: THzData,
+    keep_regions_ps: list[tuple[float, float]],
+    outer_bounds_ps: tuple[float, float],
+) -> THzData:
+    """Build a full-trace ``THzData`` holding only the requested regions' data.
+
+    Every individual scan is clipped to ``outer_bounds_ps`` and then its amplitude
+    is zeroed everywhere outside the ``keep_regions_ps`` windows. The two pulses
+    therefore keep their true positions on ONE shared axis (the inter-pulse delay is
+    preserved as zeros between them), which is what the self-referenced transfer
+    function relies on. Per-scan structure is preserved so per-scan SNR statistics
+    survive to the FFT stage (mirrors ``_crop_thzdata_to_gate``).
+    """
+    outer_start_ps, outer_stop_ps = outer_bounds_ps
+    isolated_scans: list[BaseTHzData] = []
+    for scan in data_obj.data_list:
+        raw = np.asarray(scan.raw_data, dtype=float)
+        scan_time_ps = raw[:, 0]
+        within_outer_bounds = (scan_time_ps >= outer_start_ps) & (scan_time_ps <= outer_stop_ps)
+        if np.count_nonzero(within_outer_bounds) < 2:
+            raise ValueError(
+                f"Outer bounds [{outer_start_ps}, {outer_stop_ps}] ps select <2 samples "
+                f"of '{data_obj.filename}'."
+            )
+        clipped = raw[within_outer_bounds].copy()
+        clipped_time_ps = clipped[:, 0]
+        keep_mask = np.zeros(clipped_time_ps.shape, dtype=bool)
+        for region_start_ps, region_stop_ps in keep_regions_ps:
+            keep_mask |= (clipped_time_ps >= region_start_ps) & (clipped_time_ps <= region_stop_ps)
+        clipped[~keep_mask, 1] = 0.0
+        isolated_scans.append(BaseTHzData(data=clipped, headers=scan.headers))
+    return THzData(
+        data=isolated_scans,
+        header=data_obj.headers,
+        filename=data_obj.filename,
+        data_type=data_obj.data_type,
+    )
+
+
+def build_full_trace_reflection(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Wrap each loaded full trace into a THzDataReflection, isolated to two pulses.
+
+    Both segments (``first_reflection`` and ``second_reflection``) start as identical
+    copies of ONE shared full trace, so their true inter-pulse delay is preserved.
+    That is essential for the self-referenced transfer function (W = Y2/Y1 within each
+    trace), which uses the front pulse as the trace's own internal clock.
+
+    Region-driven isolation (default)
+    ---------------------------------
+    When ``config['regions']`` supplies both ``first_reflection`` and
+    ``second_reflection`` (start, stop) ps ranges, those ranges are treated as a
+    *generous general search window* — the same for every dataset. This function:
+
+    1. finds the actual non-zero data extent inside each range (see
+       ``_find_data_bounds_in_region``), tightening to the pulse that genuinely exists;
+    2. clips the shared axis to ``[first_found_start, second_found_end]`` and zeros
+       everything outside the two found ranges — so the section BETWEEN the two pulses
+       (and any padding beyond them) becomes zeros while each pulse keeps its position;
+    3. writes the found ranges back into ``config['regions']`` so the rest of the
+       pipeline (``define_reflection_regions`` etc.) uses the tightened, data-driven
+       bounds without the general search window having to be hand-tuned per dataset.
+
+    Across files the *intersection* of the per-file found ranges is used, so the kept
+    window is guaranteed to contain real data in every file (no injected zeros inside
+    a "found" region). The resolved ranges are also stored on each object as
+    ``first_region`` / ``second_region`` (self-describing).
+
+    Whole-trace fallback
+    --------------------
+    If regions are absent/``None``, the whole trace is kept (both segments = the full
+    ``[min, max]`` axis) and ``first_region`` / ``second_region`` are left ``None``
+    for ``define_reflection_regions`` to fill (supports interactive selection).
+
+    No dedicated echo crop happens here: any GaP echo is excluded by the
+    second-reflection region's trailing edge, and the zeroing outside the regions
+    removes everything else — so the region selection is the only echo filter needed.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    requested_regions = config.get('regions', {}) or {}
+    first_search = requested_regions.get('first_reflection')
+    second_search = requested_regions.get('second_reflection')
+    regions_defined = first_search is not None and second_search is not None
+
+    if not regions_defined:
+        # Whole-trace fallback: keep everything, defer region choice.
+        for filename, data_obj in list(dataset.data.items()):
+            raw_time_ps = np.asarray(data_obj.raw_data, dtype=float)[:, 0]
+            start_ps = float(raw_time_ps.min())
+            stop_ps = float(raw_time_ps.max())
+            first_full_copy = _crop_thzdata_to_gate(data_obj, start_ps, stop_ps)
+            second_full_copy = _crop_thzdata_to_gate(data_obj, start_ps, stop_ps)
+            reflection_obj = THzDataReflection.from_thzdata(second_full_copy, first_full_copy)
+            reflection_obj.first_region = None
+            reflection_obj.second_region = None
+            dataset.data[filename] = reflection_obj
+            print(
+                f"[build_full_trace_reflection] '{filename}': no regions defined — full "
+                f"trace [{start_ps:.1f}, {stop_ps:.1f}] ps ({len(first_full_copy.data)} "
+                f"samples) wrapped on a shared axis; regions deferred."
+            )
+        return dataset
+
+    first_search_ps = (float(first_search[0]), float(first_search[1]))
+    second_search_ps = (float(second_search[0]), float(second_search[1]))
+
+    # --- pass 1: find the non-zero data extent within each search range, per file ---
+    per_file_first_bounds = []
+    per_file_second_bounds = []
+    for filename, data_obj in dataset.data.items():
+        raw = np.asarray(data_obj.raw_data, dtype=float)
+        time_ps = raw[:, 0]
+        amplitude = raw[:, 1:].mean(axis=1) if raw.shape[1] > 2 else raw[:, 1]
+        first_bounds = _find_data_bounds_in_region(time_ps, amplitude, *first_search_ps)
+        second_bounds = _find_data_bounds_in_region(time_ps, amplitude, *second_search_ps)
+        if first_bounds is None or second_bounds is None:
+            missing = 'first_reflection' if first_bounds is None else 'second_reflection'
+            search = first_search_ps if first_bounds is None else second_search_ps
+            raise ValueError(
+                f"'{filename}': no non-zero data found in the {missing} search range "
+                f"[{search[0]:.2f}, {search[1]:.2f}] ps. Widen config['regions'] or "
+                f"check the acquisition covers this window."
+            )
+        per_file_first_bounds.append(first_bounds)
+        per_file_second_bounds.append(second_bounds)
+
+    # --- common found range = intersection across files (real data in every file) ---
+    first_found_ps = (
+        max(bounds[0] for bounds in per_file_first_bounds),
+        min(bounds[1] for bounds in per_file_first_bounds),
+    )
+    second_found_ps = (
+        max(bounds[0] for bounds in per_file_second_bounds),
+        min(bounds[1] for bounds in per_file_second_bounds),
+    )
+    if first_found_ps[1] >= second_found_ps[0]:
+        raise ValueError(
+            f"Found first-reflection range {first_found_ps} ps overlaps the found "
+            f"second-reflection range {second_found_ps} ps — the two search windows "
+            f"must bracket separate pulses."
         )
+    outer_bounds_ps = (first_found_ps[0], second_found_ps[1])
+    keep_regions_ps = [first_found_ps, second_found_ps]
+
+    # --- pass 2: isolate both pulses on the shared axis (zeros between, clipped ends) ---
+    for filename, data_obj in list(dataset.data.items()):
+        first_full = _isolate_regions_to_full_trace(data_obj, keep_regions_ps, outer_bounds_ps)
+        second_full = _isolate_regions_to_full_trace(data_obj, keep_regions_ps, outer_bounds_ps)
+        reflection_obj = THzDataReflection.from_thzdata(second_full, first_full)
+        reflection_obj.first_region = first_found_ps
+        reflection_obj.second_region = second_found_ps
+        dataset.data[filename] = reflection_obj
+        print(
+            f"[build_full_trace_reflection] '{filename}': isolated on shared axis "
+            f"[{outer_bounds_ps[0]:.2f}, {outer_bounds_ps[1]:.2f}] ps — "
+            f"first {first_found_ps[0]:.2f}–{first_found_ps[1]:.2f}, "
+            f"second {second_found_ps[0]:.2f}–{second_found_ps[1]:.2f} ps "
+            f"({len(first_full.data)} samples, gap zeroed)."
+        )
+
+    # --- self-modify the config to the found (tightened) ranges ---
+    config['regions'] = {
+        'first_reflection': first_found_ps,
+        'second_reflection': second_found_ps,
+    }
+    print(
+        f"[build_full_trace_reflection] config['regions'] updated to found data ranges: "
+        f"first {first_found_ps}, second {second_found_ps} ps."
+    )
     return dataset
 
 
@@ -1787,7 +1957,7 @@ def subtract_baseline(dataset: DataSet, config: dict | None = None) -> DataSet:
     config = dataset.config or config or {}
     n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
 
-    show_graph = bool(config.get('show_graph', False))
+    show_graph = bool(config.get('general', {}).get('show_graph', False))
 
     if all(isinstance(data_obj, THzDataReflection) for data_obj in dataset.data.values()):
         baselined_dataset = _subtract_baseline_reflection(dataset, config)
@@ -2269,6 +2439,8 @@ def _center_pulse_trace(
     dt = float(np.median(np.diff(t)))
     t_ps = t * _S_TO_PS
 
+    # TODO: create a mask to exclude zeros - only pad out to make the peak symmetric until the first zero sample on the other side. This will avoid padding out to the end of the trace if there are zeros in the trace.
+
     if peak_mode == 'auto':
         peak_idx = int(np.argmax(np.abs(y)))
     elif peak_mode == 'manual':
@@ -2365,6 +2537,40 @@ def _plot_centering_result(filename: str, pre_arr: np.ndarray, new_arr: np.ndarr
         ax.set_title(panel_title)
         ax.legend(fontsize=8)
 
+def taper_and_pad_traces_universal(
+    dataset: DataSet,
+    config: dict | None = None,
+    show_graph: bool = False,
+    taper_ps: float = 0.5,
+) -> DataSet:
+    """Apply a half-cosine taper and pad with zeros to the start and end of each trace. Applied to single pulses, not the split-scan reflection segments. Operates on the dataset in place, using THzData objects. Call once overall.
+    
+    #TODO: IMprove the plotting to show the regions without launching one plot per file"""
+
+    config = config or getattr(dataset, 'config', None) or {}
+    centering_cfg = config.get('centering', {})
+    peak_mode = centering_cfg.get('peak_mode', 'auto')
+    taper_ps = centering_cfg.get('taper_ps', 0.5)
+
+    for filename, data_obj in dataset.data.items():
+        data = data_obj.data
+        t = data[:, 0]
+        y = data[:, 1]
+        t_new, y_new, info = _center_pulse_trace(
+            t, y, peak_mode=peak_mode, taper_ps=taper_ps,
+            picker_title=f"'{filename}' — pick main pulse peak",
+        )
+        data_obj.processing_dict['pre_centering'] = np.column_stack((t, y))
+        data_obj.processing_dict['centering_info'] = info
+        data_obj.data = np.column_stack((t_new, y_new))
+
+        if show_graph:
+            _plot_centering_result(f"{filename}", data_obj.processing_dict['pre_centering'], data_obj.data, info)
+        
+    if show_graph:
+        plt.show()
+
+
 def taper_and_pad_traces(
     dataset: DataSet,
     segment: str = 'both',
@@ -2383,6 +2589,7 @@ def taper_and_pad_traces(
     taper_ps = centering_cfg.get('taper_ps', 0.5)
 
     for filename, data_obj in dataset.data.items():
+        print(f"[taper_and_pad_traces] Processing file '{filename}' for segment '{segment}'")
         segment_id = '_reflection'
         segment_keys = [key for key in data_obj.__dict__.keys() if key.endswith(segment_id)]
 
@@ -3760,11 +3967,14 @@ def _resolve_reflection_geometry(
     theta_external_rad: float,
     r_reference: complex,
     n_window: complex | np.ndarray,
+    polarization: str = 's',
 ) -> tuple:
     """Resolve (n_incident, theta_internal_rad, r_reference_value) for a geometry.
 
     Single source of truth for the 'gold' vs 'window' reflection model, shared by
-    ``invert_nk_reflection`` and ``sweep_time_shift`` so the two never diverge.
+    ``invert_nk_reflection`` and ``sweep_time_shift`` so the two never diverge. The window
+    reference reflection r_{window->air} is polarisation-dependent, so ``polarization`` selects
+    the s- or p-Fresnel coefficient (must match the polarisation of the measurement).
     """
     if geometry == 'gold':
         return 1.0, theta_external_rad, r_reference
@@ -3775,7 +3985,10 @@ def _resolve_reflection_geometry(
         theta_internal_rad = float(
             np.real(core.snell_refracted_angle(theta_external_rad, 1.0, n_window_scalar))
         )
-        r_reference_value = core.fresnel_reflection_s(n_window, 1.0, theta_internal_rad)
+        window_fresnel = (
+            core.fresnel_reflection_p if polarization == 'p' else core.fresnel_reflection_s
+        )
+        r_reference_value = window_fresnel(n_window, 1.0, theta_internal_rad)
         return n_window, theta_internal_rad, r_reference_value
     raise ValueError(f"Unknown geometry '{geometry}'. Use 'gold' or 'window'.")
 
@@ -3837,7 +4050,7 @@ def invert_nk_reflection(
     theta_external_rad = np.deg2rad(theta_deg)
 
     n_incident, theta_internal_rad, r_reference_value = _resolve_reflection_geometry(
-        geometry, theta_external_rad, r_reference, n_window,
+        geometry, theta_external_rad, r_reference, n_window, polarization,
     )
 
     print("---- Angles ----")
@@ -3893,6 +4106,120 @@ def invert_nk_reflection(
         data_obj.data = np.column_stack((freq, n, k))
 
     return dataset
+
+
+def _dual_pol_sample_key(filename: str) -> str:
+    """Normalise a filename to a sample identity by stripping polarisation/format tokens.
+
+    So 'sample_CNT-0-deg_..._s.acc' and 'sample_CNT-0-deg_..._p.acc' map to the same key and pair
+    up across the two (s / p) datasets.
+    """
+    stem = os.path.splitext(os.path.basename(filename))[0].lower()
+    drop_tokens = {
+        's', 'p', 's-pol', 'p-pol', 'spol', 'ppol', 'pol-s', 'pol-p',
+        'te', 'tm', 'sample', 'export', 'acc',
+    }
+    tokens = [t for t in stem.replace('-', '_').split('_') if t and t not in drop_tokens]
+    return '_'.join(tokens)
+
+
+def _pair_dual_pol_samples(dataset_s: DataSet, dataset_p: DataSet) -> list:
+    """Pair non-reference samples of the s and p datasets. Returns [(key, name_s, name_p)]."""
+    def sample_names(dataset):
+        return [fn for fn in dataset.data if not dataset.data.is_reference(fn)]
+
+    names_s = sample_names(dataset_s)
+    names_p = sample_names(dataset_p)
+    keyed_p = {_dual_pol_sample_key(fn): fn for fn in names_p}
+
+    pairs = []
+    for name_s in names_s:
+        key = _dual_pol_sample_key(name_s)
+        if key in keyed_p:
+            pairs.append((key, name_s, keyed_p[key]))
+    # Fallback: exactly one sample each but keys differed -> pair positionally.
+    if not pairs and len(names_s) == 1 and len(names_p) == 1:
+        pairs.append((_dual_pol_sample_key(names_s[0]), names_s[0], names_p[0]))
+    return pairs
+
+
+def fit_dual_pol_reflection(
+    dataset_s: DataSet,
+    dataset_p: DataSet,
+    config: dict | None = None,
+    *,
+    material_model=None,
+    material_param_names=None,
+    initial_material_params=None,
+    material_param_bounds=None,
+) -> dict:
+    """Joint s+p Drude(+gap) fit for each sample measured in both polarisations.
+
+    Each dataset must already be processed through ``invert_nk_reflection`` (window geometry) so
+    every sample carries ``reflection_r`` (measured back reflection), ``r_reference`` (window->air
+    front) and ``transfer_mask``.  Samples are paired across the two datasets by normalised name.
+    The gap angle equals the EXTERNAL angle (the gap is air, so Snell returns the beam to the
+    external angle), read from ``config['geometry']['theta_external_deg']``.
+
+    Knobs (``config['dual_pol']``): ``fixed_gap_um`` (anchor the gap, e.g. from Si), ``initial_gap_um``,
+    ``gap_bounds_um``.  The material model defaults to Drude; pass ``material_model`` (+ names /
+    initial / bounds) to use Drude-Smith / Drude-Lorentz instead — the single place to extend.
+
+    Returns ``{sample_key: fit_dict}`` and also stores each fit on the p-dataset sample's
+    ``processing_dict['dual_pol_fit']``.
+    """
+    config = config or getattr(dataset_p, 'config', None) or getattr(dataset_s, 'config', None) or {}
+    dual_cfg = config.get('dual_pol', {})
+    theta_gap_rad = np.deg2rad(config.get('geometry', {}).get('theta_external_deg', 45.0))
+
+    # Material model selection (Drude default; pluggable in one place).
+    if material_model is None:
+        material_model = core.drude_material_model
+        material_param_names = core.DRUDE_PARAM_NAMES
+        initial_material_params = core.DRUDE_INITIAL_PARAMS
+        material_param_bounds = core.DRUDE_PARAM_BOUNDS
+
+    pairs = _pair_dual_pol_samples(dataset_s, dataset_p)
+    if not pairs:
+        print("[fit_dual_pol_reflection] no s/p sample pairs found (check names / references).")
+        return {}
+
+    results = {}
+    for key, name_s, name_p in pairs:
+        proc_s = dataset_s.data[name_s].processing_dict
+        proc_p = dataset_p.data[name_p].processing_dict
+        frequency_hz = np.asarray(proc_s['fft_freq'], dtype=float)
+        # Combine the two trusted-band masks so only bins good in BOTH polarisations are fitted.
+        mask = np.asarray(proc_s['transfer_mask'], dtype=bool) & np.asarray(
+            proc_p['transfer_mask'], dtype=bool)
+        measured = {
+            's': np.asarray(proc_s['reflection_r'], dtype=complex),
+            'p': np.asarray(proc_p['reflection_r'], dtype=complex),
+        }
+        front = {
+            's': np.asarray(proc_s['r_reference'], dtype=complex) * np.ones_like(frequency_hz),
+            'p': np.asarray(proc_p['r_reference'], dtype=complex) * np.ones_like(frequency_hz),
+        }
+        fit = core.fit_reflection_gap_dual_pol(
+            frequency_hz, mask, measured, front, theta_gap_rad,
+            material_model=material_model,
+            initial_material_params=initial_material_params,
+            material_param_bounds=material_param_bounds,
+            material_param_names=material_param_names,
+            fixed_gap_um=dual_cfg.get('fixed_gap_um'),
+            initial_gap_um=dual_cfg.get('initial_gap_um', 1.0),
+            gap_bounds_um=tuple(dual_cfg.get('gap_bounds_um', (0.0, 60.0))),
+        )
+        fit['frequency_hz'] = frequency_hz
+        fit['mask'] = mask
+        dataset_p.data[name_p].processing_dict['dual_pol_fit'] = fit
+        results[key] = fit
+        param_summary = ", ".join(
+            f"{name}={fit[name]:.3f}" for name in material_param_names)
+        gap_tag = "fixed" if not fit['gap_fitted'] else "fit"
+        print(f"[fit_dual_pol_reflection] {key}: {param_summary}, gap_um={fit['gap_um']:.2f} "
+              f"({gap_tag}); residual RMS {fit['residual_rms']:.2e} over {int(mask.sum())} bins")
+    return results
 
 
 def characterise_window(

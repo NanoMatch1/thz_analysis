@@ -26,15 +26,16 @@ from dataset_core.adapters import thz_adapter as thz
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Data paths ──────────────────────────────────────────
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT\test2'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT\aligned' # 90 and 0 deg
-# data_dir = r'C:\Users\Samuel\Data\THz\CNTs\CNT-5\test'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
+data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
+
 
 # ── Configuration ───────────────────────────────────────
 config: dict = {
     "general": {
-        'show_graph': True,
+        'show_graph': False,
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle (air -> sample)
@@ -49,14 +50,14 @@ config: dict = {
         # Recalibration: reset every pulse to a common peak T0 (removes the relative
         # timing). Use it to SIMULATE correcting the delay from angular misalignment —
         # whatever still corrupts H afterwards is the part a delay-correction can't fix.
-        "recalibrate": True,        # True to align all peaks to a common T0
+        "recalibrate": False,        # True to align all peaks to a common T0
         "target_t0_ps": None,        # None = reference peak; else a fixed time
         "subsample": True,           # precise interpolation shift vs integer roll
     },
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 3.0,    # fixed half-width — SAME window for every pulse, no shift
+        "half_width_ps": 4.0,    # fixed half-width — SAME window for every pulse, no shift
     },
     "fft": {
         "norm": "backward",
@@ -95,7 +96,10 @@ config: dict = {
 
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
-dataset.plot_current()
+
+thz.taper_and_pad_traces_universal(dataset, taper_ps=0.5)
+# dataset.plot_current()
+# data
 
 # --- pair sample <-> reference (gold) ---
 dataset.group_files(keywords=['type'])
@@ -118,7 +122,10 @@ if config['centering'].get('recalibrate', False):
         show_graph=config['general']['show_graph'],
     )
 
-# --- THE window step: one identical fixed-width symmetric window on each pulse's
+# dataset.plot_current(title='before truncate')
+# thz.global_truncate(dataset)
+# dataset.plot_current(title='after truncate')
+# --- THE window step: one ldentical fixed-width symmetric window on each pulse's
 #     peak. The data is NEVER shifted, so the sample-vs-reference timing (and any
 #     misalignment delay) is preserved into the transfer function. ---
 thz.window_single_pulse_fixed_width(
@@ -127,6 +134,7 @@ thz.window_single_pulse_fixed_width(
     region_ps=config['regions'].get('pulse'),
     show_graph=config['general']['show_graph'],
 )  # window config read from dataset.config (single source of truth)
+dataset.plot_current()
 
 # --- FFT every trace onto ONE frequency grid (same n_fft -> identical grid). The
 #     fixed-width window keeps the FULL trace length, and rfft(y, n) truncates when
@@ -143,6 +151,22 @@ thz.fft_spectrum(dataset, n_fft=shared_n_fft)
 
 if config['general']['show_graph']:
     thz.plot_fft(dataset, normalise=False, scale='')
+
+
+# fft_dict = dataset.grab_data('fft')
+# breakpoint()
+# dataset.save_dict(fft_dict, 'cnt_noalign')
+
+# for filename, data_dict in fft_dict.items():
+#     dataX = data_dict['fft_freq']
+#     dataY = data_dict['fft_spectrum']
+#     plt.plot(dataX, np.abs(dataY), label=filename)
+
+# plt.xlabel('Frequency (THz)')
+# plt.ylabel('Amplitude')
+# plt.title('FFT Spectra')
+# plt.legend()
+# plt.show()
 
 # --- transfer function: plain single-bounce ratio H = Y_sample / Y_reference. ---
 # self_reference is OFF (config) so this is the ordinary reference ratio. A misaligned

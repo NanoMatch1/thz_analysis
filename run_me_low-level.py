@@ -1,3 +1,5 @@
+"""Current working implementation of the reflection-mode THz inversion pipeline for samples pressed into the quartz window for internal reflection mode. """
+
 from __future__ import annotations
 
 import pathlib
@@ -58,8 +60,10 @@ def display_crop_regions(dataset):
 
 
 # ── Data paths ──────────────────────────────────────────
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\CNT' # CNT data
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\Si' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\s-pol' # CNT data
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026_06_17_ref_calib\displacement-tests\test\export' # CNT data
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-30_CNT' # CNT data
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\main_alignment_tests\Si' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-23_refl_CNT\export\silicon' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-06-24_refl_testing\main_alignment_tests' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, s-pol. 2.08 mm quartz window thickness.
 
@@ -72,7 +76,7 @@ config: dict = {
     "general": {
         'show_graph': True,
         'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
-        # 'save_database': True,          # save the dataset database after processing
+        'save_database': True,          # save the dataset database after processing
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle
@@ -80,8 +84,10 @@ config: dict = {
         "n_sio2": 1.96,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        "first_reflection": (145, 157.3),  # (start_ps, end_ps) or None for auto
-        "second_reflection": (174, 183),  # (start_ps, end_ps) or None for auto
+        'first_reflection': (146.5, 159.5),  # cnt
+        'second_reflection': (170.4, 186.9),  # cnt
+        # "first_reflection": (145, 157.3),  # silicon
+        # "second_reflection": (174, 183),  # silicon
     },
     "centering": {
         "mode": "crop",  # 'crop' or 'pad'
@@ -91,7 +97,7 @@ config: dict = {
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 'max',    # fixed half-width — SAME window for every pulse
+        "half_width_ps": 4,    # fixed half-width — SAME window for every pulse
     },
     "pad": {
         "extend_factor": 1.0,
@@ -125,7 +131,7 @@ config: dict = {
     "derive": {
         # Background permittivity subtracted to isolate free-carrier conductivity:
         # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum; 11.7 = silicon.
-        "eps_background": 11.7,
+        "eps_background": 1,
     },
     "air_gap": {
         # Route-A contact-gap de-embed (SiO2 | air d | CNT). When enabled, strips the gap
@@ -135,21 +141,22 @@ config: dict = {
         # (~0-5 um); larger d over-strips and pushes n below 1. Pin d with the Si
         # benchmark (known n=3.418) before trusting absolute numbers.
         "enabled": False,
-        "position_um": 10.0,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
-        "width_um": 5.0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
+        "position_um": 1,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
+        "width_um": 0.0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
         "max_boost": 1.0e3,    # clip on 1/W so the suppressed high-f tail cannot explode.
     },
 }
 
 # import acquisition_editor
 # acquisition_editor.process_directory(data_dir)
-# 
+
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
-# dataset.plot_current()
+dataset.plot_current()
 # display_crop_regions(dataset)
 thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
-thz.taper_and_pad_traces(dataset, show_graph=True)
+thz.taper_and_pad_traces(dataset)
+# dataset.plot_current()
 # thz.center_pulse(dataset, show_graph=True)  # center the pulses in the trace (no crop, no pad)
 # TODO: Define half-width from minimum max array length
 # --- wrap each raw trace as a full-trace reflection (both pulses on ONE shared
@@ -157,7 +164,7 @@ thz.taper_and_pad_traces(dataset, show_graph=True)
 
 
 # --- pair sample <-> reference ---
-dataset.group_files(keywords=['type'])
+dataset.group_files(keywords=['type', 'polarization'])
 dataset.grouping.show_matches()
 
 # --- NO time alignment in the shared-axis self-reference path. ---
@@ -209,7 +216,7 @@ thz.fft_spectrum(dataset, segment='second_reflection', n_fft=shared_n_fft)
 thz.fft_spectrum(dataset, segment='first_reflection', n_fft=shared_n_fft)
 
 if config['general']['show_graph']:
-    thz.plot_fft(dataset, normalise=False, scale='')
+    thz.plot_fft(dataset, normalise=True, scale='log')
 
 # --- self-referenced transfer function: H = (Y2/Y1)_sample / (Y2/Y1)_ref. ---
 # The MATH is one pure function, thz_core.self_referenced_transfer (two nested
@@ -286,6 +293,8 @@ thz.invert_nk_reflection(
     n_window=config['geometry']['n_sio2'],
 )
 
+# thz.detrend_transfer_phase(dataset, show_graph=config['general']['show_graph'])
+
 # --- AIR-GAP DE-EMBED (Route A, non-interactive) ---
 # Strip the contact gap (SiO2 | air d | CNT) and re-invert with AIR incidence, so the
 # SAVED n,k,sigma are the gap-corrected values. Removes the inversion-singularity artifact
@@ -293,8 +302,8 @@ thz.invert_nk_reflection(
 # Gap parameters come from config['air_gap'] (dial them with the slider below, then paste
 # here). Window-geometry n,k are preserved as processing['n_window']. Must run AFTER
 # invert_nk_reflection and BEFORE derive_eps_sigma.
-if config['air_gap'].get('enabled', False):
-    thz.deembed_air_gap_reflection(dataset)
+# if config['air_gap'].get('enabled', False):
+#     thz.deembed_air_gap_reflection(dataset)
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)

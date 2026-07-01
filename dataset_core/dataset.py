@@ -352,6 +352,29 @@ class DataSet:
             )
 
         return self
+    
+    def grab_data(self, data_key=None) -> dict:
+        """Returns a data dict of all the files in the dataset, filtered by the type of processed data requested (raw, windowed, fft, etc.). If data_key is None, returns the raw data dict."""
+        
+        key_map = {'fft': ['fft_freq', 'fft_spectrum', 'fft_metrics']}
+
+        if data_key is None:
+            return self.data.current_data_dict()
+        elif data_key in key_map.keys():
+            filtered_data = {}
+            for filename, data_object in self.data.current_data_dict().items():
+                filtered_data[filename] = {k: data_object.processing_dict.get(k, None) for k in key_map[data_key]}
+            return filtered_data
+        else: 
+            raise ValueError(f"Invalid data_key '{data_key}'. Valid options are: {list(key_map.keys())} or None for raw data.")
+        
+    def save_dict(self, data_dict, series_name, save_dir=None):
+        """Save the dataset's data dictionary to a .pkl file."""
+        import pickle
+        save_path = os.path.join(save_dir or self.file_dir, f"{series_name}.dic")
+        with open(save_path, 'wb') as f:
+            pickle.dump(data_dict, f)
+        print(f"Data dictionary saved to {save_path}")
 
     def _build_thzdata_from_raw_array(self, raw_data: np.ndarray, filename: str) -> THzData:
         """Convert compiled raw array [time | acquisitions...] into THzData."""
@@ -436,7 +459,7 @@ class DataSet:
     # crashes downstream (e.g. binary bytes parsed as a timestamp). Returning None
     # makes load_all_data skip the file.
     _NON_DATA_EXTENSIONS = frozenset({
-        '.pkl', '.pickle', '.npy', '.npz', '.png', '.jpg', '.jpeg', '.gif',
+        '.pkl', '.dic', '.pickle', '.npy', '.npz', '.png', '.jpg', '.jpeg', '.gif',
         '.pdf', '.svg', '.db', '.sqlite', '.zip', '.gz', '.json', '.log',
     })
 

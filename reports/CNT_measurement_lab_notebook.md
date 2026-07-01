@@ -264,6 +264,138 @@ Code: `mem_phase_retrieval.py` (+7 tests), `estimate_gap_amplitude_kk`/`reconstr
 in `deembed_air_gap_iterative.py` (+4 tests), `phase_engine='mem'|'hilbert'` selectable. All 123
 tests pass.
 
+### F19 — A time-INVISIBLE gap is enough; the time trace is too coarse a ruler by ~10× *(2026-06-28, Samuel + me)*
+**Status: CURRENT** (reconciles F1/F2/F8 with the time-domain observation; answers "are we even
+sure it's the gap?"). Samuel's challenge: the back-reflection pulses (CNT and Si) show no visible
+delay; he can center peaks to ~25 fs (~5 µm), and the literature says Si needs tens-to-100 µm to
+shift n — so why are we struggling? **Quantified answer (script: apply gap phase to planted Drude
+CNT vs Si, re-invert):**
+- Δn(CNT) from a gap: **0.3 µm (1.4 fs) → −0.07; 1 µm (4.7 fs) → −0.24; 4 µm (18.9 fs) → −0.84**
+  at 0.5 THz. A **4 µm gap is 19 fs — below the 25 fs centering resolution, i.e. INVISIBLE in the
+  time trace — yet wrecks low-f CNT n.** To hold Δn(CNT)<0.05 needs <1.5 fs centering — beyond any
+  pulse-centering method. **The time-domain peak is ~10× too coarse a ruler to certify gap-free
+  contact for a near-mirror sample; the frequency-domain inversion is the sensitive instrument.**
+- Same gap barely moves Si: 4 µm → Δn(Si)=−0.06 at 0.5 THz (~13× less than CNT) — matches the
+  literature "Si needs tens of µm." Pole distance |1+r|: CNT 0.26 (0.5 THz)→0.64 (4 THz) vs Si flat
+  0.35, so CNT is worst-conditioned at LOW f (most metallic) — exactly where Samuel struggles.
+- **Roughness paradox resolved:** the bare-reflection surface and the window-gap are the SAME paper
+  topography in two geometric ROLES. Bare = micro-relief ON the mirror (sub-λ → Debye-Waller≈1 →
+  invisible). Window = the SPACER of a coherent etalon (round-trip phase read directly + conditioning-
+  amplified → catastrophic). THz didn't change sensitivity; the roughness changed jobs.
+- **Confidence (honest):** RIGOROUS = the air|CNT inversion is ill-conditioned, so ANY small phase
+  residual (gap, calibration, reference, alignment) is amplified — a time-invisible perturbation
+  suffices. NOT certain = that a literal air gap is the SOLE/dominant residual. Flags against
+  gap-only: (i) pressing harder barely changed the data [Samuel]; (ii) Si itself isn't perfectly
+  clean (F14 low-f taper = upstream); (iii) two artifact signatures (smooth ∝ω drag = gap-like vs
+  spiky ~1 THz = pole-neighbourhood). **Decisive test:** Si in the IDENTICAL window geometry — clean
+  Si ⇒ setup sound, CNT mess is CNT-conditioning(+gap); messy Si ⇒ upstream. Plus frequency
+  signature (∝ω = gap; fixed spikes = conditioning). Samuel will revisit Si next week with careful
+  alignment; the latest Si set was firmly pressed (visible-light fringes over mm ⇒ sub-µm flatness).
+
+### F20 — First real-data trial of MEM/phase-excess de-embed: pipeline validated by Si, CNT gaps fictitious under poor conditioning *(2026-06-28)*
+**Status: CURRENT.** Ran the new de-embed methods (MEM + Hilbert phase-excess gap estimate,
+amplitude-KK cross-check) on real window self-referenced data — CNT 0/90-deg (2026_06_19) and Si
+(2026-06-23, firmly pressed). Script: `deembed_realdata_mem.py`.
+- **Si CONTROL is mostly reassuring:** naive Si median n = **3.33 @0.5–1 THz (within 3% of 3.42)** →
+  the pipeline, reference, geometry, and self-referencing are FUNDAMENTALLY CORRECT (not a gross
+  upstream error). Si droops to **2.61 @1–2 THz** — a HIGH-f artifact whose ∝ω signature matches a
+  small few-µm gap (F19); Si gap estimates 2–5 µm, engine-consistent, one slightly negative (≈0±5 µm,
+  matches the time-domain). Si |H|>1 in only 18–30% of bins; |C|≈1.00/0.95 (well aligned).
+- **CNT is NOT trustworthy on this set:** naive n<1 (min ≈0.44), **|H|>1 in 76–90% of bins**,
+  |C|≈1.07–1.09 (poorly aligned). The de-embed mechanically lifts n>1 but into UNPHYSICAL territory
+  (n peaks ~11 Hilbert / ~6 MEM near 0.6 THz = pole-neighbourhood blow-up). Gap estimates **Hilbert
+  22 µm vs MEM 31 µm — disagree ~35% and are ~6× larger than the <5 µm the time trace allows** →
+  the phase-slope is absorbing the metal's dispersion + the |H|>1 mess into a FICTITIOUS gap. Confirms
+  F19: under conditioning dominance the de-embed "gap" ≠ physical gap.
+- **Verdict:** methods are READY (validated on synthetic, run on real in one command); the limiter is
+  DATA QUALITY/alignment, exactly as Samuel suspected. **Next diagnostic = get Si flat at 3.42 across
+  the band** (chase the 3.33→2.61 high-f droop: gap ⇒ ∝ω, flattens with firmer press/de-embed; SNR ⇒
+  won't). Only then is CNT worth re-attempting. CNT 90 vs 0 indistinguishable here — both swamped by
+  |H|>1; alignment is the gate. Samuel collecting Si again next week with careful alignment.
+
+### F21 — Dual-polarization (s/p) ellipsometry is a strong route around BOTH problems *(2026-06-29, Samuel's idea + validation)*
+**Status: CURRENT.** Samuel: the spintronic emitter makes polarization a free knob (rotate magnet;
+rotate EO crystal to match). Idea: p-pol lowers reflectivity at the parasitic interface → pinning
+points + reduced conditioning; a polarization series as an alternative to a pressure series.
+**Assessment (numbers from our geometry, validated synthetically — `polarization_ellipsometry_validation.py`):**
+- **p-pol attacks BOTH core problems at once.** (1) Front suppression: the parasitic SiO₂→air front
+  reflection drops |r| 0.44(s)→0.19(p) at our 45°, →**0 at the Brewster external angle ~63°** →
+  removes the gap interference (F8) at its source. (2) Conditioning: the air→CNT back |r| falls
+  ~0.85(s)→~0.55(p) → off the r=−1 mirror (F1/F2). Demo: a 4 µm gap pushes recovered n by median
+  1.26 (s) vs 0.92 (p) at 45°, and **0.16 (p) at Brewster** vs 1.13 (s).
+- **Windowed self-referencing needs NO s/p channel calibration** (Samuel's question): each pol's H
+  self-references against its own front pulse, so the channel response cancels inside H; only the
+  BARE reflection would need channel calibration. Intensity normalises out; noise is just SNR.
+- **The ellipsometric ratio ρ=r_p/r_s** is exact for a single interface (verified to 1e-6) but the
+  window+gap is NOT a single interface → the naive closed form is geometry-biased. **The production
+  method is a joint forward-model fit of a Drude(+anchor) n(ω) AND the gap d to s and p together**;
+  it recovers planted n and d EXACTLY with the gap present (Demo 3).
+- **Honest scope:** on noiseless data with a Drude model, single-pol ALREADY recovers n+d (no
+  clean-data degeneracy). **Dual-pol's real payoff is conditioning/robustness under noise**: at 1%
+  reflection noise, fitted-n error dual s+p 0.004 < p-only 0.009 < s-only 0.013 (Demo 4). So the win
+  is (a) p/Brewster front-suppression + better conditioning, (b) over-determination vs noise/model
+  error — NOT a clean-data degeneracy break.
+- **Polarization vs pressure series:** NOT equivalent — polarization is superior here (easy magnet
+  rotation; doesn't disturb alignment, unlike pressure which drifts hard samples; p-pol actively
+  *suppresses* the gap rather than varying it; s/p ratio is reference-immune). Pressure's only unique
+  power is physically shrinking the gap.
+- **Caveat:** anisotropic (aligned-CNT) buckypaper can s↔p cross-couple → breaks the scalar-ρ picture
+  (clean for isotropic Si); could become a *measurement* of the anisotropy (cf the 0/90° rotations).
+**Recommended first test (current 45°): measure s AND p on Si and CNT** → predictions: p-pol Si shows
+less high-f droop (F20); CNT |H|>1 fraction drops from 76–90%. Then raise incidence toward ~63° to
+null the front. 5 tests, 128 total pass.
+
+### F22 — p-pol inversion + dual-pol joint fit ported to the pipeline *(2026-07-01)*
+**Status: CURRENT** (implements F21). Ported the dual-polarization methods from the exploration into
+core + pipeline, ready for the s/p CNT data being collected:
+- **p-pol reflection inversion in `thz_core.invert.invert_nk_reflection`** (was `NotImplementedError`).
+  Closed-form quadratic in N₂²; the genuine p-pol root AMBIGUITY (two indices reproduce r_p to
+  machine precision — physical vs its "gain twin") is resolved by a PASSIVITY penalty (pick Im(N₂)<0,
+  k>0), residual breaking ties for near-lossless. Round-trips to 1e-15 across 0/45/63°/window.
+  `_resolve_reflection_geometry` made polarisation-aware (window front reference uses fresnel_p for p).
+  **`run_me_low-level.py` now handles a p-pol dataset by just setting `config['geometry']['polarization']='p'`** — no other change.
+- **Dual-pol joint fit** = new `thz_core.reflection_gap`: pluggable material model (`drude_index`
+  default), forward model (`single_gap_reflection`, `gap_round_trip_phase`), and
+  `fit_reflection_gap_dual_pol` — fits ONE n(ω) + one shared gap d to s AND p at once. Recovers
+  planted n+d to 1e-15; noise test confirms dual < s-only error. Gap fit freely OR `fixed_gap_um`
+  (Si-anchor). Adapter wrapper `thz.fit_dual_pol_reflection(ds_s, ds_p, config)` pairs samples by
+  normalised name and pulls the stored `reflection_r`/`r_reference`. Driver `run_me_dual_pol.py`
+  processes both dirs and joins. NOTE the gap angle = the EXTERNAL angle (gap is air → Snell returns
+  the beam to it).
+- Low-level API (Samuel's request): `core.invert_nk_reflection(..., polarization='p')` and
+  `core.fit_reflection_gap_dual_pol(...)` are DataSet-free and unit-tested (12 new tests, 140 total).
+**Reminder of the F21 predictions to check on the new data:** p-pol Si droops less than s (gap
+suppressed); CNT |H|>1 fraction drops from 76–90% (s). Set the two dirs in `run_me_dual_pol.py`.
+
+### F23 — First real dual-pol run (CNT-21): p-pol conditioning confirmed (~6×), but alignment still the limiter *(2026-07-01)*
+**Status: CURRENT** (first real-data test of F22 code; anisotropy dataset). Ran CNT-21/polarization
+(s-pol/ + p-pol/ folders, full {S,P}×{fiber∥,⊥} matrix) through the ported p-pol inversion + dual-pol
+joint fit. Script: `explorations/air_gap_cnt_reflection/process_cnt21_polarization.py`.
+- **Anisotropy pairing:** fiber 0∥S, 90∥P → 0-0=S∥→n_∥, 0-90=S⊥→n_⊥, 90-0=P⊥→n_⊥, 90-90=P∥→n_∥.
+  Valid joint-fit pairs (same axis seen by s AND p): **n_∥ = (0-0 ⊕ 90-90)**, **n_⊥ = (0-90 ⊕ 90-0)**.
+  Each folder has co-pol + cross-pol references (SS/SP/PS/PP = source-detect); paired each sample to
+  the CO-POL reference (SS for S, PP for P).
+- **p-pol conditioning CONFIRMED (~6×), the F21 core physics.** Pole distance |1+r| (distance to the
+  r=-1 mirror, the TRUE conditioning metric): **s-pol 0.30–0.40 vs p-pol 1.81–1.90.** p-pol moves the
+  reflection far off the mirror pole — largely via the SIGN of the p-pol front reference (r_front:
+  s=+0.44, p=-0.195). This is the real, physical p-pol win.
+- **|H|>1 did NOT drop with p-pol (85–98% both)** — but that was the WRONG metric: |H|>1 is a
+  common-mode ALIGNMENT/coupling artifact (sample vs reference front-spot), which p-pol is not expected
+  to fix. |C| medians 0.69–0.93 (structured; 0-90 flagged) → **alignment is still the limiter (F20).**
+- **Joint Drude+gap fit RUNS on real data** but **rails at parameter bounds** (plasma=20 THz cap both
+  axes; eps_inf=12 cap for ⊥) with **poor residual RMS ~0.16** (~20–30% of |r|) → magnitudes NOT
+  trustworthy (single Drude fighting alignment artifacts + an ill-conditioned s-channel dragging the
+  joint fit). **BUT the anisotropy has the physically-correct SIGN**: n_∥,k_∥ > n_⊥,k_⊥ (more metallic
+  along the fibers) — encouraging qualitative result.
+- **Code hardening this run:** core `fit_reflection_gap_dual_pol` now drops non-finite + DC (f≤0) bins
+  (Drude diverges at DC); windowed half-width reduced to 2 ps (first pulse sits 2.2 ps from trace start
+  → 4 ps clipped Y1 and corrupted the self-reference).
+- **Takeaways:** (1) the p-pol + dual-pol machinery works end-to-end on real data; (2) p-pol delivers
+  its conditioning promise (~6× off the pole); (3) alignment (|C|, |H|>1) remains the gate, as for Si
+  (F20); (4) next: better alignment + Brewster incidence (~63°) to compound the p-pol benefit, and
+  consider p-weighted or p-only inversion since the s-channel is far worse conditioned; widen plasma
+  bound only once alignment is fixed. Si benchmark (tomorrow) still the decisive setup check.
+
 ---
 
 ## Diagnostics & tools built for this work

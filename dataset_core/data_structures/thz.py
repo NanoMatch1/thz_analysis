@@ -670,3 +670,8 @@ class THzDataReflection:
             f"   -> First-reflection scans:  {len(self.first_reflection.data_list)}\n"
             f"   -> Data type: {self.data_type}\n"
         )
+    
+    def plot_current(self, **kwargs) -> None:
+        """Plot the both first and second reflection segments on separate axes."""
+        self.first_reflection.plot_current(**kwargs)
+        self.second_reflection.plot_current(**kwargs)
