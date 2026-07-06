@@ -154,6 +154,11 @@ config: dict = {
         # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum; 11.7 = silicon.
         "eps_background": 11.6
     },
+    "drude": {
+        # Headless joint sigma_1+sigma_2 Drude fit (see the stage after derive_eps_sigma).
+        "enabled": False,
+        "fit_band_thz": (0.35, 1.6),
+    },
     "air_gap": {
         # Route-A contact-gap de-embed (SiO2 | air d | CNT). When enabled, strips the gap
         # and re-inverts with AIR incidence so the saved n,k,sigma are gap-corrected.
@@ -354,6 +359,13 @@ if config['air_gap'].get('enabled', False):
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+
+# --- DRUDE FIT (headless; opt-in) — one joint fit to sigma_1 AND sigma_2. ---
+# Geometry-agnostic KK-consistency check on the window-reflection sigma. Prints
+# sigma_DC / tau / plasma freq / joint R^2 per sample.
+from dataset_core.adapters import conductivity_fitting as conductivity
+if config.get('drude', {}).get('enabled', False):
+    conductivity.fit_conductivity(dataset, fit_band_thz=config['drude'].get('fit_band_thz'))
 
 # --- OPTIONAL: collapse every frequency-domain product onto the true-resolution grid ---
 # No-op unless config['resolution']['limit_to_instrument_resolution'] is True. When on,

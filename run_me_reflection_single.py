@@ -58,7 +58,7 @@ config: dict = {
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 4.5,    # fixed half-width — SAME window for every pulse, no shift
+        "half_width_ps": 4,    # fixed half-width — SAME window for every pulse, no shift
     },
     "fft": {
         "norm": "backward",
@@ -79,7 +79,7 @@ config: dict = {
         "min_contiguous_bins": 3,
     },
     "phase_kk": {
-        "enabled": False,  # Kramers-Kronig phase correction (arXiv:2412.18662)
+        "enabled": True,  # Kramers-Kronig phase correction (arXiv:2412.18662)
         "f_end_thz": None,       # KK truncation freq; None -> top of the trusted SNR band
         "fit_band_thz": None,    # None -> (0.15, 0.85) * f_end
         "use_snr_mask": True,
@@ -95,7 +95,12 @@ config: dict = {
     },
     "derive": {
         # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum.
-        "eps_background": 11,
+        "eps_background": 11.7,
+    },
+    "drude": {
+        # Headless joint sigma_1+sigma_2 Drude fit (see the stage after derive_eps_sigma).
+        "enabled": False,
+        "fit_band_thz": (0.35, 1.6),
     },
 }
 
@@ -190,13 +195,13 @@ thz.transfer_function(dataset, ref_type='reference')
 if config['transfer'].get('correct_linear_phase', False):
     thz.detrend_transfer_phase(dataset, show_graph=config['general']['show_graph'])
 
-# thz.phase_correct_kk(dataset, show_graph=config['general']['show_graph'])
+if config['phase_kk'].get('enabled', False):
+    thz.phase_correct_kk(dataset, show_graph=config['general']['show_graph'])
 
 # thz.compute_instrument_resolution(dataset, config)
 # thz.compute_transfer_uncertainty(dataset)
 thz.compute_instrument_resolution(dataset, config)
 thz.compute_transfer_uncertainty(dataset)
-thz.apply_instrument_resolution(dataset, config)
 
 # --- reflection-mode inversion: H -> n, k for a single AIR -> sample bounce,
 #     referenced to a gold mirror (geometry='gold': n_incident = 1, r_reference = -1). ---
@@ -210,11 +215,22 @@ thz.invert_nk_reflection(
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+
+# --- DRUDE FIT (headless; opt-in) — one joint fit to sigma_1 AND sigma_2. ---
+# Geometry-agnostic: works on the reflection sigma exactly as in transmission. Prints
+# sigma_DC / tau / plasma freq / joint R^2. (The KK-consistent GEOMETRY optimiser for
+# reflection would inject an air-gap re-inversion as apply_value; conductivity_fitting
+# stays pipeline-agnostic via that callback.)
+from dataset_core.adapters import conductivity_fitting as conductivity
+if config.get('drude', {}).get('enabled', False):
+    conductivity.fit_conductivity(dataset, fit_band_thz=config['drude'].get('fit_band_thz'))
+
 # --- OPTIONAL: collapse every frequency-domain product onto the true-resolution grid ---
 # No-op unless config['resolution']['limit_to_instrument_resolution'] is True. When on,
 # decimates fft/H/mask/n/k/eps/sigma to one point per resolution element so the SAVED data
 # reflects the measured resolution (not zero-pad interpolation). Run last, after all
 # frequency-domain products exist, so they all land on the same decimated grid.
+thz.apply_instrument_resolution(dataset, config)
 
 dataset.save_database()
 

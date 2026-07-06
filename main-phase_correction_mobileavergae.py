@@ -24,8 +24,9 @@ path = Path(r"C:\Users\Samuel\Data\Denis\CNT-6")
 path = Path(r"C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export")
 # sample = path / "gold2.dat"
 # reference = path / "Si2-90.dat"
-sample = path / "reference_gold_A-100_S-pol.dat"
-reference = path / "sample_silicon-1_A-100_S-pol.dat"
+reference = path / "reference_gold_A-100_S-pol.dat"
+sample = path / "sample_silicon-1_A-100_S-pol.dat"
+# sample = path / "sample_silicon-2-N-type_A-100_S-pol.dat"
 
 # ============================================================
 # TIPO DE REFERENCIA
