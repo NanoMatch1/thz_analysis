@@ -30,12 +30,13 @@ data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
 data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export'
 
 
 # ── Configuration ───────────────────────────────────────
 config: dict = {
     "general": {
-        'show_graph': False,
+        'show_graph': True,
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle (air -> sample)
@@ -52,12 +53,12 @@ config: dict = {
         # whatever still corrupts H afterwards is the part a delay-correction can't fix.
         "recalibrate": False,        # True to align all peaks to a common T0
         "target_t0_ps": None,        # None = reference peak; else a fixed time
-        "subsample": True,           # precise interpolation shift vs integer roll
+        "subsample": False,           # precise interpolation shift vs integer roll
     },
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 4.0,    # fixed half-width — SAME window for every pulse, no shift
+        "half_width_ps": 4.5,    # fixed half-width — SAME window for every pulse, no shift
     },
     "fft": {
         "norm": "backward",
@@ -70,12 +71,19 @@ config: dict = {
         "min_ref_amp_rel": 1e-3,
         "regularization_eps": 1e-30,
         "unwrap_phase": True,
-        "correct_linear_phase": True,  # remove the linear phase from H (misalignment delay)
+        "correct_linear_phase": False,  # remove the linear phase from H (misalignment delay)
     },
     "mask": {
         "snr_thresh_db": 10,
         "tail_fraction": 0.25,
         "min_contiguous_bins": 3,
+    },
+    "phase_kk": {
+        "enabled": False,  # Kramers-Kronig phase correction (arXiv:2412.18662)
+        "f_end_thz": None,       # KK truncation freq; None -> top of the trusted SNR band
+        "fit_band_thz": None,    # None -> (0.15, 0.85) * f_end
+        "use_snr_mask": True,
+        # "theta_deg": None,  # incidence angle for the REPORTED shift l only; None -> config['geometry']['theta_external_deg']
     },
     "invert": {
         # Near-mirror singularity floor. The r->n inversion blows up at r=-1 (perfect
@@ -182,6 +190,14 @@ thz.transfer_function(dataset, ref_type='reference')
 if config['transfer'].get('correct_linear_phase', False):
     thz.detrend_transfer_phase(dataset, show_graph=config['general']['show_graph'])
 
+# thz.phase_correct_kk(dataset, show_graph=config['general']['show_graph'])
+
+# thz.compute_instrument_resolution(dataset, config)
+# thz.compute_transfer_uncertainty(dataset)
+thz.compute_instrument_resolution(dataset, config)
+thz.compute_transfer_uncertainty(dataset)
+thz.apply_instrument_resolution(dataset, config)
+
 # --- reflection-mode inversion: H -> n, k for a single AIR -> sample bounce,
 #     referenced to a gold mirror (geometry='gold': n_incident = 1, r_reference = -1). ---
 thz.invert_nk_reflection(
@@ -194,6 +210,11 @@ thz.invert_nk_reflection(
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+# --- OPTIONAL: collapse every frequency-domain product onto the true-resolution grid ---
+# No-op unless config['resolution']['limit_to_instrument_resolution'] is True. When on,
+# decimates fft/H/mask/n/k/eps/sigma to one point per resolution element so the SAVED data
+# reflects the measured resolution (not zero-pad interpolation). Run last, after all
+# frequency-domain products exist, so they all land on the same decimated grid.
 
 dataset.save_database()
 

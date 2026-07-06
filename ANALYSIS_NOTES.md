@@ -1164,3 +1164,124 @@ measure the substrate independently; what material/expected n is it? (3) The leg
 value as an independent check is limited to its (correct) formula — its preprocessing
 needs replacing to be usable on cuvette data. (4) Sample step can use a smooth/constant
 n_sub with no measurable effect. Drude-Smith / conductivity (downstream) out of scope.
+
+---
+
+## Presentation: true resolution + frequency-domain error (2026-07-03)
+
+**Resolution vs bin spacing (the correction).** A large `n_fft` makes the FFT *bin spacing*
+`df_fft = 1/(n_fft·dt)` far finer than the physical *resolution*. Zero-padding is sinc
+interpolation — no new information. The true resolution element is `df_res ≈ 1/T_window`.
+For `H = W_sample/W_reference` (each `W = Y₂/Y₁`) the resolution is set by the SHORTER of
+the two reflection windows; the inter-pulse gap cancels in the ratio and buys no resolution.
+`compute_instrument_resolution` records `T_res = min(first_region_len, second_region_len)`,
+`df_res`, and `k = round(df_res/df_fft)`; plots mark one point per `k` bins, and the opt-in
+`apply_instrument_resolution` decimates the stored arrays. CNT-21: `df_res ≈ 0.155 THz`,
+`k = 16`. (Hann apodization broadens the element to ~2·df_res — set `broadening_factor=2`
+for the conservative width.)
+
+**Faithful frequency-domain error (answering "how do we propagate error into frequency,
+given on-peak noise ≫ the floor?").** The two domains behave differently, and that resolves
+the dilemma: white additive TIME-domain noise maps (Parseval) to a FLAT spectral floor, so
+the off-peak spectral floor *is* the additive measurement noise imaged into frequency. In
+frequency there is therefore ONE unambiguous σ per spectrum (no time-domain "max/σ_at_max
+vs max/floor" choice). `trusted_band_mask` already measures it as amplitude SNR
+`snr_db = 20·log10(|Y|/floor)`, giving relative error `1/SNR_lin` per spectrum.
+`compute_transfer_uncertainty` combines sample and reference in quadrature:
+`(σ_|H|/|H|)² = 10^(−samp_snr_db/10) + 10^(−ref_snr_db/10)`, `σ_phase = √(that)` rad. The
+bars grow exactly where a spectrum is weak — self-consistent with the SNR mask.
+
+*Limitation (Samuel's on-peak worry is legitimate):* the floor captures only ADDITIVE noise.
+On-peak elevated scatter (timing jitter, amplitude drift) is signal-correlated and NOT in
+the floor. The faithful upgrade is to propagate the measured per-timepoint repeat scatter
+`σ_t(t)` (higher at the peak) through the windowed DFT: `σ_Y(f)² ≈ ½·Σ_t w(t)²·σ_t(t)²`.
+That needs `stderr(t)` plumbed through baseline + window (currently dropped) — documented
+TODO. n/k/ε/σ error propagation is likewise a follow-up (only `|H|`/phase have bars now).
+
+**Plot style.** One helper `_plot_with_snr_mask` feeds every frequency plot: faint guide
+line (unbiased) + solid markers on the resolution grid (they carry the judgement) + hollow
+faded markers and a light grey `axvspan` over SNR-excluded bands (visible, not hidden) +
+optional error bars. Choices were Samuel's: decimate (not bin-average), faded markers +
+shaded band, noise-floor error bars.
+
+---
+
+## Kramers-Kronig phase correction (analytical fitting method) (2026-07-03)
+
+Packaged the misplacement phase correction of Jatkar, Yeh, Pancaldi & Bonetti (*Robust
+phase correction techniques for THz-TDS in reflection*, arXiv:2412.18662) into the
+pipeline as `phase_correct_kk` (opt-in, between `transfer_function` and
+`invert_nk_reflection`).
+
+**Method.** In reflection geometry an unknown sample-vs-reference shift `l` adds a purely
+linear phase `phi_m = phi_i + (omega/c)(2l/cos theta)` (paper Eq. 2). The KK relation on
+`ln r = ln|r| - i*phi` ties the correct phase to the reliably measured `|r|`. Define
+`Delta_m(w) = (2/pi)PV∫_0^wend Omega*phi_m/(Omega^2 - w^2) dOmega - ln|r_m|`; the
+misplacement makes it `≈ (2l/(pi c cos theta))·w·ln((wend-w)/(wend+w)) + const` (Eq. 16),
+so a LINEAR fit of `Delta_m` vs that analytical basis recovers `l`. Corrected phase
+`phi_i = phi_m - (omega/c)(2l/cos theta)`.
+
+**Polarization: independent.** The correction acts on `|r|` and `phi` only; the
+misplacement term has no polarization dependence and the applied phase ramp is even
+independent of `theta` (theta only rescales the reported `l`). Polarization enters ONLY the
+downstream `r->n` inversion — s-pol Eq. 20a vs p-pol Eq. 20b — which `invert_nk_reflection`
+already implements (`polarization='s'|'p'`). The paper validates s AND p at 45°. Verified
+end-to-end on real p-pol CNT data through the p-pol inversion.
+*Caveat:* KK assumes minimum phase (no zeros of `r` in the upper half-plane). Strained for
+p-pol near the (pseudo-)Brewster dip (rapid ~pi swing) and for `r<0` (angle≈pi constant
+offset = the paper's `phi_0` term, which the caller must handle). Fine for `|r|≈1`
+rotating-phase samples (metals, conductive CNT).
+
+**The core (`thz_core.kramers_kronig`) already existed but had TWO bugs — both fixed:**
+1. `estimate_misplacement` fit `Delta_m` with a raw `lstsq` on `[basis, ones]`, where the
+   basis column is `omega*ln(...) ~ 1e13` vs a ones column of 1 — catastrophically
+   ill-conditioned; `rcond=None` dropped the intercept's singular value and returned a
+   SIGN-FLIPPED, ~10-25%-wrong slope. Fixed by `np.polyfit` (scales the columns).
+2. `correct_reflection_phase` ADDED the misplacement phase instead of subtracting it,
+   DOUBLING the error rather than removing it. Fixed the sign.
+   The old `thz_core/tests/test_kramers_kronig.py` had ENCODED both bugs as "known
+   limitations" (`assert l_est < 0`; "recovers to within 10-25%"); rewritten to assert the
+   correct behaviour (difference method cancels the finite-band baseline bias).
+
+**Regimes / limits.** Accuracy is set by BANDWIDTH (`f_end` must sit above spectral
+features), not window length. The ABSOLUTE recovered `l` carries a finite-band bias (paper
+Eq. 13, the intrinsic-phase tail above `f_end`); the DIFFERENCE of two estimates cancels it.
+Large misplacements (tens of um → hundreds of fs) wrap the phase many times and degrade the
+unwrap. On real p-pol CNT it recovers a consistent ~40 um (~390 fs) offset across repeats.
+Tests: `tests/test_phase_correct_kk.py` (4/4) + rewritten `thz_core` KK tests (3/3).
+
+---
+
+## Phase-only self-referencing (`self_phase`) + the align_to_reference bug (2026-07-03)
+
+**New `config['transfer']['self_phase']` mode.** Between plain and full self-reference:
+
+    self_reference : H = (Y2_s/Y1_s)/(Y2_r/Y1_r)      front pulse for TIMING + amplitude
+    self_phase     : H = (Y2_s/Y2_r) · (C/|C|), C=Y1_r/Y1_s   front pulse for TIMING only
+    plain          : H = Y2_s/Y2_r                    (needs align_to_reference for timing)
+
+Rationale: on the shared axis a rigid acquisition timing offset Δt multiplies BOTH front
+and back sample spectra by `exp(-2πifΔt)`. The plain back ratio carries `exp(-2πifΔt)`
+(spurious linear phase → wrong n); the unit-magnitude front correction `C/|C|` carries
+`exp(+2πifΔt)`, so the product CANCELS the offset — WITHOUT importing the front-pulse
+amplitude `|C|` that full self-referencing folds in. So the first pulse is used purely as a
+timing (phase) reference; normalisation stays on the back reference. It is a structural,
+frequency-domain replacement for time-domain `align_to_reference` (no cross-correlation, no
+integer/sub-sample split, immune to the Audit-1 leak).
+
+**align_to_reference is genuinely buggy.** On real Silicon (known n≈3.4), self-referencing
+and self_phase both recover n≈3.40/3.41, but the plain-ratio + `align_to_reference` path
+gives **n≈2.30** — a real error in the time-domain alignment path (NOT the air gap, since
+self-ref on the same data is correct). So for the `self_reference=False` route, prefer
+`self_phase`; `align_to_reference` needs a separate fix if still wanted for the segmented
+path (it also feeds the sub-sample spectral ramp). Verified: self_ref 3.402 ≈ self_phase
+3.410 ≈ truth on Si s-pol.
+
+**Validation.** Synthetic (test_window_selfref_workflow): self_phase REMOVES a planted
+timing delay (like self_reference) but does NOT remove a zero-phase amplitude drift (which
+self_reference does) — confirming it is phase-only. Plus the Si real-data check above.
+
+**phase_correct_kk now documented/validated on plain THzData** (single-bounce reflection),
+not just THzDataReflection — it only touches processing_dict keys. Transmission caveat:
+its linear phase is the sample propagation delay (signal), so KK misplacement removal is
+inappropriate there.

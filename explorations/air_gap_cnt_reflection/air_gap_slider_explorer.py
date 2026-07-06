@@ -121,10 +121,15 @@ def deembed_reflection(
     return x * phase_strip * magnitude_boost
 
 
-def invert_air_incidence(frequency_hz, reflection_back, mask, gap_angle_rad):
-    """Invert r_back = r_{air->CNT} with air incidence (n=1) at the in-gap angle -> n, k."""
+def invert_air_incidence(frequency_hz, reflection_back, mask, gap_angle_rad, polarization="s"):
+    """Invert r_back = r_{air->CNT} with air incidence (n=1) at the in-gap angle -> n, k.
+
+    ``polarization`` must match how the data was measured ('s' or 'p'); passing 's' for a p-pol
+    measurement re-inverts with the wrong Fresnel branch and collapses n onto the grazing floor.
+    """
     n, k, _ = core.invert_nk_reflection(
         frequency_hz, reflection_back, mask, theta_rad=gap_angle_rad, n_incident=1.0,
+        polarization=polarization,
     )
     return n, k
 
@@ -150,7 +155,10 @@ def compute_curves(sample, gap_position_m, roughness_sigma_m, gap_angle_rad, eps
         sample["r_meas"], sample["r_front"], sample["frequency_hz"],
         gap_position_m, roughness_sigma_m, gap_angle_rad,
     )
-    n, k = invert_air_incidence(sample["frequency_hz"], r_back, sample["mask"], gap_angle_rad)
+    n, k = invert_air_incidence(
+        sample["frequency_hz"], r_back, sample["mask"], gap_angle_rad,
+        polarization=sample.get("polarization", "s"),
+    )
     sigma = conductivity_from_nk(sample["frequency_hz"], n, k, eps_background)
     return dict(n=n, k=k, sigma=sigma)
 
@@ -184,6 +192,12 @@ def samples_from_dataset(dataset) -> list[dict]:
     Requires each non-reference sample to carry ``reflection_r``, ``r_reference``, ``n``,
     ``k`` (written by ``invert_nk_reflection``) plus ``fft_freq`` and ``transfer_mask``.
     """
+    # Polarisation the data was measured in (single source of truth = the dataset config); the
+    # air-incidence re-inversion must use the same 's'/'p' branch as the window inversion did,
+    # otherwise a p-pol measurement is re-inverted with the s-pol formula and n collapses.
+    dataset_config = getattr(dataset, "config", None) or {}
+    polarization = str(dataset_config.get("geometry", {}).get("polarization", "s")).lower()
+
     samples = []
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -206,6 +220,7 @@ def samples_from_dataset(dataset) -> list[dict]:
             r_front=complex(processing["r_reference"]),
             n_naive=np.asarray(n_naive, dtype=float),
             k_naive=np.asarray(k_naive, dtype=float),
+            polarization=polarization,
         ))
     if not samples:
         raise RuntimeError(
@@ -224,6 +239,11 @@ def load_measured_samples(eps_infinity: float = 1) -> list[dict]:
     from compare_reflection_pathways import run_shared_axis, PIPELINE_CONFIG
 
     dataset = run_shared_axis(PIPELINE_CONFIG, eps_infinity=eps_infinity)
+    # Polarisation the data was measured in (single source of truth = the dataset config); the
+    # air-incidence re-inversion must use the same 's'/'p' branch as the window inversion did.
+    dataset_config = getattr(dataset, "config", None) or {}
+    polarization = str(dataset_config.get("geometry", {}).get("polarization", "s")).lower()
+
     samples = []
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
@@ -239,6 +259,7 @@ def load_measured_samples(eps_infinity: float = 1) -> list[dict]:
             r_front=complex(processing["r_reference"]),
             n_naive=np.asarray(processing["n"], dtype=float),
             k_naive=np.asarray(processing["k"], dtype=float),
+            polarization=polarization,
         ))
     if not samples:
         raise RuntimeError("No non-reference samples with a reflection coefficient were found.")

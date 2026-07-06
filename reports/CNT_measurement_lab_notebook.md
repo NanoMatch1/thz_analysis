@@ -16,28 +16,35 @@ finding was wrong or incomplete, we mark it and point to the entry that supersed
 
 ---
 
-## Working synthesis  *(last updated 2026-06-26)*
+## Working synthesis  *(last updated 2026-07-02)*
 
 These samples are hard to measure for several compounding reasons:
 
 1. **Bare air|CNT reflection is poorly conditioned.** CNT is a free-carrier (Drude) conductor →
    highly reflective → its reflection sits near `r = −1`, where the `r → n` inversion is singular.
    Low frequency is worst (a conductor is *most* reflective at DC → least contrast → least info). [F1, F2]
-2. **Alignment is near-impossible on bare CNT.** We can't align the paper with the visible
-   generation beam (place-it-flat-and-hope). The paper's non-flatness is **large-scale undulation**,
-   which acts as a **wavefront tilt** → beam steering → a phase/coupling distortion, *not* an
-   intensity loss. [F3, F4, F5, F6]
-3. **The SiO₂ (or Si) window geometry fixes the conditioning** by coupling through a high-index
+2. **The SiO₂ (or Si) window geometry fixes the conditioning** by coupling through a high-index
    medium (ATR/immersion: r moves off the −1 pole, low-frequency reopens). Si > SiO₂ > air. [F7]
-4. **…but the window geometry reintroduces the air gap**, a fragile opposite-sign two-beam
-   interference that drags `n` below 1 and *also* throws away the conditioning benefit unless the
-   contact is gap-free. A robust de-embed is still in progress. [F8, F9, F11]
-5. **The pipeline itself is validated** (recovers a known n to ±0.001 on public data); the difficulty
-   is the sample physics and geometry, not the analysis code. [F12]
+   p-pol adds ~6× more pole distance on top [F21, F23].
+3. **…but the window geometry reintroduces the air gap** [F8, F9]. On CNT-21 the mean gap is now
+   *measured*: ~5.3 µm raw phase-excess, ~1–3 µm after the Si-anchor systematic correction —
+   good contact, right at the F19 sensitivity threshold. **The de-embed mathematics is done and
+   VALIDATED on both Si controls** (s and p) [F26]; gaps are per-mount [F27].
+4. **The instrument, alignment and per-orientation referencing are at the ~0.5–2% level** —
+   realign repeatability 0.6% in |H|, reference slot-to-slot 2%. The old "alignment is the
+   limiter" reading (F20/F23) is overturned; the |H|>1 alarm was misread for window geometry
+   (physically expected there) [F24, F25, F28].
+5. **The remaining wall is a smooth ~10% mount-coupling systematic** (pressed paper deforms the
+   coupling; |C| 0.85 vs Si's ~1.0) **degenerate with material lineshape, plus air-incidence
+   conditioning behind any residual gap.** No further de-embed algorithm can separate these from
+   a single mount — the limit is sample presentation, not analysis. [F28]
+6. **The pipeline itself is validated** (±0.001 on public transmission data [F12]; Si at 3.418 in
+   both pols in this exact reflection geometry [F25, F26]).
 
-**Path forward (working plan):** a flat **high-resistivity Si** substrate, measuring reflection
-*through* the Si onto a CNT pressed/deposited directly on it — aiming to get alignment + conditioning
-+ gap-free contact at once, with a simultaneous alignment reference to the flat plane. [F13]
+**Path forward (unchanged, now evidence-backed):** CNT deposited/pressed on flat **HR-Si**,
+measured through the Si [F13, F16] — rigid mount keeps the coupling stable (the Si controls prove
+it), deposited contact kills the gap, Si incidence maximises conditioning. Interim: p-pol
+window-frame σ₁ over 0.9–2.2 THz with ±15% systematic error bars [F28].
 
 ---
 
@@ -293,7 +300,8 @@ CNT vs Si, re-invert):**
   alignment; the latest Si set was firmly pressed (visible-light fringes over mm ⇒ sub-µm flatness).
 
 ### F20 — First real-data trial of MEM/phase-excess de-embed: pipeline validated by Si, CNT gaps fictitious under poor conditioning *(2026-06-28)*
-**Status: CURRENT.** Ran the new de-embed methods (MEM + Hilbert phase-excess gap estimate,
+**Status: REVISED → F28** (the |H|>1-based "alignment is the limiter" reading is overturned for
+window geometry — |H|>1 is expected physics there; the Si findings stand). Ran the new de-embed methods (MEM + Hilbert phase-excess gap estimate,
 amplitude-KK cross-check) on real window self-referenced data — CNT 0/90-deg (2026_06_19) and Si
 (2026-06-23, firmly pressed). Script: `deembed_realdata_mem.py`.
 - **Si CONTROL is mostly reassuring:** naive Si median n = **3.33 @0.5–1 THz (within 3% of 3.42)** →
@@ -368,7 +376,10 @@ core + pipeline, ready for the s/p CNT data being collected:
 suppressed); CNT |H|>1 fraction drops from 76–90% (s). Set the two dirs in `run_me_dual_pol.py`.
 
 ### F23 — First real dual-pol run (CNT-21): p-pol conditioning confirmed (~6×), but alignment still the limiter *(2026-07-01)*
-**Status: CURRENT** (first real-data test of F22 code; anisotropy dataset). Ran CNT-21/polarization
+**Status: REVISED → F24/F27/F28** (reference pairing was wrong — the second label is sample
+orientation, not detection pol [F24]; |H|>1 and |C| were misread as alignment damage [F28]; the
+joint-fit railing persists even with correct pairing because the gap is per-mount [F27]. The
+p-pol conditioning result stands). Ran CNT-21/polarization
 (s-pol/ + p-pol/ folders, full {S,P}×{fiber∥,⊥} matrix) through the ported p-pol inversion + dual-pol
 joint fit. Script: `explorations/air_gap_cnt_reflection/process_cnt21_polarization.py`.
 - **Anisotropy pairing:** fiber 0∥S, 90∥P → 0-0=S∥→n_∥, 0-90=S⊥→n_⊥, 90-0=P⊥→n_⊥, 90-90=P∥→n_∥.
@@ -395,6 +406,155 @@ joint fit. Script: `explorations/air_gap_cnt_reflection/process_cnt21_polarizati
   (F20); (4) next: better alignment + Brewster incidence (~63°) to compound the p-pol benefit, and
   consider p-weighted or p-only inversion since the s-channel is far worse conditioned; widen plasma
   bound only once alignment is fixed. Si benchmark (tomorrow) still the decisive setup check.
+
+### F24 — Naming convention corrected: the second label is SAMPLE ORIENTATION; one reference per channel *(2026-07-02, Samuel)*
+**Status: CURRENT** (corrects the pairing used in F23). Samuel: in `X-Y`, X = THz polarization
+w.r.t. the plane of reflection (0=S, 90=P) and **Y = sample/mount orientation** (0 = fibers
+vertical, 90 = rotated) — NOT detection polarization (the detection crystal + gate rotate WITH
+the THz pol, so their shared frame is constant; pol is defined against the reflection plane).
+The SiO₂ window faces are **not parallel**, so rotating the mount precesses the front reflection
+around the frequency-anisotropic EO detection cone → **each sample must pair with the reference
+recorded at its own pol + orientation slot** (`sample_X-Y ↔ reference_X-Y`; the SS/SP/PS/PP tags
+are pol+slot). F23 paired both S samples to SS and both P samples to PP — **mispaired for
+0-90 and 90-0**. Measured cost: 0-90 |C| median 0.686 (mispaired) → 0.968 (correct); 90-0 nearly
+insensitive (0.860 → 0.850, the PS/PP references are similar). Channel-paired processing:
+`explorations/air_gap_cnt_reflection/process_cnt21_channels.py` (each pair as its own
+mini-dataset; per-channel `.npz` in `cnt21_channel_results/`).
+
+### F25 — Si-p control: a sparse (two-window) time axis silently collapsed the inter-pulse delay; after repair, the p-pol inversion is VALIDATED on real data *(2026-07-02)*
+**Status: CURRENT.** The new FZ-Si p-pol control initially inverted to nonsense (n_med 0.93,
+|H| spiraling +237 rad across the band = a spurious **+17.26 ps** linear phase, with |H| flat
+and CORRECT at 1.271 vs Fresnel 1.273). Root cause: the acquisition recorded **two time windows
+(153.00–159.65 + 177.00–184.45 ps) and the .acc omits the 17.35 ps between them**; the pipeline
+assumes uniform dt, so the FFT collapsed the inter-pulse delay 24.85 → 7.56 ps. Zero-filling the
+unrecorded gap onto the uniform grid (`repair_sparse_time_axis`) fixes it exactly.
+- **After repair: Si-p n_med = 3.38 (target 3.418), k ≈ 0.2** → the F22 p-pol closed-form
+  inversion + PS-reference pairing + geometry are validated end-to-end on real data. Si-s-old
+  gives n_med = 3.42 (s path re-validated on this window too).
+- **⚠ pipeline gap: `build_full_trace_reflection` should ASSERT dt uniformity** — this failure
+  was silent and produced plausible-looking garbage. (Recommended guard; not yet implemented.)
+- **p-pol low-frequency artifact identified:** every p channel shows n → 0.7074 = n₁·sinθ (the
+  GRAZING-limit root) below ~0.7–0.9 THz — the p-pol root-picker collapses to the grazing root
+  where the phase is corrupted (gap + noise). It is an inversion artifact with a recognisable
+  signature (n pinned at exactly n₁ sinθ₁), not material. **[FIXED in F29 — was a per-bin
+  passivity picker choosing the wrong branch; now a global branch vote.]**
+
+### F26 — De-embed chain validated on BOTH Si controls; the p-pol closed form is fragile to small gap-phase errors *(2026-07-02)*
+**Status: CURRENT** (advances F18/F20; the F20 "Si next week" test is done and passed).
+Script: `deembed_si_controls.py`. Oracle = the gap d that best flattens n onto 3.418.
+- **Si-s-old:** phase-excess estimates d = 0.91 (MEM) / 0.95 µm (Hilbert), oracle 1.5 µm;
+  de-embedding with the estimate flattens n to **median |n−3.418| = 0.058** across 0.5–2 THz.
+  The full chain (x-extraction → phase-excess d → strip 2β → air-frame re-inversion) WORKS on
+  real data.
+- **Si-p:** the algebraic x-extraction alone (d = 0) gives **flat n = 3.418 ± 0.04 over the whole
+  band** — even repairing the low-f grazing-root region. Oracle d = 0.0 µm. But the phase-excess
+  estimators report +2.0 (MEM) / +2.8 µm (Hilbert) — a **systematic ≈ +2.4 µm** — and applying it
+  **root-flips the p-pol inversion catastrophically** (median |n−3.418| → 2.7). Two lessons:
+  (a) ±1 sample of timing registration (25 fs) ≡ **2.65 µm of apparent gap** — the estimator bias
+  is exactly at that scale, so **the Si control in the same slot calibrates it**; (b) **p-pol
+  trades the r = −1 pole for a root-swap boundary**: small gap-phase errors flip the branch, so
+  for p-pol the gap must be pinned externally (Si anchor / s-channel), never trusted from a
+  phase-slope fit alone, and closed-form p inversion needs a continuity/physicality prior before
+  production use.
+
+### F27 — CNT-21 gap numbers; per-mount gaps break the shared-gap dual-pol assumption *(2026-07-02)*
+**Status: CURRENT** (constrains how F21/F22 dual-pol can be used).
+- Phase-excess (MEM) gaps, raw: **0-0: 3.4, 0-90: 5.6, 90-0: 5.8, 90-0R: 5.3, 90-90: 5.3 µm** —
+  consistent to ±0.4 µm across engines and across the realign repeat. Si-anchored (−2.4 µm
+  systematic, F26): **physical gap ≈ 1–3.4 µm**, i.e. genuinely good contact (cf. F19's 4 µm
+  wrecking threshold — we are AT the sensitivity limit, which is why the artifacts persist).
+- **The gap is per-MOUNT:** 0-0 (3.4) vs 90-90 (5.3 µm) differ well outside noise. Each
+  orientation is a separate pressing. ⇒ **the dual-pol joint fit's "one shared gap" assumption is
+  structurally wrong for anisotropic samples**: to see the same fiber axis with both pols you must
+  rotate the sample with the pol → re-mount → new gap. The joint fit needs per-channel gaps (or
+  simultaneous s+p acquisition without re-mounting, which anisotropy forbids). This — not the F23
+  mispairing — is a core reason the joint fits rail: corrected pairing + wide bounds + Drude-Smith
+  + per-channel nuisance ALL still leave rms ≈ 0.08–0.13.
+
+### F28 — Error budget closed: the instrument is at ~0.5–2%, every model stalls at ~10% SMOOTH mismatch; verdict = analysis is at its information limit, the binding constraint is mount-coupling + conditioning *(2026-07-02)*
+**Status: CURRENT — the requested verdict.** Scripts: `fit_cnt_dual_pol_corrected.py`,
+`fit_cnt_drude_smith.py`, `fit_cnt_nuisance_scale.py`, `residual_structure_analysis.py`.
+- **The measurement is EXCELLENT:** 90-0 vs 90-0R (independent realignment) agree to **0.6% in
+  |H|, 1.5 fs in timing, 0.003 rad in detrended phase**. Reference slot-to-slot W ratios (same
+  window, 4 mounts): |ratio| flat to 2%, phase structure 2–4 mrad. Smooth-detrended H structure
+  only 0.6–1.1%. **F20/F23's "alignment is the limiter" is OVERTURNED for this dataset** — the
+  alignment, referencing scheme and repeatability are all at the % level.
+- **|H| > 1 metric retired for window geometry:** the window reference back-reflection is weak
+  (s: +0.44, p: −0.196), so any sample reflecting more gives |H| > 1 **physically** (p-pol Si:
+  expected H = −1.27, measured |H| = 1.271!). The 76–100% |H|>1 fractions read as alignment damage
+  in F20/F23 were largely EXPECTED physics. |H|>1 remains meaningful only where the expected
+  |H| < 1 (e.g. Si in s-pol, gold-referenced bare geometry).
+- **But every material+gap model leaves a smooth ~9–13% residual** (plain Drude, Drude-Smith
+  (c rails at −1), free/fixed/Si-anchored gap, flat per-channel scale+delay nuisance — all
+  ≈ rms 0.08–0.13 vs the 0.005 reproducibility floor). The mismatch is SMOOTH (not fringes — no
+  echo delay signature), so it is either genuinely non-Drude(-Smith) material response or a
+  smooth frequency-dependent coupling bias between the sample and reference MOUNTS. The flat
+  |C|: CNT mounts 0.85 vs Si-p 0.966 / Si-s 0.996 fingers the pressed paper deforming the
+  window/mount coupling; C cannot correct it (the front/back split is unknowable — audited), only
+  flag it.
+- **What survives robustly today:** (1) the mean gap is measured: ~5.3 µm raw / ~1–3 µm
+  Si-anchored, reproducible; (2) **anisotropy is robust in every variant**: σ_∥ > σ_⊥ (roughly
+  2–7×) with n_∥, k_∥ > n_⊥, k_⊥; (3) the p-pol window-frame trusted band (~0.9–2.2 THz) is the
+  best single-spectrum view (Samuel's observation confirmed; below ~0.9 THz the grazing-root +
+  gap artifacts take over); (4) σ₁ in that band is surprisingly robust to the coupling-scale
+  systematic: ±10% |H| scale → σ₁ = 52–62 S/cm (90-0, 1–2 THz) while n/k individually swing ±25%.
+- **VERDICT:** the de-embedding mathematics is done and validated (F26); no further analytical
+  de-embed will buy accuracy here because the remaining error is (i) a smooth mount-coupling
+  systematic the data cannot self-separate from material response, and (ii) closed-form
+  inversion conditioning at air incidence behind ANY residual gap (F9/F19) — both physical/
+  geometric, not algorithmic. **The limiting factor is sample presentation, not analysis.**
+  The F13/F16 route (CNT deposited or pressed on rigid flat HR-Si, measured through the Si)
+  attacks all three at once: rigid substrate → mount coupling stable (Si controls prove rigid
+  mounts stay at |C| ≈ 1); deposited contact → gap → 0; Si incidence → conditioning headroom.
+  Interim recipe on existing data: p-pol window-frame σ₁ over 0.9–2.2 THz with ±15% systematic
+  error bars + phase-excess gap monitoring per mount + Si-slot control each session.
+
+### F29 — Two pipeline bugs fixed: the p-pol "hard cut to zero" (grazing-root collapse) and the air-gap de-embed "slams to 0.7" *(2026-07-02, Samuel flagged both)*
+**Status: CURRENT** (fixes the F25 p-pol grazing artifact; corrects `deembed_air_gap_reflection`).
+Samuel spotted two data-analysis artifacts and both were real bugs.
+- **(1) The p-pol low-f "hard cut and drop to ~0" is the grazing-root collapse (F25), now FIXED.**
+  Not a mask, not zero — n dropping to **n₁ sinθ = sin45° ≈ 0.707**. The p-pol Fresnel inversion
+  is a quadratic in N₂² with two exact roots — the physical index (u+, e.g. Si 3.35 or the CNT
+  metal branch) and a spurious low-index twin (u-, degenerates to the grazing value for a highly
+  reflective sample) — and BOTH reproduce r_p to ~1e-15, so residual can't separate them. The old
+  picker used a **per-bin passivity penalty** (reject Im(N)>0). But wherever the sample is weakly
+  absorbing, the sign of Im(N) for the physical root follows the sign of Im(r), which the corrupted
+  low-f measurement (gap phase, |H|>1 coupling) **flips** — so the penalty killed the correct root
+  and chose the twin. The cutoff frequency = wherever Im(r) crosses zero → **0.87 THz for Si, ~1 THz
+  CNT∥, ~0.7 THz CNT⊥** (Samuel's exact numbers; different per dataset because the phase differs).
+  Confirmed on the well-conditioned Si control (|1+r|≈1.24, so NOT a conditioning failure — a
+  branch-selection failure). **Fix:** replaced the per-bin rule in `thz_core.invert._invert_p_pol_index`
+  with a **global branch vote** — pick u+ vs u- by which is passive (Im≤0) across the whole band,
+  robust to minority band-edge sign flips; grazing kept only as the m→0 fallback. Validated: Si
+  holds n = 3.0–3.42 across 0.3–2 THz (was collapsing <0.88 THz); CNT-90-90 returns the physical
+  metal branch (n 4.6–31, k 14–27, Drude-like; the n≈31 near 0.9 THz is the separate F2 pole
+  neighbourhood, maskable via `min_one_plus_r`) instead of grazing everywhere. Regression test
+  reproduces the exact failure (old picker collapses 50% of bins, vote 0%).
+- **(2) The air-gap de-embed "slams n to 0.7 regardless of spacer, even at position=width=0" had a
+  real bug + a design trap.** (a) **Bug:** `deembed_air_gap_reflection` hardcoded `polarization='s'`
+  in its re-inversion, ignoring the p-pol config. (b) **Trap:** it *unconditionally* stripped the
+  SiO₂→air front (Möbius x=(r−r_front)/(1−r_front·r)) and re-inverted at **AIR incidence** even at
+  zero gap — so it was never a no-op. For a gap-free sample this manufactures a small wrong-sign x
+  (Si: x≈+0.42, but a real air→Si reflection is negative) and inverting a weak x at air incidence
+  gives n=√(q²+sin²45°)→√0.5≈0.707 (the grazing floor); pushing position_um rotates x by e^{+2iβ},
+  walking n toward 1. This is **F9 in action** — behind any air gap the inversion reverts to the
+  ill-conditioned air-incidence case; applied where there's no gap it collapses. **Fixes:** read
+  polarization from config; make position_um=width_um=0 a genuine **no-op** (leave window n,k
+  untouched — a zero gap is not a gap). The de-embed's p-pol re-inversion also inherits the (1) fix.
+- **(3) Same air-incidence re-inversion bug in the interactive air-gap slider** (`air_gap_slider_
+  explorer.py`): `invert_air_incidence` also defaulted to `polarization='s'`. Threaded the
+  measurement polarisation onto each sample record (read from the dataset/PIPELINE config in
+  `samples_from_dataset` / `load_measured_samples`), so `compute_curves` re-inverts in the correct
+  branch. Validated: on p-pol data the slider now returns the physical metal branch for CNT-90-90
+  (n 5.4–21, k 12–16) across the physical 0–3 µm gap range (cf. F27's ~1–3 µm), instead of grazing
+  everywhere; Si at gap=0 gives 3.38 (was 0.76). It still collapses at over-large trial gaps (≳5 µm
+  on CNT, any gap on gapless Si) — that is the de-embed over-stripping into the air-incidence
+  degeneracy (F9), now a useful "you've gone too far" signal rather than a permanent collapse.
+- **Files:** `thz_core/thz_core/invert.py` (`_invert_p_pol_index` + `_p_pol_index_candidates`
+  helper), `dataset_core/adapters/thz_adapter.py` (`deembed_air_gap_reflection`),
+  `explorations/air_gap_cnt_reflection/air_gap_slider_explorer.py`. Tests: 343 pass (147 outer incl.
+  new grazing regression + updated zero-gap-noop; 196 nested incl. the F22 p-pol round-trip that
+  replaced the stale `not_implemented` assertion).
 
 ---
 

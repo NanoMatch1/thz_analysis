@@ -36,7 +36,7 @@ def clone_and_export(data_obj, dest_path, time_shift_ps=0.0):
 
 
 # ── Data paths ──────────────────────────────────────────
-data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\2025-06-25_silicon_transmission'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\chris'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\denis'
 # Chris data centering info:
@@ -47,22 +47,33 @@ data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\2025-06-25_silicon_tra
 # ── Configuration ───────────────────────────────────────
 config: dict = {
     "general": {
-        'show_graph': True,
+        'show_graph': False,
+        'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
+        'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
+        'save_database': True,          # save the dataset database after processing
+    },
+    "resolution": {
+        # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
+        # n_fft above oversamples that by ~16x (sinc interpolation, not real detail).
+        # Plots ALWAYS place markers on the independent-resolution grid; the flag below
+        # additionally DECIMATES the stored n/k/sigma/H arrays to that grid.
+        "limit_to_instrument_resolution": True,
+        "broadening_factor": 1.0,   # >1 (e.g. 2.0) for the conservative Hann main-lobe width
     },
     "sample": {
-        "thickness_m": 290e-6,        # silicon wafer thickness (sets n; your calibration knob)
+        "thickness_m": 500e-6,        # silicon wafer thickness (sets n; your calibration knob)
     },
     "regions": {
         # Optional (start_ps, end_ps) to constrain the peak search; None = whole trace.
         "pulse": None,
     },
     "window": {
-        "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
-        "alpha": 1.0,            # tukey only
+        "type": "tukey",          # symmetric Hann (also 'tukey' / 'boxcar')
+        "alpha": 0.1,            # tukey only
         # Fixed half-width window (reflection-style): wide enough for the main pulse,
         # narrow enough to EXCLUDE the Fabry-Perot echo (~2 n d / c after the main pulse)
         # so the single-pass invert_nk stays clean.
-        "half_width_ps": 4.0,
+        "half_width_ps": 10.0,
         # Peak selection. With a large sample<->reference delay a single region can't
         # cleanly isolate the right pulse, and it isn't always the global max. Options:
         #   interactive_peak=True -> click the pulse you want per trace (snaps to local max)
@@ -100,51 +111,62 @@ import acquisition_editor
 show_graph = config['general']['show_graph']
 
 dataset = DataSet(data_dir, config=config)
-dataset.load_all_data(case_insensitive=True, explicit_dir=True)
-dataset.plot_current()
 
-# --- pair sample <-> reference ---
-dataset.group_files(keywords=['type'])
-dataset.grouping.show_matches()
+if config['general'].get('preprocess_data', True):
+    dataset.load_all_data(case_insensitive=True, explicit_dir=True)
+    # dataset.plot_current()
 
-# --- baseline removal ---
-thz.subtract_baseline(dataset)
+    # --- pair sample <-> reference ---
+    dataset.group_files(keywords=['type'])
+    dataset.grouping.show_matches()
 
-# --- THE window step: select the main peak, CENTER it in the trace (extend the axis so
-#     the peak sits at the midpoint — this preserves the pulse's ABSOLUTE arrival time, so
-#     the sample<->reference group delay that carries n is untouched), then apply one
-#     identical fixed-width symmetric window. Replaces the old whole-trace Tukey + the
-#     interactive centering_manual. ---
-# thz.window_time_fixed_width(
-#     dataset,
-#     half_width_ps=config['window']['half_width_ps'],
-#     region_ps=config['regions'].get('pulse'),
-#     peak_ps=config['window'].get('peak_ps'),
-#     interactive=config['window'].get('interactive_peak', False),
-#     snap_halfwidth_ps=config['window'].get('snap_halfwidth_ps', 2.0),
-#     center_in_trace=True,
-#     show_graph=show_graph,
-# )  # window config read from dataset.config (single source of truth)
+    # --- baseline removal ---
+    thz.subtract_baseline(dataset)
 
-# --- lay every trace on ONE shared absolute-time axis (group-delay-preserving) and
-#     zero-pad for finer FFT resolution. align_to_common_time_axis runs inside zero_pad. ---
-thz.zero_pad(dataset, show_graph=show_graph)
+    # --- THE window step: select the main peak, CENTER it in the trace (extend the axis so
+    #     the peak sits at the midpoint — this preserves the pulse's ABSOLUTE arrival time, so
+    #     the sample<->reference group delay that carries n is untouched), then apply one
+    #     identical fixed-width symmetric window. Replaces the old whole-trace Tukey + the
+    #     interactive centering_manual. ---
+    thz.window_time_fixed_width(
+        dataset,
+        half_width_ps=config['window']['half_width_ps'],
+        region_ps=config['regions'].get('pulse'),
+        peak_ps=config['window'].get('peak_ps'),
+        interactive=config['window'].get('interactive_peak', False),
+        snap_halfwidth_ps=config['window'].get('snap_halfwidth_ps', 2.0),
+        center_in_trace=True,
+        show_graph=show_graph,
+    )  # window config read from dataset.config (single source of truth)
 
-thz.fft_spectrum(dataset)
+    # --- lay every trace on ONE shared absolute-time axis (group-delay-preserving) and
+    #     zero-pad for finer FFT resolution. align_to_common_time_axis runs inside zero_pad. ---
+    thz.zero_pad(dataset, show_graph=show_graph)
+    thz.fft_spectrum(dataset)
 
-if show_graph:
-    thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
+    if show_graph:
+        thz.plot_fft(dataset, freq_range=(0.0, 10), normalise=False, scale='')
+
+    dataset.save_state()
+
+else:
+    dataset.load_state()  # load the preprocessed traces (baseline, window, FFT) from a .state file 
 
 # --- transfer function: plain transmission ratio H = Y_sample / Y_reference. ---
 thz.transfer_function(dataset, ref_type='reference')
+thz.remove_phase_offset(dataset)  # optional: remove the constant phase offset from H (for plotting only)
 
 # --- n, k from H and the sample thickness (single-pass transmission inversion). ---
 thz.invert_nk(dataset, thickness_m=config['sample']['thickness_m'])
 
+thz.compute_instrument_resolution(dataset, config)
+thz.compute_transfer_uncertainty(dataset)
+thz.apply_instrument_resolution(dataset, config)
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
 
-dataset.save_database()
+if config['general'].get('save_database', True):
+    dataset.save_database()
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)

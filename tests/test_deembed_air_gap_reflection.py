@@ -113,20 +113,30 @@ def test_wrong_gap_does_not_recover_truth():
     assert not np.allclose(sample.processing_dict["n"][band], n_true, atol=0.05)
 
 
-def test_zero_gap_is_pure_front_deembed():
-    """position_um = 0 still de-embeds the front interface (no phase strip) and runs cleanly."""
-    ds, sample = _dataset_with_gap(3.0, 1.0, gap_um=0.0, position_um=0.0)
+def test_zero_gap_is_noop():
+    """position_um = 0 AND width_um = 0 is a no-op: the window-geometry n,k are left untouched.
+
+    A zero gap is not a gap. The front-interface strip assumes a SiO2 | air | sample stack, so
+    applying it to a gap-free (well-contacted) sample re-inverts at the ill-conditioned air
+    incidence and collapses n to the grazing floor (~n1 sin theta). With both gap parameters zero
+    there is nothing to de-embed, so the step must leave the window inversion in place and not
+    stash an 'n_window' (it never touched n).
+    """
+    ds, sample = _dataset_with_gap(3.0, 1.0, gap_um=0.0, position_um=0.0, width_um=0.0)
+    sample.processing_dict["n"] = np.full(FREQ_HZ.size, 3.418)   # a valid window-geometry result
+    sample.processing_dict["k"] = np.full(FREQ_HZ.size, 0.2)
     deembed_air_gap_reflection(ds)
     band = sample.processing_dict["transfer_mask"]
-    # gap truly zero -> recovers planted n,k
-    assert np.allclose(sample.processing_dict["n"][band], 3.0, atol=1e-6)
+    assert np.allclose(sample.processing_dict["n"][band], 3.418)
+    assert np.allclose(sample.processing_dict["k"][band], 0.2)
+    assert "n_window" not in sample.processing_dict  # no-op did not run the de-embed
 
 
 _TESTS = [
     test_recovers_planted_nk_at_correct_gap,
     test_preserves_window_geometry_nk,
     test_wrong_gap_does_not_recover_truth,
-    test_zero_gap_is_pure_front_deembed,
+    test_zero_gap_is_noop,
 ]
 
 

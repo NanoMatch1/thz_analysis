@@ -88,11 +88,19 @@ def _drift_filter():
     return 1.0 + 0.15 * np.cos(2 * np.pi * freq_hz * DRIFT_ECHO_PS * 1e-12)
 
 
-def _build_and_segment(tmpdir, apply_drift):
+def _delay_filter(delay_s):
+    """Pure timing offset: a linear-phase spectral filter exp(-i*2*pi*f*delay)."""
+    freq_hz = _full_trace_freq_hz()
+    return np.exp(-2j * np.pi * freq_hz * delay_s)
+
+
+def _build_and_segment(tmpdir, apply_drift, sample_filter=None):
     reference_trace = _two_pulse_trace(1.0)
     sample_trace = _two_pulse_trace(H_TRUE)
     if apply_drift:
         sample_trace = _apply_spectral_filter(sample_trace, _drift_filter())
+    if sample_filter is not None:
+        sample_trace = _apply_spectral_filter(sample_trace, sample_filter)
 
     _write_acc(os.path.join(tmpdir, REF_NAME), REF_NAME[:-4], reference_trace)
     _write_acc(os.path.join(tmpdir, SAMP_NAME), SAMP_NAME[:-4], sample_trace)
@@ -104,7 +112,7 @@ def _build_and_segment(tmpdir, apply_drift):
     return segment_root
 
 
-def _run_phase2(segment_root, self_reference):
+def _run_phase2(segment_root, self_reference, self_phase=False):
     dataset = DataSet(os.path.join(segment_root, "second_reflection"))
     dataset.load_all_data(case_insensitive=True)
     dataset.group_files(keywords=["type"])
@@ -112,7 +120,7 @@ def _run_phase2(segment_root, self_reference):
     thz.fft_spectrum(dataset)
     thz.transfer_function(
         dataset,
-        config={"transfer": {"self_reference": self_reference}},
+        config={"transfer": {"self_reference": self_reference, "self_phase": self_phase}},
         ref_type="reference",
     )
     return dataset
@@ -142,6 +150,43 @@ def test_self_reference_removes_injected_drift():
         # ...and be removed by the front-pulse correction.
         assert error_new < 0.02, f"self-referenced H rms error {error_new:.4f}"
         assert error_new < error_old / 4
+
+
+def test_self_phase_removes_timing_offset():
+    """self_phase must cancel a planted timing delay (like self_reference does)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # A pure delay on the whole sample trace: shifts both pulses together, so the
+        # front-pulse phase carries the same offset the back ratio does.
+        segment_root = _build_and_segment(
+            tmpdir, apply_drift=False, sample_filter=_delay_filter(0.10e-12))
+
+        h_plain = _band_h(_run_phase2(segment_root, self_reference=False))
+        h_phase = _band_h(_run_phase2(segment_root, self_reference=False, self_phase=True))
+
+        error_plain = np.sqrt(np.mean(np.abs(h_plain / H_TRUE - 1.0) ** 2))
+        error_phase = np.sqrt(np.mean(np.abs(h_phase / H_TRUE - 1.0) ** 2))
+        # The delay corrupts the plain ratio (linear phase) ...
+        assert error_plain > 0.1, f"timing offset not visible in plain H (rms {error_plain:.4f})"
+        # ... and self_phase removes it, recovering the flat H_TRUE.
+        assert error_phase < 0.02, f"self_phase H rms error {error_phase:.4f}"
+        assert error_phase < error_plain / 4
+
+
+def test_self_phase_keeps_amplitude_drift_that_selfref_removes():
+    """self_phase is PHASE-only: a zero-phase amplitude drift stays (self_reference kills it)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        segment_root = _build_and_segment(tmpdir, apply_drift=True)  # 15% zero-phase ripple
+
+        h_plain = _band_h(_run_phase2(segment_root, self_reference=False))
+        h_phase = _band_h(_run_phase2(segment_root, self_reference=False, self_phase=True))
+        h_selfref = _band_h(_run_phase2(segment_root, self_reference=True))
+
+        err = lambda h: np.sqrt(np.mean(np.abs(h / H_TRUE - 1.0) ** 2))
+        # self_reference removes the amplitude drift; self_phase (phase-only) does not,
+        # so it stays as corrupted as the plain ratio on this zero-phase drift.
+        assert err(h_selfref) < 0.02, f"self_reference should remove drift (rms {err(h_selfref):.4f})"
+        assert err(h_phase) > 0.05, f"self_phase should NOT remove amplitude drift (rms {err(h_phase):.4f})"
+        assert abs(err(h_phase) - err(h_plain)) < 0.02
 
 
 def test_self_reference_is_noop_without_drift():

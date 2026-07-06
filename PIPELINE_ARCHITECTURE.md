@@ -149,6 +149,9 @@ one stage.
 | `transfer_metrics` | dict | `transfer_function` | incl. `diagnostics.{W_samp,W_ref,front_correction}` |
 | `selfref_correction` | complex | `transfer_function` | `C = Y1_ref/Y1_samp` (front-pulse drift; diagnostic) |
 | `mask_metrics`, `snr_mask` **★** | dict / bool | `transfer_function` | per-spectrum SNR (snr_mask on sample **and** ref) |
+| `snr_db`, `ref_snr_db` | array | `transfer_function` (`_write_snr_masks`) | per-bin amplitude SNR of sample and paired ref (feed the error) |
+| `transfer_H_sigma`, `transfer_phase_sigma` | array | `compute_transfer_uncertainty` | noise-floor error on `|H|` / phase (plot error bars) |
+| `transfer_H_pre_kk`, `phase_kk_metrics` | complex / dict | `phase_correct_kk` | pre-correction `H`; KK misplacement `l`, delay, fit A/B (opt-in) |
 | `reflection_r` | complex | `invert_nk_reflection` | true sample reflection coeff `r = r_ref·H` |
 | `reflection_geometry`, `theta_internal_rad`, `r_reference` | str / float / complex | `invert_nk_reflection` | geometry record |
 | `n` **★**, `k` **★** | array | `invert_nk_reflection` | optical constants (overwritten by de-embed if enabled) |
@@ -270,18 +273,24 @@ Notes   : CRITICAL — for THzDataReflection applies abs-time phase ref
 ```
 ```
 ### transfer_function   (ref_type='reference')
-Purpose : self-referenced transfer H = (Y2_s/Y1_s)/(Y2_r/Y1_r) + SNR trusted mask.
+Purpose : transfer H + SNR trusted mask, in one of THREE front-pulse modes:
+          - self_reference : H = (Y2_s/Y1_s)/(Y2_r/Y1_r)  — front pulse for timing AND amp
+          - self_phase     : H = (Y2_s/Y2_r)·(C/|C|), C=Y1_r/Y1_s — front pulse TIMING only
+          - plain          : H = Y2_s/Y2_r  (+ sub-sample ramp from align_to_reference)
 Reads   : data_obj.processing_dict[fft_freq,fft_spectrum] (second, via delegation);
-          data_obj.first_reflection.processing_dict[fft_spectrum] (front);
+          data_obj.first_reflection.processing_dict[fft_spectrum] (front, self_ref/self_phase);
           ref via dataset.get_reference(fn, ref_type); config.transfer.*, config.mask.*
 Writes  : processing_dict[transfer_H, transfer_metrics, transfer_mask,
-          selfref_correction, mask_metrics]; snr_mask on sample AND ref;
-          data_obj.data ← [freq,|H|,∠H]; data_obj.reference_filename
-Knobs   : transfer.self_reference, transfer.apply_snr_mask,
+          selfref_correction (C), selfphase_correction (C/|C|), mask_metrics];
+          snr_mask on sample AND ref; data_obj.data ← [freq,|H|,∠H]; reference_filename
+Knobs   : transfer.self_reference, transfer.self_phase, transfer.apply_snr_mask,
           transfer.first_reflection_dir (legacy disk layout), mask.*
 Calls   : core.self_referenced_transfer | core.transfer_function; core.trusted_band_mask
-Notes   : self-ref skips the sub-sample timing ramp (front pulse carries timing).
-          ANALYSIS_NOTES §11; Audit 1/2.
+Notes   : self_phase cancels the acquisition timing offset structurally (exp(±2πifΔt)
+          cancels) WITHOUT importing front amplitude — a robust alternative to time-domain
+          align_to_reference (which mis-recovers n: Si gives 2.30 not 3.40). Validated on
+          Si: self_ref 3.402 ≈ self_phase 3.410 ≈ truth 3.4. self-ref/self_phase skip the
+          sub-sample ramp (front pulse carries timing). ANALYSIS_NOTES §11/§19; Audit 1/2.
 ```
 ```
 ### selfref_quality   (DIAGNOSTIC — changes no data)
@@ -293,6 +302,56 @@ Writes  : nothing (returns dict; prints WARN/ok)
 Knobs   : selfref_quality.{band_thz,std_threshold,median_dev_threshold,use_snr_mask}
 Notes   : do NOT divide H by C — H/C = Y2_s/Y2_r re-injects the timing self-ref
           cancels (audited). It's a quality flag, not a corrector.
+```
+```
+### compute_instrument_resolution   (PRESENTATION — records resolution, no data change)
+Purpose : true freq resolution df_res = broadening/T_res, T_res = SHORTER reflection
+          window (H=W_s/W_r inherits the coarser window; gap buys no resolution).
+Reads   : obj.first_region/second_region (ps); a segment fft_freq (bin spacing)
+Writes  : config['resolution'] += {t_resolution_s, df_resolution_hz, df_fft_hz,
+          decimation_factor k=round(df_res/df_fft), broadening_factor}
+Knobs   : resolution.broadening_factor (1.0 Fourier limit; 2.0 Hann main-lobe)
+Notes   : n_fft only sets BIN SPACING (sinc interpolation); resolution is 1/T_window.
+```
+```
+### compute_transfer_uncertainty   (PRESENTATION — freq-domain error)
+Purpose : faithful σ on H from the off-peak spectral noise floor (white time noise →
+          flat spectral floor). (σ_|H|/|H|)² = 10^(−samp_snr_db/10)+10^(−ref_snr_db/10).
+Reads   : processing_dict[transfer_H, snr_db, ref_snr_db]
+Writes  : processing_dict[transfer_H_sigma, transfer_phase_sigma]
+Notes   : additive-noise only; on-peak jitter/drift (signal-correlated) NOT captured —
+          upgrade = propagate per-timepoint σ_t(t) through the windowed DFT (TODO).
+          n/k/eps/sigma error propagation also TODO.
+```
+```
+### apply_instrument_resolution   (PRESENTATION — opt-in decimation)
+Purpose : collapse every freq-domain product to the resolution grid (honest data, not
+          just honest markers). No-op unless the flag is on.
+Reads   : config['resolution'].{limit_to_instrument_resolution, decimation_factor}
+Writes  : decimates (every k-th bin) any 1-D processing_dict array of length len(fft_freq)
+          + the 2-D freq-domain holder.data, for every segment/file
+Knobs   : resolution.limit_to_instrument_resolution (default False)
+Notes   : DECIMATE not bin-average (phase untouched). Schema-robust (matches by length,
+          so n/k/eps/sigma/masks/SNR/σ all come along). Run LAST (after derive_eps_sigma).
+```
+```
+### phase_correct_kk   (OPT-IN — between transfer_function and invert)
+Purpose : remove the sample-vs-reference MISPLACEMENT phase (linear-in-omega) via the
+          Kramers-Kronig analytical-fit method (arXiv:2412.18662), PRESERVING intrinsic
+          dispersion. The principled cousin of detrend_transfer_phase (which strips
+          material delay too). POLARIZATION-INDEPENDENT (only invert picks s/p).
+Reads   : processing_dict[transfer_H, fft_freq, transfer_mask, snr_db]; config.phase_kk.*
+Writes  : processing_dict[transfer_H (overwritten), transfer_H_pre_kk, phase_kk_metrics];
+          data_obj.data ← [freq,|H|,∠H]
+Knobs   : phase_kk.{enabled, f_end_thz, fit_band_thz, use_snr_mask}
+Calls   : core.correct_reflection_phase (kramers_kronig)
+Notes   : Works on ANY object with transfer_H — THzDataReflection AND plain THzData
+          (single-bounce reflection). TRANSMISSION caveat: the linear phase there is the
+          sample delay (signal), not a misplacement — don't strip it. KK assumes minimum
+          phase (no r zeros in UHP); strained for p near Brewster (|r_p| dip) or r<0
+          (angle≈π constant offset, the phi_0 caveat). Best for |r|≈1 rotating-phase
+          samples. Accuracy set by BANDWIDTH (f_end above features), not window length.
+          Absolute l carries a finite-band bias; the delta cancels it.
 ```
 ```
 ### invert_nk_reflection   (geometry='window')
@@ -371,6 +430,7 @@ Calls   : core.derive_eps_sigma
 | Visualization | `result_viewer`, `plot_fft`, slider explorer stay in legacy `thz_adapter`; v2 run script calls across the boundary |
 | Legacy siblings | not ported (e.g. `isolate_and_window`, `build_reflection_dataset`, `centering_manual`, grid inverters); they retire with the old module |
 | Retirement gate | old-vs-v2 parity on the real CNT dataset (diff `n`, `k`, `σ`) before rewiring the other 42 importers |
+| **Step reporters (v2 requirement)** | every stage MUST emit a concise `[method_name] <outcome numbers>` reporter (see the existing `[compute_instrument_resolution] T_res = … -> df_res = …` style). Route it through a shared `report()` helper that BOTH prints AND appends to a per-dataset run log, so a final `write_processing_report(dataset, path)` stage can dump the full ordered processing history to a text/markdown doc. Single source (registry-style) — no method reinvents prints; older methods lacking reporters get upgraded as they are touched. |
 
 **Ported to v2:** _(update as we go)_
 

@@ -58,6 +58,31 @@ def test_s_pol_still_exact():
         assert dn < 1e-9 and dk < 1e-9
 
 
+def test_p_pol_no_grazing_collapse_low_frequency():
+    # Regression for the F25 failure (Si/CNT p-pol window geometry). The measured back reflection is
+    # small and near-real-positive (r = r_front * H, |r| ~ 0.2) with a phase that sweeps through
+    # zero across the band, so Im(r) flips sign. The two exact roots are the physical high index
+    # (~3.3) and a spurious twin that degenerates to the grazing value n1 sin(theta). The old
+    # per-bin passivity picker collapsed n onto that twin wherever Im(r) made the physical root read
+    # as gain (the "hard cut and drop" the user saw at ~0.87 THz); the global branch vote must hold
+    # the physical branch across the whole band.
+    frequency_hz = np.linspace(0.3e12, 2.5e12, 300)
+    n_incident = 1.96
+    theta = np.deg2rad(21.15)  # internal angle for a 45 deg external SiO2 window
+    phase = np.linspace(0.25, -0.25, frequency_hz.size)  # sweeps Im(r) through zero
+    r = 0.24 * np.exp(1j * phase)
+    mask = np.ones(frequency_hz.size, dtype=bool)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        n, k, _ = core.invert_nk_reflection(
+            frequency_hz, r, mask, theta_rad=theta, n_incident=n_incident, polarization="p")
+    grazing = n_incident * np.sin(theta)
+    finite = np.isfinite(n)
+    assert np.mean(np.abs(n[finite] - grazing) < 0.02) < 0.02  # not collapsed onto the grazing twin
+    assert np.nanmedian(n) > 3.0                                # holds the physical high-index branch
+    assert np.all(k[finite] >= -1e-9)                          # still passive
+
+
 def test_p_pol_recovers_passive_not_gain_twin():
     # The spurious root has Im(N2) > 0 (gain); the recovered k must be >= 0 everywhere.
     frequency_hz = np.linspace(0.3e12, 2.5e12, 300)

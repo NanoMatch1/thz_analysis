@@ -1853,9 +1853,35 @@ def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
 
     samp_obj.processing_dict['snr_db'] = samp_snr_arr
     samp_obj.processing_dict['snr_mask'] = samp_snr_arr >= snr_thresh
+    # Also carry the paired reference SNR onto the sample so the frequency-domain
+    # transfer uncertainty (compute_transfer_uncertainty) is self-contained — it needs
+    # BOTH the sample and reference per-bin SNR to propagate the ratio error.
+    samp_obj.processing_dict['ref_snr_db'] = ref_snr_arr
     if ref_obj is not None:
         ref_obj.processing_dict['snr_db'] = ref_snr_arr
         ref_obj.processing_dict['snr_mask'] = ref_snr_arr >= snr_thresh
+
+
+def _contiguous_false_bands(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Return [(start_idx, stop_idx_inclusive), ...] for each run of False in ``mask``."""
+    untrusted = (~np.asarray(mask, dtype=bool)).astype(np.int8)
+    edges = np.diff(np.concatenate(([0], untrusted, [0])))
+    starts = np.flatnonzero(edges == 1)
+    stops = np.flatnonzero(edges == -1) - 1
+    return list(zip(starts.tolist(), stops.tolist()))
+
+
+def _shade_untrusted_bands(ax, x, mask, *, color='grey', alpha=0.06):
+    """Lightly shade the frequency ranges the SNR mask excludes (visible, not hidden)."""
+    if mask is None:
+        return
+    mask_arr = np.asarray(mask, dtype=bool)
+    if mask_arr.all() or not mask_arr.any():
+        if not mask_arr.any() and mask_arr.size:
+            ax.axvspan(x[0], x[-1], color=color, alpha=alpha, lw=0, zorder=0)
+        return
+    for start, stop in _contiguous_false_bands(mask_arr):
+        ax.axvspan(x[start], x[stop], color=color, alpha=alpha, lw=0, zorder=0)
 
 
 def _plot_with_snr_mask(
@@ -1866,37 +1892,71 @@ def _plot_with_snr_mask(
     *,
     color=None,
     label: str | None = None,
-    full_alpha: float = 0.9,
-    masked_alpha: float = 0.2,
+    full_alpha: float = 0.95,
+    masked_alpha: float = 0.18,
+    line_alpha: float = 0.30,
+    marker: str = 'o',
+    markersize: float = 4.0,
+    marker_every: int = 1,
+    yerr: np.ndarray | None = None,
+    shade_untrusted: bool = True,
     **plot_kwargs,
 ):
-    """Plot a trace with the trusted region at full alpha and the rest dimmed.
+    """Faint guide line + true-resolution markers, with graceful SNR handling.
 
-    Strategy: draw the full trace at ``masked_alpha`` (dimmed background), then
-    overlay the trusted portion at ``full_alpha``. The legend label attaches to
-    the overlay so only the trusted line shows up in the legend.
+    Presentation philosophy (see ANALYSIS_NOTES): the *markers* carry the judgement
+    (they sit on the independent resolution elements — one per ``marker_every`` bins),
+    while a *faint* connecting line (``line_alpha``) guides the eye WITHOUT biasing it
+    with sinc-interpolated detail between real samples.
 
-    If ``mask`` is None or all True, plots a single line at ``full_alpha``.
-    If ``mask`` is all False, plots a single dimmed line tagged "(low SNR)".
+    SNR handling: instead of hiding data outside ``mask``, untrusted markers are dimmed
+    to ``masked_alpha`` (hollow) and the untrusted frequency bands are lightly shaded so
+    the excluded region stays visible and honest.
+
+    ``yerr`` (optional, same length as ``x``) draws error bars on the markers.
+    ``marker_every`` should be the resolution decimation factor when the data is still
+    zero-pad oversampled, or 1 when it has already been decimated to the resolution grid.
+
+    Returns the trusted-marker line handle (carries the legend ``label``).
     """
-    if mask is None:
-        line, = ax.plot(x, y, color=color, label=label, alpha=full_alpha, **plot_kwargs)
-        return line
+    x = np.asarray(x)
+    y = np.asarray(y)
+    stride = max(1, int(marker_every))
+    mask_arr = np.ones(x.shape, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
 
-    mask_arr = np.asarray(mask, dtype=bool)
-    if mask_arr.all():
-        line, = ax.plot(x, y, color=color, label=label, alpha=full_alpha, **plot_kwargs)
-        return line
-    if not mask_arr.any():
-        dim_label = f"{label} (low SNR)" if label else None
-        line, = ax.plot(x, y, color=color, label=dim_label, alpha=masked_alpha, **plot_kwargs)
-        return line
+    # Faint guide line through every point (no legend entry, low zorder).
+    guide_line, = ax.plot(x, y, color=color, alpha=line_alpha, lw=1.0, zorder=1, **plot_kwargs)
+    resolved_color = guide_line.get_color()
 
-    full_line, = ax.plot(x, y, color=color, alpha=masked_alpha, **plot_kwargs)
-    actual_color = full_line.get_color()
-    y_trusted = np.where(mask_arr, y, np.nan)
+    if shade_untrusted:
+        _shade_untrusted_bands(ax, x, mask_arr)
+
+    marker_idx = np.arange(0, x.size, stride)
+    trusted_idx = marker_idx[mask_arr[marker_idx]]
+    untrusted_idx = marker_idx[~mask_arr[marker_idx]]
+
+    # Error bars first (under the markers).
+    if yerr is not None:
+        yerr = np.asarray(yerr)
+        if trusted_idx.size:
+            ax.errorbar(x[trusted_idx], y[trusted_idx], yerr=yerr[trusted_idx],
+                        fmt='none', ecolor=resolved_color, elinewidth=1.0,
+                        capsize=2, alpha=0.55, zorder=2)
+        if untrusted_idx.size:
+            ax.errorbar(x[untrusted_idx], y[untrusted_idx], yerr=yerr[untrusted_idx],
+                        fmt='none', ecolor=resolved_color, elinewidth=0.8,
+                        capsize=1.5, alpha=0.15, zorder=2)
+
+    # Untrusted markers: dimmed, hollow.
+    if untrusted_idx.size:
+        ax.plot(x[untrusted_idx], y[untrusted_idx], ls='none', marker=marker,
+                ms=markersize, markerfacecolor='none', markeredgecolor=resolved_color,
+                alpha=masked_alpha, zorder=3)
+
+    # Trusted markers: full alpha, filled; carry the legend label.
     trusted_line, = ax.plot(
-        x, y_trusted, color=actual_color, label=label, alpha=full_alpha, **plot_kwargs,
+        x[trusted_idx], y[trusted_idx], ls='none', marker=marker, ms=markersize,
+        color=resolved_color, alpha=full_alpha, label=label, zorder=4,
     )
     return trusted_line
 
@@ -3378,6 +3438,269 @@ def fft_spectrum(
     return dataset
 
 
+def _segment_duration_seconds(reflection_obj, segment: str) -> float | None:
+    """Duration (s) of one reflection's real record — its found region span.
+
+    Uses the ``first_region`` / ``second_region`` ps bounds set by
+    ``build_full_trace_reflection`` (the "numbers used to define the region"). Falls
+    back to the pre-FFT time-domain trace length when a region attribute is absent.
+    """
+    region_attr = segment.replace('reflection', 'region')
+    region_ps = getattr(reflection_obj, region_attr, None)
+    if region_ps is not None:
+        return (float(region_ps[1]) - float(region_ps[0])) / _S_TO_PS
+    holder = _resolve_segment(reflection_obj, segment)
+    if holder is None:
+        return None
+    prefft = holder.processing_dict.get('time_domain_prefft')
+    if prefft is not None:
+        time_axis = np.asarray(prefft)[:, 0]
+        return float(time_axis[-1] - time_axis[0])
+    return None
+
+
+def _windowed_record_duration_seconds(holder) -> float | None:
+    """Duration (s) of the NON-ZERO support of a holder's windowed pre-FFT trace.
+
+    For a fixed-width-windowed single pulse (plain ``THzData`` single-bounce reflection),
+    everything outside the window was zeroed, so the extent of the non-zero samples is the
+    window length — the record duration that sets the true resolution ``df_res = 1/T``.
+    Reads ``processing_dict['time_domain_prefft']`` (stored by ``fft_spectrum``); returns
+    ``None`` if unavailable or fully zero.
+    """
+    prefft = holder.processing_dict.get('time_domain_prefft')
+    if prefft is None:
+        return None
+    array = np.asarray(prefft, dtype=float)
+    time_axis, amplitude = array[:, 0], array[:, 1]
+    nonzero_indices = np.nonzero(np.abs(amplitude) > 0)[0]
+    if nonzero_indices.size < 2:
+        return None
+    return float(time_axis[nonzero_indices[-1]] - time_axis[nonzero_indices[0]])
+
+
+def compute_instrument_resolution(
+    dataset: DataSet,
+    config: dict | None = None,
+    segments: tuple = ('first_reflection', 'second_reflection'),
+) -> dict:
+    """Compute the TRUE frequency resolution set by the windowed record length.
+
+    Zero-padding to a large ``n_fft`` makes the FFT *bin spacing*
+    ``df_fft = 1/(n_fft·dt)`` far finer than the physically independent *resolution*.
+    The extra points are sinc interpolation, not new information. The true resolution
+    element is fixed by the duration of the real (windowed) time record::
+
+        df_res ≈ 1 / T_res
+
+    ``T_res`` is the shortest windowed record across all objects, whatever the geometry:
+
+    - ``THzDataReflection`` (window-coupled): the SHORTER of the two reflection windows —
+      ``H = W_sample / W_reference`` (``W = Y₂/Y₁``) inherits the coarser of its two
+      windows, and the inter-pulse gap carries no information that survives the ratio, so
+      the outer span does not buy resolution. Region lengths (from
+      ``build_full_trace_reflection``) define these durations.
+    - plain ``THzData`` (single-bounce reflection): the non-zero support of the windowed
+      pre-FFT trace (the fixed-width window length), since everything outside it is zeroed.
+
+    So this now works for the single-reflection pipeline too, not only the two-reflection
+    one.
+
+    Writes a ``config['resolution']`` block::
+
+        t_resolution_s     : T_res (the shorter reflection window, seconds)
+        df_resolution_hz   : df_res = 1/T_res
+        df_fft_hz          : the current bin spacing
+        decimation_factor  : k = max(1, round(df_res/df_fft)) — 1 independent point / k bins
+
+    ``limit_to_instrument_resolution`` (the on/off flag consumed by
+    ``apply_instrument_resolution``) is preserved if already present, else defaulted
+    to ``False``. Returns the resolution block.
+
+    Note on apodization: a Hann window broadens the resolution element to ~2·df_res
+    (main-lobe width), so this is the *optimistic* Fourier limit. Set
+    ``config['resolution']['broadening_factor']`` > 1 to be conservative.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    resolution_cfg = dict(config.get('resolution', {}) or {})
+    broadening_factor = float(resolution_cfg.get('broadening_factor', 1.0))
+
+    # Windowed record duration from every object, whichever geometry:
+    #   THzDataReflection -> each segment's region span (the SHORTER window limits the
+    #     ratio H = W_s/W_r), via _segment_duration_seconds.
+    #   plain THzData (single-bounce reflection) -> the non-zero support of its windowed
+    #     pre-FFT trace, via _windowed_record_duration_seconds.
+    # The SHORTEST across all objects -> the coarsest (honest) resolution element.
+    # NB check THzDataReflection first: it subclasses THzData.
+    record_durations = []
+    for obj in dataset.data.values():
+        if isinstance(obj, THzDataReflection):
+            for segment in segments:
+                duration = _segment_duration_seconds(obj, segment)
+                if duration is not None and duration > 0:
+                    record_durations.append(duration)
+        elif isinstance(obj, THzData):
+            duration = _windowed_record_duration_seconds(obj)
+            if duration is not None and duration > 0:
+                record_durations.append(duration)
+    if not record_durations:
+        print(
+            "[compute_instrument_resolution] No windowed records found (need "
+            "THzDataReflection segments or windowed THzData with a pre-FFT trace); skipping."
+        )
+        return resolution_cfg
+    t_resolution_s = float(min(record_durations))
+    df_resolution_hz = broadening_factor / t_resolution_s
+
+    # Current bin spacing: read it from any available FFT frequency axis.
+    df_fft_hz = None
+    for obj in dataset.data.values():
+        holders = (
+            [holder for _, holder in obj.all_segments()]
+            if isinstance(obj, THzDataReflection)
+            else [obj]
+        )
+        for holder in holders:
+            if holder is None:
+                continue
+            freq = holder.processing_dict.get('fft_freq')
+            if freq is not None and len(freq) > 1:
+                df_fft_hz = float(np.median(np.diff(np.asarray(freq))))
+                break
+        if df_fft_hz is not None:
+            break
+    if df_fft_hz is None:
+        raise ValueError(
+            "compute_instrument_resolution: no fft_freq found. Run fft_spectrum first "
+            "(this stage reads the current bin spacing from the frequency axis)."
+        )
+
+    decimation_factor = max(1, int(round(df_resolution_hz / df_fft_hz)))
+
+    resolution_cfg.update({
+        't_resolution_s': t_resolution_s,
+        'df_resolution_hz': df_resolution_hz,
+        'df_fft_hz': df_fft_hz,
+        'decimation_factor': decimation_factor,
+        'broadening_factor': broadening_factor,
+    })
+    resolution_cfg.setdefault('limit_to_instrument_resolution', False)
+    config['resolution'] = resolution_cfg
+
+    print(
+        f"[compute_instrument_resolution] T_res = {t_resolution_s * _S_TO_PS:.2f} ps -> "
+        f"df_res = {df_resolution_hz * _HZ_TO_THZ:.4f} THz; bin spacing "
+        f"{df_fft_hz * _HZ_TO_THZ:.4f} THz -> {decimation_factor}x oversampled "
+        f"(1 independent point per {decimation_factor} bins)."
+    )
+    return resolution_cfg
+
+
+def apply_instrument_resolution(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Resample the frequency-domain products onto the true-resolution grid.
+
+    Gated by ``config['resolution']['limit_to_instrument_resolution']``. When on, every
+    frequency-indexed array is DECIMATED by the ``decimation_factor`` k from
+    ``compute_instrument_resolution`` — i.e. only every k-th bin is kept. Those kept
+    bins are the independent DFT samples you would have measured WITHOUT zero-padding,
+    so the stored/plotted data then reflects the real instrumental resolution rather
+    than sinc interpolation. (Decimation, not bin-averaging: nothing is smoothed and
+    the complex phase is left untouched.)
+
+    Robust to schema drift: it decimates *any* 1-D array in each segment's
+    ``processing_dict`` whose length matches that segment's ``fft_freq`` (so n, k, eps,
+    sigma, masks, SNR, uncertainty all come along without being named here), plus the
+    2-D frequency-domain ``holder.data``. Idempotent per call is NOT guaranteed — call
+    once, after the frequency-domain products you care about have been computed.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    resolution_cfg = config.get('resolution', {}) or {}
+    if not resolution_cfg.get('limit_to_instrument_resolution', False):
+        return dataset
+
+    decimation_factor = int(resolution_cfg.get('decimation_factor', 1))
+    if decimation_factor <= 1:
+        print("[apply_instrument_resolution] decimation_factor <= 1; nothing to do.")
+        return dataset
+
+    for filename, data_obj in dataset.data.items():
+        segments = (
+            [holder for _, holder in data_obj.all_segments()]
+            if isinstance(data_obj, THzDataReflection)
+            else [data_obj]
+        )
+        for holder in segments:
+            if holder is None:
+                continue
+            processing = holder.processing_dict
+            freq = processing.get('fft_freq')
+            if freq is None:
+                continue
+            n_freq = len(freq)
+            for key, value in list(processing.items()):
+                if (isinstance(value, np.ndarray) and value.ndim == 1
+                        and value.shape[0] == n_freq):
+                    processing[key] = value[::decimation_factor]
+            if (getattr(holder, 'current_state', None) == 'frequency_domain'
+                    and holder.data.shape[0] == n_freq):
+                holder.data = holder.data[::decimation_factor]
+
+    print(
+        f"[apply_instrument_resolution] decimated frequency-domain products by "
+        f"{decimation_factor}x (kept every {decimation_factor}th bin)."
+    )
+    return dataset
+
+
+def compute_transfer_uncertainty(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Estimate a faithful frequency-domain uncertainty on the transfer function.
+
+    Physics
+    -------
+    White additive time-domain noise maps (Parseval) to a FLAT spectral noise floor,
+    so the off-peak spectral floor IS the additive measurement noise imaged into
+    frequency. ``trusted_band_mask`` already measures it: the stored amplitude SNR
+    ``snr_db = 20·log10(|Y|/floor)`` gives the per-bin relative amplitude error of each
+    spectrum, ``σ_|Y|/|Y| = floor/|Y| = 10^(−snr_db/20)``.
+
+    For ``H = W_sample / W_reference`` the relative errors add in quadrature, so::
+
+        (σ_|H|/|H|)² = 10^(−samp_snr_db/10) + 10^(−ref_snr_db/10)
+        σ_|H|(f)     = |H(f)| · sqrt(that)
+        σ_phase(f)   = sqrt(that)          [rad, high-SNR small-angle limit]
+
+    This is f-dependent and blows up exactly where a spectrum is weak (outside the
+    trusted band) — self-consistent with the SNR mask. Stored as
+    ``processing_dict['transfer_H_sigma']`` and ``['transfer_phase_sigma']``.
+
+    Limitation / deeper method
+    --------------------------
+    The spectral floor captures only the *additive* (white) noise. Signal-correlated
+    noise — timing jitter, amplitude drift — inflates the ON-peak time-domain scatter
+    above the baseline and is NOT in the floor. The faithful upgrade is to propagate
+    the measured per-timepoint repeat scatter σ_t(t) (available from the scans, higher
+    at the peak) through the windowed DFT: σ_Y(f)² ≈ ½·Σ_t w(t)²·σ_t(t)². That needs
+    stderr(t) plumbed through baseline+window (currently dropped) — a documented TODO.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    for filename, data_obj in dataset.data.items():
+        processing = getattr(data_obj, 'processing_dict', {})
+        transfer_H = processing.get('transfer_H')
+        samp_snr_db = processing.get('snr_db')
+        ref_snr_db = processing.get('ref_snr_db')
+        if transfer_H is None or samp_snr_db is None or ref_snr_db is None:
+            continue
+        transfer_H = np.asarray(transfer_H)
+        relative_variance = (
+            10.0 ** (-np.asarray(samp_snr_db, dtype=float) / 10.0)
+            + 10.0 ** (-np.asarray(ref_snr_db, dtype=float) / 10.0)
+        )
+        relative_error = np.sqrt(relative_variance)
+        processing['transfer_H_sigma'] = np.abs(transfer_H) * relative_error
+        processing['transfer_phase_sigma'] = relative_error
+    return dataset
+
+
 def _absolute_time_spectrum(time_s: np.ndarray, amplitude: np.ndarray, n_fft: int) -> tuple:
     """Hann-windowed rfft of a segment, phase-referenced to ABSOLUTE time.
 
@@ -3456,6 +3779,22 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
     The sub-sample timing ramp is skipped in this mode: the front-pulse
     spectra already carry the true relative timing, so applying the ramp as
     well would double-count the residual.
+
+    Phase-only front referencing (``self_phase``)
+    ---------------------------------------------
+    ``config['transfer']['self_phase'] = True`` (with ``self_reference`` False) forms
+
+        H = (Y2_s / Y2_r) · (C / |C|),      C = Y1_ref / Y1_sample
+
+    i.e. it applies ONLY the front-pulse relative PHASE, discarding its magnitude. The
+    plain back ratio ``Y2_s/Y2_r`` carries the spurious acquisition timing offset as a
+    linear phase; on the shared axis both pulses shift together, so the unit-magnitude
+    ``C/|C|`` carries the same offset with opposite sign and cancels it — WITHOUT importing
+    the front-pulse amplitude that full self-referencing (``·C``) would. Use it to keep the
+    first pulse purely as a timing (phase) reference while normalising the amplitude on the
+    back reference. A structural, frequency-domain alternative to time-domain
+    ``align_to_reference`` (no cross-correlation, no integer/sub-sample split). Stores
+    ``selfref_correction`` (C) and ``selfphase_correction`` (C/|C|).
     """
     import os
 
@@ -3463,10 +3802,15 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
     transfer_cfg = config.get('transfer', {})
     apply_snr_mask = transfer_cfg.get('apply_snr_mask', True)
     self_reference = transfer_cfg.get('self_reference', False)
+    # self_phase: use ONLY the front-pulse relative PHASE (timing) to correct the back
+    # ratio, WITHOUT the amplitude normalisation of full self-referencing. Ignored when
+    # self_reference is True (that already folds in the front pulse, amplitude and phase).
+    self_phase = transfer_cfg.get('self_phase', False) and not self_reference
+    needs_front_pulse = self_reference or self_phase
 
     first_reflection_dir = None
     first_spectra_cache: dict = {}
-    if self_reference:
+    if needs_front_pulse:
         # Datasets loaded from the root dir (THzDataReflection objects) carry their
         # first-segment spectra directly — no file path needed for those.
         # The path is only required for the legacy mode (pointing at second_reflection/).
@@ -3547,6 +3891,32 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
                 f"[self-ref] '{filename}': H = (Y2_s/Y1_s)/(Y2_r/Y1_r); front-pulse drift "
                 f"correction |C| median {np.nanmedian(np.abs(selfref_correction[finite_band])):.3f}."
             )
+        elif self_phase:
+            # PHASE-ONLY self-reference: H = (Y2_s/Y2_r) · (C/|C|), C = Y1_r/Y1_s.
+            # The plain back ratio carries the spurious acquisition timing offset as a
+            # linear phase; the unit-magnitude front-pulse correction C/|C| carries the
+            # SAME offset with opposite sign (both pulses shift together on the shared
+            # axis), so multiplying cancels the timing offset WITHOUT importing the
+            # front-pulse amplitude (|C|). Preserves back-pulse timing via the front
+            # pulse's own clock, but leaves normalisation to the back reference.
+            front_samp = _get_first_spectrum(data_obj, freq)
+            front_ref = _get_first_spectrum(ref_obj, freq)
+            H_plain, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
+            front_correction = front_ref / front_samp  # C = Y1_r / Y1_s
+            magnitude = np.abs(front_correction)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                phase_only_correction = np.where(
+                    magnitude > 0, front_correction / magnitude, 1.0 + 0.0j)
+            H = H_plain * phase_only_correction
+            data_obj.processing_dict['selfref_correction'] = front_correction
+            data_obj.processing_dict['selfphase_correction'] = phase_only_correction
+            tf_metrics.setdefault('diagnostics', {})['front_correction'] = front_correction
+            finite_band = np.isfinite(front_correction)
+            print(
+                f"[self-phase] '{filename}': H = (Y2_s/Y2_r)·(C/|C|), C = Y1_r/Y1_s "
+                f"(phase-only front-pulse timing; |C| median "
+                f"{np.nanmedian(magnitude[finite_band]):.3f} DISCARDED)."
+            )
         else:
             H, finite_mask, tf_metrics = core.transfer_function(freq, Y_samp, Y_ref, config)
             # Sub-sample timing residual (from align_to_reference) as an exact spectral
@@ -3569,9 +3939,10 @@ def transfer_function(dataset: DataSet, config: dict | None = None, ref_type: st
                 snr_mask_combined, mask_metrics = core.trusted_band_mask(
                     freq, Y_ref, Y_samp, H, config,
                 )
-                if self_reference:
-                    # The correction divides by the front-pulse spectra, so bins
-                    # where THEY are noise must be excluded too.
+                if needs_front_pulse:
+                    # The correction uses the front-pulse spectra (full ratio for
+                    # self_reference, phase-only for self_phase), so bins where THEY
+                    # are noise must be excluded too.
                     front_mask, _ = core.trusted_band_mask(
                         freq, front_ref, front_samp, H, config,
                     )
@@ -3742,6 +4113,8 @@ def remove_phase_offset(
     use_snr_mask = phase_cfg.get('use_snr_mask', True)
     band_hz = (band_thz[0] / _HZ_TO_THZ, band_thz[1] / _HZ_TO_THZ)
 
+    show_graph = show_graph or config['general'].get('show_graph', False)
+
     for filename, data_obj in dataset.data.items():
         if dataset.data.is_reference(filename):
             continue
@@ -3785,6 +4158,8 @@ def remove_phase_offset(
                 f"Phase-offset removal — {filename} "
                 f"(Δintercept = {metrics['values']['intercept_rad']:+.3f} rad)"
             )
+            ax.set_xlim(-0.1, 0.5)
+            ax.set_ylim(-np.pi, np.pi)
             ax.legend(fontsize=8)
             plt.show()
 
@@ -3897,6 +4272,163 @@ def detrend_transfer_phase(
             plt.show()
 
     return dataset
+
+    return dataset
+
+
+def phase_correct_kk(
+    dataset: DataSet,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Kramers-Kronig (analytical-fitting) phase correction of the transfer function.
+
+    Removes the sample-vs-reference MISPLACEMENT phase — the linear-in-frequency term
+    ``(ω/c)·(2l/cosθ)`` from an unknown positioning shift ``l`` — while PRESERVING the
+    intrinsic dispersive phase of the sample. Wraps
+    ``thz_core.kramers_kronig.correct_reflection_phase`` (the analytical fitting method of
+    Jatkar, Yeh, Pancaldi & Bonetti, *Robust phase correction techniques for THz-TDS in
+    reflection*, arXiv:2412.18662).
+
+    How it differs from ``detrend_transfer_phase``: that one fits and strips ALL linear
+    phase, which is degenerate between a geometric offset (unwanted) and a genuine material
+    group delay (wanted) — so it is diagnostic-only. This method instead uses the KK
+    relation ``ln r = ln|r| − iφ`` (causality) to tie the correct phase to the reliably
+    measured amplitude ``|r|``, isolating ONLY the misplacement term. It is therefore safe
+    for quantitative n,k.
+
+    Polarization
+    ------------
+    The correction is polarization-INDEPENDENT. It operates on ``|H|`` and ``arg(H)``; the
+    misplacement term has no polarization dependence, and the applied phase ramp is in fact
+    independent of θ (θ only rescales the *reported* physical shift ``l``). Polarization
+    enters only the downstream ``invert_nk_reflection`` (``polarization='s'|'p'``), which
+    already implements both Fresnel inversions (paper Eqs. 20a/20b). Run this on either
+    polarization; the paper validates s- and p-pol at 45°.
+
+    Caveat: the KK relation for ``ln r`` assumes a minimum-phase reflection (no zeros of
+    ``r`` in the upper half-plane). For p-pol near the (pseudo-)Brewster condition ``|r_p|``
+    can dip through a near-zero with a rapid ~π phase swing, straining that assumption. For
+    high-reflectivity samples (metals, conductive CNT with ``|r|≈1``) it holds for both pols.
+
+    Parameters
+    ----------
+    config : dict, optional
+        ``config['phase_kk']`` keys:
+
+        ``enabled`` : bool — honoured by callers/run scripts; this function always runs.
+        ``f_end_thz`` : float or None — KK truncation frequency (THz). Must sit ABOVE any
+            spectral feature and below the noise floor. Default: the top of the trusted SNR
+            band, else the max frequency.
+        ``fit_band_thz`` : (lo, hi) THz or None — fit window. Default (0.15, 0.85)·f_end.
+        ``theta_deg`` : float — incidence angle for the REPORTED shift ``l`` only. Default
+            ``config['geometry']['theta_external_deg']``.
+        ``use_snr_mask`` : bool (default True) — weight the phase unwrap by per-bin SNR.
+
+    Data objects
+    ------------
+    Works on ANY object carrying ``processing_dict['transfer_H']`` — both
+    ``THzDataReflection`` (window-coupled) and plain ``THzData`` (single-bounce reflection).
+    It reads only processing_dict keys, so no reflection-specific structure is required.
+    **Transmission caveat:** for a transmission transfer function the linear-in-frequency
+    phase is largely the sample's own propagation delay ``(n−1)·ω·d/c`` (the SIGNAL), and
+    the KK relation used here is the one for a REFLECTION coefficient. Applying this to
+    transmission would strip real material delay — use it for reflection geometries; for
+    transmission only if you specifically know a spurious position offset dominates.
+
+    Notes
+    -----
+    Reads/overwrites ``processing_dict['transfer_H']`` (original stashed as
+    ``transfer_H_pre_kk``). Stores ``phase_kk_metrics`` (l, delay, A, B, f_end, n_fit).
+    Insert AFTER ``transfer_function`` and BEFORE ``invert_nk_reflection``.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    kk_cfg = config.get('phase_kk', {}) or {}
+    geometry_cfg = config.get('geometry', {}) or {}
+    theta_deg = float(kk_cfg.get('theta_deg', geometry_cfg.get('theta_external_deg', 0.0)))
+    theta_rad = np.deg2rad(theta_deg)
+    use_snr_mask = bool(kk_cfg.get('use_snr_mask', True))
+    f_end_thz = kk_cfg.get('f_end_thz', None)
+    fit_band_thz = kk_cfg.get('fit_band_thz', None)
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        processing = data_obj.processing_dict
+        H = processing.get('transfer_H')
+        freq = processing.get('fft_freq')
+        if H is None or freq is None:
+            print(f"[phase_correct_kk] '{filename}': no transfer function, skipping.")
+            continue
+        freq = np.asarray(freq, dtype=float)
+
+        trusted_mask = processing.get('transfer_mask')
+
+        # KK truncation frequency: explicit, else the top of the trusted band, else max f.
+        if f_end_thz is not None:
+            f_end_hz = float(f_end_thz) / _HZ_TO_THZ
+        elif trusted_mask is not None and np.any(trusted_mask):
+            f_end_hz = float(freq[np.where(np.asarray(trusted_mask, dtype=bool))[0][-1]])
+        else:
+            f_end_hz = float(np.nanmax(freq))
+
+        fit_band_hz = None if fit_band_thz is None else (
+            float(fit_band_thz[0]) / _HZ_TO_THZ, float(fit_band_thz[1]) / _HZ_TO_THZ)
+
+        # SNR weighting for the robust unwrap (higher snr_db -> more reliable bin).
+        snr_weights = None
+        if use_snr_mask:
+            snr_db = processing.get('snr_db')
+            if snr_db is not None:
+                snr_weights = np.clip(np.asarray(snr_db, dtype=float), 0.0, None)
+
+        H_corrected, misplacement_l, metrics = core.correct_reflection_phase(
+            freq, np.asarray(H, dtype=complex),
+            theta_rad=theta_rad, f_end=f_end_hz, fit_band=fit_band_hz,
+            snr_weights=snr_weights,
+        )
+
+        delay_seconds = 2.0 * misplacement_l / (2.99792458e8 * np.cos(theta_rad))
+        processing['transfer_H_pre_kk'] = H
+        processing['transfer_H'] = H_corrected
+        processing['phase_kk_metrics'] = dict(
+            misplacement_l_m=misplacement_l,
+            misplacement_l_um=misplacement_l * 1e6,
+            delay_seconds=delay_seconds,
+            A=metrics.get('A'), B=metrics.get('B'),
+            f_end_thz=f_end_hz * _HZ_TO_THZ, n_fit=metrics.get('n_fit'),
+            theta_deg=theta_deg,
+        )
+        data_obj.data = np.column_stack((freq, np.abs(H_corrected), np.angle(H_corrected)))
+        print(
+            f"[phase_correct_kk] '{filename}': KK misplacement l = "
+            f"{misplacement_l * 1e6:+.3f} um (delay {delay_seconds * _S_TO_PS * 1000:+.1f} fs, "
+            f"f_end {f_end_hz * _HZ_TO_THZ:.2f} THz, {metrics.get('n_fit')} fit bins)."
+        )
+
+        if show_graph:
+            f_fit_thz = np.asarray(metrics['f_fit_hz']) * _HZ_TO_THZ
+            delta_m = np.asarray(metrics['delta_m'])
+            delta_m_fit = np.asarray(metrics['delta_m_fit'])
+            fit_mask = np.asarray(metrics['fit_mask'], dtype=bool)
+            fig, (ax_delta, ax_phase) = plt.subplots(1, 2, figsize=(13, 4.5), layout='constrained')
+            fig.suptitle(f'phase_correct_kk (KK analytical fit) — {filename}  '
+                         f'(l = {misplacement_l * 1e6:+.3f} um)')
+            ax_delta.plot(f_fit_thz, delta_m, color='steelblue', lw=1, label=r'$\Delta_m$ data')
+            ax_delta.plot(f_fit_thz[fit_mask], delta_m_fit[fit_mask], 'k--', label='analytical fit')
+            ax_delta.set_xlabel('Frequency (THz)'); ax_delta.set_ylabel(r'$\Delta_m$')
+            ax_delta.set_title('Analytical fitting method'); ax_delta.legend(fontsize=8)
+            ax_delta.grid(alpha=0.3)
+            f_thz = freq * _HZ_TO_THZ
+            band = np.isfinite(H) & (f_thz <= metrics['f_end'] * _HZ_TO_THZ * 1.1)
+            ax_phase.plot(f_thz[band], np.unwrap(np.angle(H))[band], color='steelblue',
+                          alpha=0.7, label='measured arg(H)')
+            ax_phase.plot(f_thz[band], np.unwrap(np.angle(H_corrected))[band],
+                          color='darkorange', label='KK-corrected arg(H)')
+            ax_phase.set_xlabel('Frequency (THz)'); ax_phase.set_ylabel('unwrapped arg(H) (rad)')
+            ax_phase.set_title('phase (misplacement removed, dispersion kept)')
+            ax_phase.legend(fontsize=8); ax_phase.grid(alpha=0.3)
+            plt.show()
 
     return dataset
 
@@ -4540,6 +5072,20 @@ def deembed_air_gap_reflection(dataset: DataSet, config: dict | None = None) -> 
     max_boost = float(air_gap_config.get('max_boost', 1.0e3))
     gap_angle_rad = np.deg2rad(float(config.get('geometry', {}).get('theta_external_deg', 45.0)))
     cos_gap = np.cos(gap_angle_rad)
+    # The re-inversion is at AIR incidence (the gap is air) and in the SAME polarisation the
+    # window inversion used — read it from the config so a p-pol run is not silently re-inverted
+    # with the s-pol formula.
+    polarization = str(config.get('geometry', {}).get('polarization', 's')).lower()
+
+    # A zero gap is NOT a gap: the front-interface strip below assumes a SiO2 | air | sample
+    # stack, so applying it to a gap-free (well-contacted) sample manufactures a spurious
+    # air->sample reflection and re-inverts it at the ill-conditioned air incidence (n collapses
+    # to the grazing floor ~n1 sin(theta)). With position_um == 0 AND width_um == 0 there is
+    # nothing to de-embed, so leave the window-geometry n, k untouched (a genuine no-op).
+    if gap_position_m == 0.0 and gap_width_m == 0.0:
+        print("[deembed_air_gap_reflection] position_um = width_um = 0 -> no gap to de-embed; "
+              "leaving the window-geometry n, k unchanged (no-op).")
+        return dataset
 
     for filename, data_obj in _sample_items(dataset):
         processing = data_obj.processing_dict
@@ -4567,7 +5113,7 @@ def deembed_air_gap_reflection(dataset: DataSet, config: dict | None = None) -> 
             mask = np.isfinite(reflection_back)
         n_deembedded, k_deembedded, invert_metrics = core.invert_nk_reflection(
             freq, reflection_back, mask, config,
-            theta_rad=gap_angle_rad, polarization='s', n_incident=1.0,
+            theta_rad=gap_angle_rad, polarization=polarization, n_incident=1.0,
         )
 
         # Preserve the window-geometry inversion; de-embedded values become the primary n, k.
@@ -5057,6 +5603,21 @@ def _sample_items(dataset: DataSet):
             yield filename, data_obj
 
 
+def _resolution_marker_stride(dataset: DataSet) -> int:
+    """Marker spacing (in bins) that places one marker per resolution element.
+
+    If the data has already been decimated to the resolution grid
+    (``apply_instrument_resolution`` ran), every point is independent -> stride 1.
+    Otherwise the arrays are still zero-pad oversampled -> stride =
+    ``decimation_factor`` from ``compute_instrument_resolution`` so markers land on the
+    independent bins. Defaults to 1 when resolution has not been computed.
+    """
+    resolution_cfg = (getattr(dataset, 'config', None) or {}).get('resolution', {}) or {}
+    if resolution_cfg.get('limit_to_instrument_resolution', False):
+        return 1
+    return max(1, int(resolution_cfg.get('decimation_factor', 1)))
+
+
 def plot_fft(
     dataset: DataSet,
     freq_range: tuple | None = None,
@@ -5076,6 +5637,7 @@ def plot_fft(
     if kwargs.get('scale', None) == 'log':
         ax.set_yscale('log')
 
+    marker_stride = _resolution_marker_stride(dataset)
     for filename, data_obj in dataset.data.items():
         freq = data_obj.processing_dict.get('fft_freq')
         spectrum = data_obj.processing_dict.get('fft_spectrum')
@@ -5086,7 +5648,8 @@ def plot_fft(
         norm = np.abs(spectrum[norm_range]).max() if normalise else 1.0
         mag = np.abs(spectrum) / norm
         snr_mask = data_obj.processing_dict.get('snr_mask') if show_snr_mask else None
-        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename)
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename,
+                            marker_every=marker_stride)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -5107,13 +5670,16 @@ def plot_transfer_function(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
+    marker_stride = _resolution_marker_stride(dataset)
     for filename, data_obj in _sample_items(dataset):
         H = data_obj.processing_dict.get('transfer_H')
         freq = data_obj.processing_dict.get('fft_freq')
         if H is None or freq is None:
             continue
         mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
-        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, np.abs(H), mask, label=filename)
+        sigma = data_obj.processing_dict.get('transfer_H_sigma')
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, np.abs(H), mask, label=filename,
+                            marker_every=marker_stride, yerr=sigma)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -5134,6 +5700,7 @@ def plot_transfer_phase(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 5))
+    marker_stride = _resolution_marker_stride(dataset)
     for filename, data_obj in _sample_items(dataset):
         H = data_obj.processing_dict.get('transfer_H')
         freq = data_obj.processing_dict.get('fft_freq')
@@ -5141,7 +5708,9 @@ def plot_transfer_phase(
             continue
         phase = np.unwrap(np.angle(H))
         mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
-        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, phase, mask, label=filename)
+        sigma = data_obj.processing_dict.get('transfer_phase_sigma')
+        _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, phase, mask, label=filename,
+                            marker_every=marker_stride, yerr=sigma)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
@@ -5162,6 +5731,7 @@ def plot_nk(
     import matplotlib.pyplot as plt
 
     fig, (ax_n, ax_k) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    marker_stride = _resolution_marker_stride(dataset)
     for filename, data_obj in _sample_items(dataset):
         freq = data_obj.processing_dict.get('fft_freq')
         n = data_obj.processing_dict.get('n')
@@ -5169,8 +5739,10 @@ def plot_nk(
         if freq is None or n is None or k is None:
             continue
         mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
-        _plot_with_snr_mask(ax_n, freq * _HZ_TO_THZ, n, mask, label=filename)
-        _plot_with_snr_mask(ax_k, freq * _HZ_TO_THZ, k, mask, label=filename)
+        _plot_with_snr_mask(ax_n, freq * _HZ_TO_THZ, n, mask, label=filename,
+                            marker_every=marker_stride)
+        _plot_with_snr_mask(ax_k, freq * _HZ_TO_THZ, k, mask, label=filename,
+                            marker_every=marker_stride)
 
     if freq_range is not None:
         ax_n.set_xlim(freq_range)
@@ -5194,14 +5766,17 @@ def plot_permittivity(
     import matplotlib.pyplot as plt
 
     fig, (ax_r, ax_i) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    marker_stride = _resolution_marker_stride(dataset)
     for filename, data_obj in _sample_items(dataset):
         freq = data_obj.processing_dict.get('fft_freq')
         eps = data_obj.processing_dict.get('eps')
         if freq is None or eps is None:
             continue
         mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
-        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, eps.real, mask, label=filename)
-        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, eps.imag, mask, label=filename)
+        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, eps.real, mask, label=filename,
+                            marker_every=marker_stride)
+        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, eps.imag, mask, label=filename,
+                            marker_every=marker_stride)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
@@ -5225,14 +5800,17 @@ def plot_conductivity(
     import matplotlib.pyplot as plt
 
     fig, (ax_r, ax_i) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    marker_stride = _resolution_marker_stride(dataset)
     for filename, data_obj in _sample_items(dataset):
         freq = data_obj.processing_dict.get('fft_freq')
         sigma = data_obj.processing_dict.get('sigma')
         if freq is None or sigma is None:
             continue
         mask = data_obj.processing_dict.get('transfer_mask') if show_snr_mask else None
-        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, sigma.real, mask, label=filename)
-        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, sigma.imag, mask, label=filename)
+        _plot_with_snr_mask(ax_r, freq * _HZ_TO_THZ, sigma.real, mask, label=filename,
+                            marker_every=marker_stride)
+        _plot_with_snr_mask(ax_i, freq * _HZ_TO_THZ, sigma.imag, mask, label=filename,
+                            marker_every=marker_stride)
 
     if freq_range is not None:
         ax_r.set_xlim(freq_range)
