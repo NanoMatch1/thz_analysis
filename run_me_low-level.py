@@ -79,6 +79,8 @@ config: dict = {
         'show_graph': True,
         'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
         'save_database': True,          # save the dataset database after processing
+        'propagate_uncertainty': False, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
+        'uncertainty_draws': 200,       # MC draws for the above
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle
@@ -363,6 +365,31 @@ if config['air_gap'].get('enabled', False):
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+
+# --- MONTE-CARLO UNCERTAINTY PROPAGATION (opt-in) ---
+# Push the transfer uncertainty through the window-geometry inversion (+ air-gap de-embed if on)
+# + derive, giving error bars on n/k/eps/sigma. The inline reinvert mirrors THIS pipeline's exact
+# inversion sequence. Runs before apply_instrument_resolution so the error arrays decimate onto
+# the same grid. NOTE: additive-noise-only input -> optimistic lower bound.
+if config['general'].get('propagate_uncertainty', False):
+    from dataset_core.adapters import uncertainty
+
+    def _window_reflection_reinvert(current_dataset):
+        thz.invert_nk_reflection(
+            current_dataset,
+            geometry='window',
+            theta_deg=config['geometry']['theta_external_deg'],
+            polarization=config['geometry']['polarization'],
+            n_window=config['geometry']['n_sio2'],
+        )
+        if config['air_gap'].get('enabled', False):
+            thz.deembed_air_gap_reflection(current_dataset)
+        thz.derive_eps_sigma(current_dataset)
+
+    uncertainty.propagate_uncertainty(
+        dataset, _window_reflection_reinvert,
+        n_draws=config['general'].get('uncertainty_draws', 200),
+    )
 
 # --- DRUDE FIT (headless; opt-in) — one joint fit to sigma_1 AND sigma_2. ---
 # Geometry-agnostic KK-consistency check on the window-reflection sigma. Prints

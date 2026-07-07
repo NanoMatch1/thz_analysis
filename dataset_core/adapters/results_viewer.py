@@ -28,6 +28,13 @@ _HZ_TO_THZ = 1e-12
 _S_TO_PS = 1e12
 
 
+def _filesystem_safe(stem: str) -> str:
+    """Make a file stem safe on all OSes (merged keys like 'run_a::sample' contain ':')."""
+    for bad in '<>:"/\\|?*':
+        stem = stem.replace(bad, "_")
+    return stem
+
+
 # ── registry-driven export ───────────────────────────────────────────────────────
 
 
@@ -47,7 +54,7 @@ def export_quantities(dataset, export_dir: str | None = None) -> list[str]:
 
     for filename, data_obj in _sample_items(dataset):
         processing = data_obj.processing_dict
-        stem = os.path.splitext(filename)[0]
+        stem = _filesystem_safe(os.path.splitext(filename)[0])
 
         # time-domain traces (unchanged from the legacy exporter)
         raw = processing.get("time_domain")

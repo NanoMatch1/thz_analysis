@@ -43,20 +43,28 @@ def generate_channel(dataX, dataY, depth=0.2):
     lower = dataY - dataY * depth
     return upper, lower
 
+def strip_nan(data):
+    """Remove NaN values from the data array."""
+    return data[~np.isnan(data)]
+
 def _plot_with_snr_mask(ax, freq_thz, dataY, mask, label=None, color=None, linestyle='solid', marker='o', config={}):
     """Plot dataY vs freq_thz, optionally masking out low-SNR points."""
     guideline = config.get('guideline', False)
     normalise = config.get('normalise', False)
+    if mask is None:
+        mask = np.ones_like(dataY, dtype=bool)  # If no mask is provided, consider all points as valid
     if normalise:
-        dataY = dataY / np.max(np.abs(dataY))  # Normalize to the maximum absolute value
-    if mask is not None:
-        ax.scatter(freq_thz[mask], dataY[mask], label=label, s=10, marker=marker, color=color, alpha=0.8) # high-SNR points
-        ax.scatter(freq_thz[~mask], dataY[~mask], color=color, marker='.', alpha=0.1, s=1, label=None)  # low-SNR points, faint
-    else:
-        ax.scatter(freq_thz, dataY, label=label, color=color, marker=marker, alpha=0.8, s=10)
+        max_val = np.max(strip_nan(dataY[mask])) # Normalize to the maximum absolute value
+        min_val = np.min(strip_nan(dataY[mask]))
+        dataY = (dataY - min_val) / (max_val - min_val)
+    # if mask is not None:
+    ax.scatter(freq_thz[mask], dataY[mask], label=label, s=10, marker=marker, color=color, alpha=0.8) # high-SNR points
+        # ax.scatter(freq_thz[~mask], dataY[~mask], color=color, marker='.', alpha=0.1, s=1, label=None)  # low-SNR points, faint
+    # else:
+        # ax.scatter(freq_thz, dataY, label=label, color=color, marker=marker, alpha=0.8, s=10)
     if guideline:
-        upper, lower = generate_channel(freq_thz, dataY)
-        ax.fill_between(freq_thz, lower, upper, color=color, alpha=0.1)  # guideline for reference
+        upper, lower = generate_channel(freq_thz[mask], dataY[mask])
+        ax.fill_between(freq_thz[mask], lower, upper, color=color, alpha=0.1)  # guideline for reference
     
 def plot_sigma(dataset, title=""):
     fig_sigma, ax = plt.subplots()
@@ -123,7 +131,7 @@ if __name__ == "__main__":
 
     dataset_refl, sigma_refl = run_me(file_dir)
 
-    # thz.launch_results_viewer(dataset_refl)
+    thz.launch_results_viewer(dataset_refl)
     # plt.show()
 
     file_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
@@ -136,7 +144,7 @@ if __name__ == "__main__":
 
     config = {
         'guideline': False,
-        'normalise': False,
+        'normalise': True,
         'cutoff_freq_thz': 4.0,  # Example cutoff frequency for masking
     }
 
@@ -144,13 +152,13 @@ if __name__ == "__main__":
         # breakpoint()
         mask = np.array([freq * thz._HZ_TO_THZ < config['cutoff_freq_thz'] for freq in data["freq"]])  # Example mask: frequencies below 4 THz
         # breakpoint()
-        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].real, mask=mask, label="{} (refl)".format(filename), color=cmap(0), marker='o', config=config)
-        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].imag, mask=mask, label="{} (refl)".format(filename), color=cmap(0), marker='x', config=config)
+        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].real, mask=mask, label="{} (refl)".format(filename), color=cmap(index), marker='o', config=config)
+        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].imag, mask=mask, label="{} (refl)".format(filename), color=cmap(index), marker='x', config=config)
 
-    for filename, data in sigma_trans.items():
+    for index, (filename, data) in enumerate(sigma_trans.items()):
         mask = np.array([freq * thz._HZ_TO_THZ < config['cutoff_freq_thz'] for freq in data["freq"]])  # Example mask: frequencies below 4 THz
-        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].real, mask=mask, label="{} (trans)".format(filename), color=cmap(1), marker='o', config=config)
-        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].imag, mask=mask, label="{} (trans)".format(filename), color=cmap(1), marker='x', config=config)
+        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].real, mask=mask, label="{} (trans)".format(filename), color=cmap(index), marker='o', config=config)
+        _plot_with_snr_mask(ax, data["freq"] * thz._HZ_TO_THZ, data["sigma"].imag, mask=mask, label="{} (trans)".format(filename), color=cmap(index), marker='x', config=config)
 
     ax.set_xlabel("Frequency (THz)")
     ax.set_ylabel("Conductivity (S/m)")

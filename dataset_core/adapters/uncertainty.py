@@ -142,8 +142,17 @@ def propagate_uncertainty(
                     accum[filename][quantity].append(
                         None if value is None else np.asarray(value).copy())
     finally:
+        # Restore the true transfer_H, then recompute the downstream state ONCE so every
+        # product the inversion writes (n,k,eps,sigma AND reflection_r, *_metrics, …) returns
+        # to its pre-MC value — not only the quantities we track. Falls back to a direct
+        # restore of the tracked quantities if that clean re-inversion fails.
         for filename, data_obj in samples:
-            data_obj.processing_dict.update(originals[filename])
+            data_obj.processing_dict["transfer_H"] = originals[filename]["transfer_H"]
+        try:
+            reinvert(dataset)
+        except Exception:
+            for filename, data_obj in samples:
+                data_obj.processing_dict.update(originals[filename])
         dataset._recipe_recording = previous_recording
 
     for filename, data_obj in samples:

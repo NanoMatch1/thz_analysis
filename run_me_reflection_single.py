@@ -46,6 +46,8 @@ config: dict = {
         'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': '',            # free-text notes stored in the bundle
+        'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
+        'uncertainty_draws': 200,       # MC draws for the above
     },
     "resolution": {
         # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
@@ -239,6 +241,23 @@ thz.invert_nk_reflection(
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
 
+# --- MONTE-CARLO UNCERTAINTY PROPAGATION (opt-in) ---
+# Push the transfer uncertainty through the SAME gold-referenced reflection inversion + derive,
+# giving error bars on n/k/eps/sigma. Runs before apply_instrument_resolution so the error arrays
+# decimate onto the same grid. NOTE: additive-noise-only input -> optimistic lower bound.
+if config['general'].get('propagate_uncertainty', False):
+    from dataset_core.adapters import uncertainty
+    uncertainty.propagate_uncertainty(
+        dataset,
+        uncertainty.make_reflection_reinvert(
+            geometry='gold',
+            theta_deg=config['geometry']['theta_external_deg'],
+            polarization=config['geometry']['polarization'],
+            r_reference=config['geometry']['r_reference'],
+        ),
+        n_draws=config['general'].get('uncertainty_draws', 200),
+    )
+
 # --- DRUDE FIT (headless; opt-in) — one joint fit to sigma_1 AND sigma_2. ---
 # Geometry-agnostic: works on the reflection sigma exactly as in transmission. Prints
 # sigma_DC / tau / plasma freq / joint R^2. (The KK-consistent GEOMETRY optimiser for
@@ -267,4 +286,6 @@ if _session_target:
     session_bundle.save_session(dataset, _bundle_dir, notes=config['general'].get('session_notes', ''))
 
 # --- inspect / launch the interactive result viewer ---
-thz.result_viewer(dataset)
+# thz.result_viewer(dataset)
+# dataset.save_database()
+thz.launch_results_viewer(dataset)

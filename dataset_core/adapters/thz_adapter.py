@@ -6366,6 +6366,18 @@ def export_quantities(dataset: DataSet, export_dir: str | None = None):
     return _export(dataset, export_dir)
 
 
+def merge_datasets(datasets, labels=None, **kwargs):
+    """Merge processed datasets into one for combined display (see session_merge)."""
+    from dataset_core.adapters.session_merge import merge_datasets as _merge
+    return _merge(datasets, labels=labels, **kwargs)
+
+
+def merge_sessions(bundle_dirs, labels=None, **kwargs):
+    """Load + merge several .thzbundle directories (see session_merge)."""
+    from dataset_core.adapters.session_merge import merge_sessions as _merge
+    return _merge(bundle_dirs, labels=labels, **kwargs)
+
+
 def validate_thz(dataset: DataSet, verbose=True, label: str = "Validation") -> dict:
     """Check if dataset has the required structure for THz processing."""
     if not dataset.data:

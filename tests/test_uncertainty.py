@@ -77,6 +77,24 @@ class TestPropagateUncertainty(unittest.TestCase):
         uncertainty.propagate_uncertainty(big, _reinvert_identity, n_draws=800, verbose=False)
         self.assertLess(np.nanmedian(pd_small["n_sigma"]), np.nanmedian(pd_big["n_sigma"]))
 
+    def test_clean_restore_recovers_extra_keys(self):
+        # A reflection-style inversion also writes reflection_r; the finally-block clean
+        # re-inversion must restore it (not leave it at the last draw's perturbed value).
+        dataset, pd = self._dataset()
+        H0 = pd["transfer_H"].copy()
+
+        def reinvert_reflection(ds):
+            for name, obj in ds.data.items():
+                if ds.data.is_reference(name):
+                    continue
+                H = obj.processing_dict["transfer_H"]
+                obj.processing_dict["n"] = np.abs(H)
+                obj.processing_dict["reflection_r"] = 2.0 * H   # extra downstream product
+
+        uncertainty.propagate_uncertainty(dataset, reinvert_reflection, n_draws=100, verbose=False)
+        np.testing.assert_allclose(pd["reflection_r"], 2.0 * H0)  # restored from true H
+        self.assertIn("n_sigma", pd)
+
     def test_skips_without_transfer_sigma(self):
         freq = np.linspace(0.1e12, 2e12, 20)
         pd = {"fft_freq": freq, "transfer_H": np.ones(20, dtype=complex)}  # no *_sigma

@@ -119,6 +119,29 @@ def read_recipe(bundle_dir: str) -> dict:
         return json.load(f)
 
 
+def replay_session(bundle_dir: str, *, override_config: dict | None = None,
+                   override_steps: dict | None = None, save_to: str | None = None,
+                   notes: str = ""):
+    """Re-derive a bundle from raw data with optional edits, and optionally re-save.
+
+    The principled "edit and re-derive" path: reads the bundle's recipe, replays it against the
+    raw data (recomputing with the CURRENT code), applying ``override_config`` (shallow-merged
+    over the stored config, e.g. ``{'sample': {...}}`` — note nested dicts replace wholesale) and
+    ``override_steps`` (``{stage: {kwarg: value}}``). If ``save_to`` is given, writes a fresh
+    bundle there. Returns the reproduced dataset.
+
+    For a quick in-place tweak instead, ``load_session`` a bundle, mutate ``processing_dict``
+    directly in Python, and ``save_session`` it back.
+    """
+    from dataset_core.adapters.pipeline_registry import replay_recipe
+
+    recipe = read_recipe(bundle_dir)
+    dataset = replay_recipe(recipe, override_config=override_config, override_steps=override_steps)
+    if save_to is not None:
+        save_session(dataset, save_to, notes=notes or f"edited replay of {bundle_dir}")
+    return dataset
+
+
 def load_session(bundle_dir: str):
     """Reconstruct a fully-populated ``DataSet`` from a bundle's snapshot — no recompute.
 
