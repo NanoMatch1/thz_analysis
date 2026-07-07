@@ -10,6 +10,11 @@ import matplotlib.pyplot as plt
 import acquisition_editor
 from dataset_core import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import pipeline_registry, session_bundle
+
+# Record every pipeline call into dataset.recipe so the run is replayable/reopenable later.
+# Must run BEFORE the pipeline calls (it wraps the thz.* stages + DataSet setup methods).
+pipeline_registry.activate_recording()
 
 
 # ── Utilities (synthetic-reference generation; not part of the main flow) ─────
@@ -37,7 +42,7 @@ def clone_and_export(data_obj, dest_path, time_shift_ps=0.0):
 
 # ── Data paths ──────────────────────────────────────────
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\chris'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\denis'
 # Chris data centering info:
@@ -52,6 +57,8 @@ config: dict = {
         'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
         'preprocess_data': True,        # run the preprocessing steps (baseline, window, FFT) before transfer function
         'save_database': True,          # save the dataset database after processing
+        'save_session': False,          # True (default dir) or a path -> write a replayable .thzbundle
+        'session_notes': '',            # free-text notes stored in the bundle
     },
     "resolution": {
         # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
@@ -205,6 +212,18 @@ if config.get('drude', {}).get('enabled', False):
 
 if config['general'].get('save_database', True):
     dataset.save_database()
+
+# --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in) ---
+# Writes <dir>.thzbundle/ with recipe.json (config + ordered steps + git SHA), snapshot.pkl
+# (instant reload for display, no recompute) and report.md. Reopen later with
+# session_bundle.load_session(path) (fast) or pipeline_registry.replay_recipe(...) (recompute,
+# overridable). Set config['general']['save_session'] to a path, or True for a default beside
+# the data.
+_session_target = config['general'].get('save_session', False)
+if _session_target:
+    _bundle_dir = _session_target if isinstance(_session_target, str) else os.path.join(
+        data_dir, f"{dataset.seriesname}.thzbundle")
+    session_bundle.save_session(dataset, _bundle_dir, notes=config['general'].get('session_notes', ''))
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)

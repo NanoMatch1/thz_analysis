@@ -8,6 +8,10 @@ import numpy as np
 
 from dataset_core import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import pipeline_registry, session_bundle
+
+# Record the pipeline into dataset.recipe (replayable/reopenable later). Run before the stages.
+pipeline_registry.activate_recording()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SINGLE-REFLECTION pipeline (one bounce, gold-referenced).
@@ -36,16 +40,24 @@ data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export'
 # ── Configuration ───────────────────────────────────────
 config: dict = {
     "general": {
-        'show_graph': True,
+        'show_graph': False,
     },
     "geometry": {
-        "theta_external_deg": 45.0,   # external incidence angle (air -> sample)
+        "theta_external_deg": 45.0, # Maybe this is actually closer to 48 or the other way   # external incidence angle (air -> sample)
         "polarization": "s",          # s-pol (TE)/
         "r_reference": -1.0,          # gold-mirror reference reflection coefficient
     },
     "regions": {
         # Optional (start_ps, end_ps) to constrain the peak search; None = whole trace.
         "pulse": None,
+    },
+    "resolution": {
+        # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
+        # n_fft above oversamples that by ~16x (sinc interpolation, not real detail).
+        # Plots ALWAYS place markers on the independent-resolution grid; the flag below
+        # additionally DECIMATES the stored n/k/sigma/H arrays to that grid.
+        "limit_to_instrument_resolution": True,
+        "broadening_factor": 1.0,   # >1 (e.g. 2.0) for the conservative Hann main-lobe width
     },
     "centering": {
         # Recalibration: reset every pulse to a common peak T0 (removes the relative
@@ -81,7 +93,7 @@ config: dict = {
     "phase_kk": {
         "enabled": True,  # Kramers-Kronig phase correction (arXiv:2412.18662)
         "f_end_thz": None,       # KK truncation freq; None -> top of the trusted SNR band
-        "fit_band_thz": None,    # None -> (0.15, 0.85) * f_end
+        "fit_band_thz": (1,5),    # None -> (0.15, 0.85) * f_end
         "use_snr_mask": True,
         # "theta_deg": None,  # incidence angle for the REPORTED shift l only; None -> config['geometry']['theta_external_deg']
     },
@@ -233,6 +245,14 @@ if config.get('drude', {}).get('enabled', False):
 thz.apply_instrument_resolution(dataset, config)
 
 dataset.save_database()
+
+# --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in): set config['general']['save_session'] to a path
+#     or True. Reopen with session_bundle.load_session (fast) or replay_recipe (recompute). ---
+_session_target = config['general'].get('save_session', False)
+if _session_target:
+    _bundle_dir = _session_target if isinstance(_session_target, str) else os.path.join(
+        data_dir, f"{dataset.seriesname}.thzbundle")
+    session_bundle.save_session(dataset, _bundle_dir, notes=config['general'].get('session_notes', ''))
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)

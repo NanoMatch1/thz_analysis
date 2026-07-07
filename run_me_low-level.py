@@ -13,6 +13,10 @@ import os
 
 from dataset_core import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import pipeline_registry, session_bundle
+
+# Record the pipeline into dataset.recipe (replayable/reopenable later). Run before the stages.
+pipeline_registry.activate_recording()
 
 # from thz_core import (
 #     align_on_peak,
@@ -402,6 +406,14 @@ if config['general'].get('air_gap_explorer', False):
 
 if config['general'].get('save_database', False):
     dataset.save_database()
+
+# --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in): set config['general']['save_session'] to a path
+#     or True. Reopen with session_bundle.load_session (fast) or replay_recipe (recompute). ---
+_session_target = config['general'].get('save_session', False)
+if _session_target:
+    _bundle_dir = _session_target if isinstance(_session_target, str) else os.path.join(
+        data_dir, f"{dataset.seriesname}.thzbundle")
+    session_bundle.save_session(dataset, _bundle_dir, notes=config['general'].get('session_notes', ''))
 
 # --- inspect / launch the interactive result viewer ---
 thz.result_viewer(dataset)

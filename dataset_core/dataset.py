@@ -235,6 +235,10 @@ class DataSet:
 
         self.config = config if config is not None else {}
         self.history = {}
+        # Ordered list of pipeline calls ({stage, kwargs, ts}) recorded by
+        # dataset_core.adapters.pipeline_registry.activate_recording(). This is the
+        # replayable "recipe" persisted alongside the data (see save_session).
+        self.recipe = []
 
     @property
     def help(self):
@@ -820,6 +824,14 @@ class DataSet:
             "data_dict": self.data.data_dict,
             "grouping_state": self.grouping.get_state(),
             "notes": notes,
+            # Persist the analysis context so a reload is self-describing (the config that
+            # produced this, the replayable recipe, and any metadata tags).
+            "config": self.config,
+            "recipe": self.recipe,
+            "metadata": self.metadata,
+            "file_metadata": self.file_metadata,
+            "seriesname": self.seriesname,
+            "file_dir": self.file_dir,
         }
         with open(db_path, "wb") as f:
             pickle.dump(state, f)
@@ -924,10 +936,24 @@ class DataSet:
         if grouping_state is not None:
             self.grouping.restore_state(grouping_state)
 
+        # Restore the analysis context if present (guarded for pre-context pickles).
+        self._restore_context(state)
+
         self.seriesname = selected_filename.replace("_db.pkl", "").replace(".pkl", "")
         print(f"Loaded dataset from {db_path}.")
 
         return True
+
+    def _restore_context(self, state: dict) -> None:
+        """Restore config / recipe / metadata from a saved state dict (backward-compatible)."""
+        if state.get("config") is not None:
+            self.config = state["config"]
+        if state.get("recipe") is not None:
+            self.recipe = state["recipe"]
+        if state.get("metadata") is not None:
+            self.metadata = state["metadata"]
+        if state.get("file_metadata") is not None:
+            self.file_metadata = state["file_metadata"]
 
     def save_state(self, savedir=None):
         import pickle
@@ -938,6 +964,10 @@ class DataSet:
         state = {
             "data_dict": self.data.data_dict,
             "grouping_state": self.grouping.get_state(),
+            "config": self.config,
+            "recipe": self.recipe,
+            "metadata": self.metadata,
+            "file_metadata": self.file_metadata,
         }
 
         with open(pickle_path, "wb") as f:
@@ -958,5 +988,7 @@ class DataSet:
         grouping_state = state.get("grouping_state", None)
         if grouping_state is not None:
             self.grouping.restore_state(grouping_state)
+
+        self._restore_context(state)
 
         print(f"Loaded dataset state from {pickle_path}.")
