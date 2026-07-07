@@ -6350,6 +6350,22 @@ def result_viewer(dataset: DataSet, show_snr_mask: bool = True) -> ResultViewer:
     """
     return ResultViewer(dataset, show_snr_mask=show_snr_mask)
 
+
+# NEW (Phase 2): registry-driven viewer + export that supersede ResultViewer / export_results.
+# Lazy imports avoid a circular dependency (results_viewer imports this module). Swap
+# ``thz.result_viewer(dataset)`` -> ``thz.launch_results_viewer(dataset)`` to adopt the new one.
+def launch_results_viewer(dataset: DataSet, **kwargs):
+    """Registry-driven results viewer (replacement for :func:`result_viewer`)."""
+    from dataset_core.adapters.results_viewer import launch_results_viewer as _viewer
+    return _viewer(dataset, **kwargs)
+
+
+def export_quantities(dataset: DataSet, export_dir: str | None = None):
+    """Registry-driven CSV export (replacement for :func:`export_results`)."""
+    from dataset_core.adapters.results_viewer import export_quantities as _export
+    return _export(dataset, export_dir)
+
+
 def validate_thz(dataset: DataSet, verbose=True, label: str = "Validation") -> dict:
     """Check if dataset has the required structure for THz processing."""
     if not dataset.data:

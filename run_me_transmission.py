@@ -41,7 +41,7 @@ def clone_and_export(data_obj, dest_path, time_shift_ps=0.0):
 
 
 # ── Data paths ──────────────────────────────────────────
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\chris'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\denis'
@@ -54,11 +54,13 @@ data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans'
 config: dict = {
     "general": {
         'show_graph': False,
-        'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
+        'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
         'preprocess_data': True,        # run the preprocessing steps (baseline, window, FFT) before transfer function
-        'save_database': True,          # save the dataset database after processing
-        'save_session': False,          # True (default dir) or a path -> write a replayable .thzbundle
+        'save_database': False,          # save the dataset database after processing
+        'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': '',            # free-text notes stored in the bundle
+        'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
+        'uncertainty_draws': 200,       # MC draws for the above
     },
     "resolution": {
         # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
@@ -69,6 +71,7 @@ config: dict = {
         "broadening_factor": 1.0,   # >1 (e.g. 2.0) for the conservative Hann main-lobe width
     },
     "sample": {
+        # "thickness_m": 492e-6,        # silicon wafer thickness (sets n; your calibration knob)
         "thickness_m": 492e-6,        # silicon wafer thickness (sets n; your calibration knob)
     },
     "regions": {
@@ -113,7 +116,7 @@ config: dict = {
     },
     "drude": {
         # Headless Drude fit + KK-consistent thickness calibration (see the stage below).
-        "enabled": True,
+        "enabled": False,
         "fit_band_thz": (0.35, 2.5),      # band for the joint sigma_1+sigma_2 Drude fit
         "sample": None,                   # substring of the CONDUCTIVE wafer, e.g. 'n-type'
         "optimize_thickness": False,      # scan d for the KK-consistent value, adopt it
@@ -181,6 +184,18 @@ thz.compute_transfer_uncertainty(dataset)
 thz.apply_instrument_resolution(dataset, config)
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+
+# --- MONTE-CARLO UNCERTAINTY PROPAGATION (opt-in) ---
+# Pushes the transfer-function uncertainty (transfer_H_sigma / transfer_phase_sigma) through the
+# SAME invert+derive, giving error bars on n/k/eps/sigma (shown in the viewer, written to the CSV).
+# NOTE: additive-noise-only input -> optimistic lower bound (see uncertainty.py docstring).
+if config['general'].get('propagate_uncertainty', False):
+    from dataset_core.adapters import uncertainty
+    uncertainty.propagate_uncertainty(
+        dataset,
+        uncertainty.make_transmission_reinvert(config['sample']['thickness_m']),
+        n_draws=config['general'].get('uncertainty_draws', 200),
+    )
 
 # --- DRUDE FIT + KK-CONSISTENT THICKNESS (headless; opt-in) ---
 # sigma_2 is a small difference of large numbers, so it is hypersensitive to d. The

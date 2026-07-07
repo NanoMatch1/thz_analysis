@@ -33,14 +33,27 @@ pipeline_registry.activate_recording()
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
 data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export'
 
 
 # ── Configuration ───────────────────────────────────────
 config: dict = {
     "general": {
-        'show_graph': False,
+        'show_graph': True,
+        'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
+        'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
+        'save_database': False,          # save the dataset database after processing
+        'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
+        'session_notes': '',            # free-text notes stored in the bundle
+    },
+    "resolution": {
+        # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
+        # n_fft above oversamples that by ~16x (sinc interpolation, not real detail).
+        # Plots ALWAYS place markers on the independent-resolution grid; the flag below
+        # additionally DECIMATES the stored n/k/sigma/H arrays to that grid.
+        "limit_to_instrument_resolution": True,
+        "broadening_factor": 1.0,   # >1 (e.g. 2.0) for the conservative Hann main-lobe width
     },
     "geometry": {
         "theta_external_deg": 45.0, # Maybe this is actually closer to 48 or the other way   # external incidence angle (air -> sample)
@@ -51,14 +64,7 @@ config: dict = {
         # Optional (start_ps, end_ps) to constrain the peak search; None = whole trace.
         "pulse": None,
     },
-    "resolution": {
-        # True instrument resolution = 1/T_res, T_res = the SHORTER reflection window.
-        # n_fft above oversamples that by ~16x (sinc interpolation, not real detail).
-        # Plots ALWAYS place markers on the independent-resolution grid; the flag below
-        # additionally DECIMATES the stored n/k/sigma/H arrays to that grid.
-        "limit_to_instrument_resolution": True,
-        "broadening_factor": 1.0,   # >1 (e.g. 2.0) for the conservative Hann main-lobe width
-    },
+
     "centering": {
         # Recalibration: reset every pulse to a common peak T0 (removes the relative
         # timing). Use it to SIMULATE correcting the delay from angular misalignment —
@@ -70,7 +76,7 @@ config: dict = {
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 4,    # fixed half-width — SAME window for every pulse, no shift
+        "half_width_ps": 5,    # fixed half-width — SAME window for every pulse, no shift
     },
     "fft": {
         "norm": "backward",
@@ -110,11 +116,16 @@ config: dict = {
         "eps_background": 11.7,
     },
     "drude": {
-        # Headless joint sigma_1+sigma_2 Drude fit (see the stage after derive_eps_sigma).
+        # Headless Drude fit + KK-consistent thickness calibration (see the stage below).
         "enabled": False,
-        "fit_band_thz": (0.35, 1.6),
+        "fit_band_thz": (0.35, 2.5),      # band for the joint sigma_1+sigma_2 Drude fit
+        "sample": None,                   # substring of the CONDUCTIVE wafer, e.g. 'n-type'
+        "optimize_thickness": False,      # scan d for the KK-consistent value, adopt it
+        "thickness_bounds_m": (480e-6, 520e-6),
+        "slider": True,                  # open the interactive d slider GUI
     },
 }
+
 
 # import acquisition_editor
 # acquisition_editor.process_directory(data_dir)
@@ -244,7 +255,8 @@ if config.get('drude', {}).get('enabled', False):
 # frequency-domain products exist, so they all land on the same decimated grid.
 thz.apply_instrument_resolution(dataset, config)
 
-dataset.save_database()
+if config['general']['save_database']:
+    dataset.save_database()
 
 # --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in): set config['general']['save_session'] to a path
 #     or True. Reopen with session_bundle.load_session (fast) or replay_recipe (recompute). ---
