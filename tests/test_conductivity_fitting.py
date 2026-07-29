@@ -70,6 +70,27 @@ class TestJointDrudeFit(unittest.TestCase):
         self.assertGreater(r2_clean, 0.999)
         self.assertLess(r2_bad, r2_clean)
 
+    def test_tau_floor_prevents_collapse(self):
+        """Flat sigma_1 (constant, zero sigma_2) pulls tau->0; the floor must catch it."""
+        freq, mask = _make_freq_mask()
+        flat = np.full(freq.size, 50.0, dtype=complex)   # constant real, zero imag
+        floored = cfit.joint_drude_fit(freq, flat, mask, fit_band_thz=(0.3, 2.0),
+                                       tau_min=1e-14)[0]
+        free = cfit.joint_drude_fit(freq, flat, mask, fit_band_thz=(0.3, 2.0),
+                                    tau_min=1e-16)[0]
+        # the floored fit respects the physical bound; the un-floored one collapses below it
+        self.assertGreaterEqual(floored.param_values['tau'], 1e-14 * 0.999)
+        self.assertLess(free.param_values['tau'], floored.param_values['tau'])
+
+    def test_planted_recovery_unaffected_by_default_floor(self):
+        """A physical planted tau (>> floor) must still be recovered with the default floor on."""
+        freq, mask = _make_freq_mask()
+        omega = 2 * np.pi * freq
+        planted = drude_conductivity(omega, 320.0, 1.8e-13)   # tau=180 fs >> 10 fs floor
+        result = cfit.joint_drude_fit(freq, planted, mask, fit_band_thz=(0.3, 2.0))[0]
+        self.assertAlmostEqual(result.param_values['tau'], 1.8e-13, delta=2e-15)
+        self.assertGreater(result.r_squared, 0.999)
+
 
 class TestOptimizeGeometry(unittest.TestCase):
     def _build_dataset(self):

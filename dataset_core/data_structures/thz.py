@@ -28,7 +28,6 @@ from typing import Optional, Union
 _SOURCE_TIME_SCALE = 1e-12
 _S_TO_PS = 1e12
 
-
 @dataclass(frozen=True)
 class TimeDomainStats:
     time: np.ndarray                 # (N_time,)
@@ -233,6 +232,11 @@ class THzData:
         print("processing_dict: dict - Stores processed data at various steps.")
         print("current_state: str - Tracks whether current data is time or frequency domain.")
         print("help: property - Prints this help message.")
+
+    @property
+    def processing(self):
+        '''Returns all the keys of the processing dict for quick viewing.'''
+        return list(self.processing_dict.keys())
 
     def __getitem__(self, key):
         """

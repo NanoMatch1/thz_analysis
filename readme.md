@@ -8,6 +8,9 @@ interactive tools needed to go from raw `.acc` multi-scan acquisitions to n, k,
 ε, and σ(ω).
 
 **Companion documents** (read these alongside this file):
+- `docs/cnt_reflection_measurement_brief.md` — **why the CNT reflective-sample measurement
+  is hard**, every geometry/trick tried, and where it stands. Start here for the CNT
+  problem; `docs/README.md` maps the full documentation set.
 - `ANALYSIS_NOTES.md` — physics decisions, gotchas, validation results, and the
   rationale behind every non-obvious design choice. Intended to seed future
   tutorial / user-guide docs. **Read this before touching inversion or phase handling.**
@@ -316,10 +319,14 @@ container suites), thz-core 180 pass (incl. `test_remove_phase_offset.py`).
 ## For AI agents
 
 ### Files to read first
-1. `ANALYSIS_NOTES.md` — **required** before modifying inversion, phase handling,
+1. `docs/cnt_reflection_measurement_brief.md` — **why measuring highly reflective (CNT)
+   samples is hard**, every geometry/trick tried, and the current verdict. The single
+   orientation doc for the CNT reflection problem; read this to get up to speed before
+   evaluating a technical idea. (`docs/README.md` maps all documentation.)
+2. `ANALYSIS_NOTES.md` — **required** before modifying inversion, phase handling,
    or geometry logic
-2. `dataset_core/adapters/thz_adapter.py` — every pipeline step lives here
-3. `run_me_dataset_core.py` — current working pipeline
+3. `dataset_core/adapters/thz_adapter.py` — every pipeline step lives here
+4. `run_me_dataset_core.py` — current working pipeline
 
 ### Architecture rules
 - `thz_core` is pure science (arrays in, arrays out, no file I/O, no DataSet).

@@ -556,9 +556,52 @@ Samuel spotted two data-analysis artifacts and both were real bugs.
   new grazing regression + updated zero-gap-noop; 196 nested incl. the F22 p-pol round-trip that
   replaced the stale `not_implemented` assertion).
 
+### F30 — p-pol grazing-root collapse is triggered BY removing the front-pulse timing offset, not by a residual one; fixed in the root picker *(2026-07-09)*
+**Status: CURRENT** (extends F25/F26/F29). New MINTS 2026-07-07 doped **n-type** Si control
+(pressed in the SiO₂ window, p-pol) inverted fine on the PLAIN back ratio (n≈3.14–3.20) but
+railed to the grazing root **n = n₁·sinθ = 0.707** the moment `self_phase` (front-pulse phase
+referencing) was on. A previous FZ (high-resistivity) Si set worked in all modes.
+- **Mechanism (diagnosed, reproduced headlessly).** `self_phase` forms `H=(Y2_s/Y2_r)·(C/|C|)`,
+  `C=Y1_r/Y1_s` — it multiplies H by the FIRST(front)-reflection phase difference between
+  sample and reference. The MINTS sample & reference are separate acquisitions with a ~47 fs
+  front-pulse timing drift (arg(C) linear-through-origin ⇒ a *legitimate* offset). Removing it
+  rotates arg(H) onto ≈−π (Si is higher-index than SiO₂ ⇒ real-negative r), i.e. **Im(r) crosses
+  0**. Being near-lossless AND high-index, the sample sits ON the p-pol root-swap boundary (F26):
+  the physical high-index root then reads as slight gain (Im>0) and the F29 global passivity vote
+  collapses the whole band onto the passive **grazing twin**.
+- **Samuel's fix hypothesis (eat the ~47 fs≈1-sample delay by a clean integer time-shift + crop,
+  via a new `align_to_reference(crop_to_overlap=True)`) was DISPROVEN.** A time-shift sweep on the
+  sample spectra shows the flip happens *exactly when the offset is fully eaten* (−47/−50 fs →
+  0.723), identical to `self_phase`; the plain ratio only survives because the *uncorrected* 47 fs
+  keeps arg(H) a hair short of π. **Removing the offset (by ANY method — self_phase, cross-corr,
+  crop) is the trigger, not the cure.** The physical high-index root (n≈3.3) is PRESENT in the
+  corrected H but unpicked; the twin degenerates to n₁sinθ.
+- **Real fix = the root picker, not the timing stage.** `thz_core.invert._invert_p_pol_index`
+  now applies a **physicality override**: n₁·sinθ is the evanescent/TIR floor, so if the passivity
+  vote lands at/below it while the other quadratic branch is genuinely high-index, take the
+  high-index branch (even if it reads slight gain k<0 — an honest "phase over-rotated / residual
+  gap" flag, far better than 0.707). Additive: it never overrides a vote that already picked
+  high-index, so every conductor / low-loss-dielectric round trip is unchanged. MINTS self_phase
+  now returns **n≈3.30**; FZ unchanged (3.44). Regression test
+  `test_p_pol_grazing_override_when_physical_root_reads_as_gain` (synthetic reproduces the exact
+  collapse: old vote picks grazing twin, override holds n=3.28). Tests: dataset_core 204,
+  nested thz_core 193 (+invert 24) pass.
+- **New diagnostic** `thz.plot_first_reflection_phase_diagnostic` (adapter, wired into
+  run_me_low-level behind `general.selfref_phase_diagnostic`): shows front(Y1) & back(Y2)
+  magnitudes, arg(C) with a timing-fit, arg(H) plain-vs-self_phase, **Im(r) with the Im(r)=0
+  root-swap line (the smoking gun)**, |H|, and n both ways vs grazing/Si guides; prints a
+  `GRAZING-ROOT FLIP` flag. Note: |C| and `selfref_quality` (std|C|) MISS this — the front spots
+  match in amplitude (|C|≈0.96 both sets); the signal is entirely in front-pulse PHASE.
+- **Caveat for the operator:** with the picker fixed, `self_phase` returns the physical branch —
+  but a k<0 output is the flag that arg(H) is slightly over-rotated (residual gap / imperfect
+  timing). Use ONE timing correction (self_phase alone on the shared axis is cleanest), not
+  self_phase + align together.
+
 ---
 
 ## Diagnostics & tools built for this work
+- **`plot_first_reflection_phase_diagnostic`** — front-reflection phase + the self_phase p-pol
+  grazing-root-flip check (Im(r)=0 root-swap panel) [F30].
 - **`selfref_quality`** — flags front-spot drift via std(|C|) (window self-referencing).
 - **`min_one_plus_r`** floor in `invert_nk_reflection` — masks the r=−1 blow-up; warns on |H|>1 [F6].
 - **`detrend_transfer_phase`** — experimental linear-phase removal, to *see* the F5 spikes vanish.

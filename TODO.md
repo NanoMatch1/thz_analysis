@@ -28,6 +28,23 @@
   - Remove hardcoded `database_dir` default path (`C:\Users\Samuel\Data\database`) — should be injected or read from config.
   - Deduplicate pickle serialisation/deserialisation logic shared with `save_state` / `load_state`.
 
+## dataset_core — coupling / dependency audit
+
+- [ ] **Investigate the degree of coupling between the persistence/data structures
+  and refactor toward looser dependencies.** Prompted by the catalogue-over-bundles
+  design (2026-07-21). Audit the interfaces between: `DataSet` and its services
+  (`DataService`, grouping, `DatabaseService`); the persistence trio
+  (`session_bundle`, `pipeline_registry` replay, `save_database`/`save_state`) and
+  whether they share a serialisation contract or each re-implement one; the adapters'
+  reliance on `processing_dict` well-known keys (implicit contract — is it documented
+  / typed anywhere?); and how much the catalogue/viewer layers would have to import
+  to answer a query. Goal: identify interfaces that force the same info in two places
+  or that pull in heavy runtime just to read metadata, and propose targeted
+  decouplings (e.g. a shared snapshot serialiser, a declared `processing_dict`
+  schema, a metadata-only read path that never imports `DataSet`). Deliver as a short
+  findings doc + ranked refactor candidates before changing code. See design
+  philosophy #1 (pure-core / thin-adapter) — this audit checks how well we hold to it.
+
 ## dataset_core / thz-core — windowing
 
 - [ ] **Peak-centered time gating in `window_time`.** `core.window_time` only gates

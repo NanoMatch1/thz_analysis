@@ -155,6 +155,32 @@ class TestSessionWorkflow(unittest.TestCase):
                 self._ntype_sigma(reloaded), self._ntype_sigma(self.dataset), equal_nan=True,
             )
 
+    def test_fit_result_round_trips_through_bundle(self):
+        # A fit stored in processing_dict must survive save_session -> load_session (so fits
+        # travel in the bundle and reappear as the viewer overlay).
+        from dataset_core.adapters import conductivity_fitting as cfit
+        for fn, obj in self.dataset.data.data_dict.items():
+            if "n-type" in fn.lower():
+                pd = obj.processing_dict
+                result, _ = cfit.joint_drude_fit(pd["fft_freq"], pd["sigma"],
+                                                 pd.get("transfer_mask"), fit_band_thz=(0.35, 1.6))
+                pd["fit_result"] = result
+                planted = result
+                target = fn
+                break
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = os.path.join(tmp, "run.thzbundle")
+            session_bundle.save_session(self.dataset, bundle)
+            reloaded = session_bundle.load_session(bundle)
+            restored = reloaded.data.data_dict[target].processing_dict.get("fit_result")
+            self.assertIsNotNone(restored)
+            self.assertEqual(restored.param_values.keys(), planted.param_values.keys())
+            self.assertAlmostEqual(restored.param_values["sigma_dc"],
+                                   planted.param_values["sigma_dc"], places=6)
+            # and the report renders the fit
+            report = open(os.path.join(bundle, "report.md"), encoding="utf-8").read()
+            self.assertIn("## Fits", report)
+
     def test_replay_reproduces_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundle = os.path.join(tmp, "run.thzbundle")

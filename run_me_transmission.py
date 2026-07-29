@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import acquisition_editor
 from dataset_core import DataSet
 from dataset_core.adapters import thz_adapter as thz
-from dataset_core.adapters import pipeline_registry, session_bundle
+from dataset_core.adapters import pipeline_registry, session_bundle, fitting
 
 # Record every pipeline call into dataset.recipe so the run is replayable/reopenable later.
 # Must run BEFORE the pipeline calls (it wraps the thz.* stages + DataSet setup methods).
@@ -42,7 +42,8 @@ def clone_and_export(data_obj, dest_path, time_shift_ps=0.0):
 
 # ── Data paths ──────────────────────────────────────────
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
+data_dir = r'C:\Users\Samuel\Data\THz\calibration\2026-06-01_cryostat_windows'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans\ntype'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\chris'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\denis'
 # Chris data centering info:
@@ -72,7 +73,7 @@ config: dict = {
     },
     "sample": {
         # "thickness_m": 492e-6,        # silicon wafer thickness (sets n; your calibration knob)
-        "thickness_m": 492e-6,        # silicon wafer thickness (sets n; your calibration knob)
+        "thickness_m": 491.03e-6,        # silicon wafer thickness (sets n; your calibration knob)
     },
     "regions": {
         # Optional (start_ps, end_ps) to constrain the peak search; None = whole trace.
@@ -122,6 +123,14 @@ config: dict = {
         "optimize_thickness": False,      # scan d for the KK-consistent value, adopt it
         "thickness_bounds_m": (480e-6, 520e-6),
         "slider": True,                  # open the interactive d slider GUI
+    },
+    "fit": {
+        # Interactive fit GUI (with the MC error bars); results save into the bundle.
+        "interactive": True,
+        "quantity": "sigma",              # 'sigma' | 'eps' | 'n'
+        "model": "drude_conductivity",
+        "sample": None,                   # substring filter, e.g. 'n-type'
+        "fit_band_thz": (0.35, 1.6),
     },
 }
 
@@ -224,6 +233,23 @@ if config.get('drude', {}).get('enabled', False):
             dataset, drude_cfg.get('thickness_bounds_m', (480e-6, 520e-6)),
             sample=drude_cfg.get('sample'), fit_band_thz=drude_cfg.get('fit_band_thz'),
         )
+    plt.show()
+
+# --- INTERACTIVE FITTING (opt-in) — launch the fit GUI with the MC error bars, then persist. ---
+# Pulls sigma + the propagated error bars straight from the pipeline; each FitResult is written
+# back into processing_dict so it saves in the bundle and shows as the viewer's Drude overlay.
+# Runs BEFORE save_session so the fits travel with the bundle. (fit_conductivity above is the
+# headless/auto alternative; this is the hands-on GUI.)
+if config.get('fit', {}).get('interactive', False):
+    from dataset_core.adapters import fitting
+    fit_cfg = config['fit']
+    fitting.fit_interactive(
+        dataset,
+        quantity=fit_cfg.get('quantity', 'sigma'),
+        model=fit_cfg.get('model', 'drude_conductivity'),
+        samples=fit_cfg.get('sample'),
+        fit_band_thz=fit_cfg.get('fit_band_thz'),
+    )
 
 if config['general'].get('save_database', True):
     dataset.save_database()
@@ -241,4 +267,6 @@ if _session_target:
     session_bundle.save_session(dataset, _bundle_dir, notes=config['general'].get('session_notes', ''))
 
 # --- inspect / launch the interactive result viewer ---
-thz.result_viewer(dataset)
+# thz.result_viewer(dataset)
+thz.launch_results_viewer(dataset)
+# fitting.fit_interactive(dataset, quantity='sigma', model='drude_conductivity', samples=None, fit_band_thz=(0.35, 1.6))

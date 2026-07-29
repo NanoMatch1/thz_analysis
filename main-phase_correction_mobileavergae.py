@@ -26,7 +26,7 @@ path = Path(r"C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export")
 # reference = path / "Si2-90.dat"
 reference = path / "reference_gold_A-100_S-pol.dat"
 sample = path / "sample_silicon-2-N-type_A-100_S-pol.dat"
-sample = path / "sample_silicon-1-SI_A-100_S-pol.dat"
+# sample = path / "sample_silicon-1-SI_A-100_S-pol.dat"
 
 # ============================================================
 # TIPO DE REFERENCIA
@@ -89,7 +89,7 @@ manual_phase_delay_ps = 0.0
 # ============================================================
 
 apply_nk_moving_average = True
-nk_moving_average_points = 1
+nk_moving_average_points = 3
 
 nk_for_optics_mode = "fit"       # "raw", "smooth" o "fit"
 

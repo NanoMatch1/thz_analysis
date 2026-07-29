@@ -30,11 +30,13 @@ pipeline_registry.activate_recording()
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Data paths ──────────────────────────────────────────
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
-data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
+# data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export\raw'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
+# data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
 
 
 # ── Configuration ───────────────────────────────────────
@@ -45,7 +47,7 @@ config: dict = {
         'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
         'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
-        'session_notes': '',            # free-text notes stored in the bundle
+        'session_notes': 'gold misalign tests',            # free-text notes stored in the bundle
         'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
         'uncertainty_draws': 200,       # MC draws for the above
     },
@@ -99,9 +101,9 @@ config: dict = {
         "min_contiguous_bins": 3,
     },
     "phase_kk": {
-        "enabled": True,  # Kramers-Kronig phase correction (arXiv:2412.18662)
+        "enabled": False,  # Kramers-Kronig phase correction (arXiv:2412.18662)
         "f_end_thz": None,       # KK truncation freq; None -> top of the trusted SNR band
-        "fit_band_thz": (1,5),    # None -> (0.15, 0.85) * f_end
+        "fit_band_thz": (0.5,4),    # None -> (0.15, 0.85) * f_end
         "use_snr_mask": True,
         # "theta_deg": None,  # incidence angle for the REPORTED shift l only; None -> config['geometry']['theta_external_deg']
     },
@@ -126,8 +128,15 @@ config: dict = {
         "thickness_bounds_m": (480e-6, 520e-6),
         "slider": True,                  # open the interactive d slider GUI
     },
+    "fit": {
+        # Interactive fit GUI (with the MC error bars); results save into the bundle.
+        "interactive": False,
+        "quantity": "sigma",              # 'sigma' | 'eps' | 'n'
+        "model": "drude_conductivity",
+        "sample": None,                   # substring filter, e.g. 'n-type'
+        "fit_band_thz": (0.35, 1.6),
+    },
 }
-
 
 # import acquisition_editor
 # acquisition_editor.process_directory(data_dir)
@@ -277,6 +286,16 @@ thz.apply_instrument_resolution(dataset, config)
 if config['general']['save_database']:
     dataset.save_database()
 
+thz.launch_results_viewer(dataset)
+plt.show()
+# --- INTERACTIVE FITTING (opt-in): fit GUI with the MC error bars; results save in the bundle. ---
+if config.get('fit', {}).get('interactive', False):
+    from dataset_core.adapters import fitting
+    _fit_cfg = config['fit']
+    fitting.fit_interactive(dataset, quantity=_fit_cfg.get('quantity', 'sigma'),
+                            model=_fit_cfg.get('model', 'drude_conductivity'),
+                            samples=_fit_cfg.get('sample'), fit_band_thz=_fit_cfg.get('fit_band_thz'))
+
 # --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in): set config['general']['save_session'] to a path
 #     or True. Reopen with session_bundle.load_session (fast) or replay_recipe (recompute). ---
 _session_target = config['general'].get('save_session', False)
@@ -288,4 +307,3 @@ if _session_target:
 # --- inspect / launch the interactive result viewer ---
 # thz.result_viewer(dataset)
 # dataset.save_database()
-thz.launch_results_viewer(dataset)

@@ -61,6 +61,7 @@ CORE_STAGE_NAMES: tuple[str, ...] = (
     "phase_correct_kk",
     "selfref_quality",
     "invert_nk_reflection",
+    "reconstruct_extinction_kk",
     "deembed_air_gap_reflection",
     # shared post-processing
     "compute_instrument_resolution",

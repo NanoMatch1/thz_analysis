@@ -80,6 +80,7 @@ def joint_drude_fit(
     initial: dict | None = None,
     bounds: dict | None = None,
     fixed: dict | None = None,
+    tau_min: float | None = 1e-14,
     max_nfev: int = 20000,
 ) -> tuple[FitResult, dict]:
     """Fit ONE Drude model to the complex conductivity (real + imag jointly).
@@ -87,6 +88,14 @@ def joint_drude_fit(
     This is the KK-consistency primitive: ``fit_component='both'`` weights sigma_1 and
     sigma_2 equally, so a good fit means one (sigma_dc, tau) explains BOTH — which only
     happens at the correct geometry.  A high R^2 here is the degeneracy-breaker.
+
+    ``tau_min`` (default ~10 fs) sets a physical lower bound on the scattering time. The engine
+    default (1e-16 s) is effectively zero, so at a WRONG thickness the joint fit can rail
+    ``tau -> 0`` — which flattens sigma_1 to a constant (no roll-off) and reports a spuriously
+    "converged" but meaningless fit. The floor is a robustness guard (a genuinely sub-10-fs tau
+    is unphysical for these doped semiconductors and usually signals fit collapse), NOT a
+    substitute for the correct geometry — the joint R^2 is still the KK-consistency signal. Pass
+    ``tau_min=None`` (or your own ``bounds['tau']``) to opt out.
 
     Parameters
     ----------
@@ -117,10 +126,22 @@ def joint_drude_fit(
             float(fit_band_thz[0]) / _HZ_TO_THZ,
             float(fit_band_thz[1]) / _HZ_TO_THZ,
         )
-    if initial:
-        fit_cfg["initial_params"] = dict(initial)
-    if bounds:
-        fit_cfg["bounds"] = {k: [float(v[0]), float(v[1])] for k, v in bounds.items()}
+
+    # tau lower-bound guard for the tau-bearing models (unless the caller overrides tau's bound).
+    fit_bounds = {k: [float(v[0]), float(v[1])] for k, v in bounds.items()} if bounds else {}
+    model_has_tau = model in ("drude_conductivity", "drude_smith_conductivity")
+    if tau_min and model_has_tau and "tau" not in fit_bounds:
+        fit_bounds["tau"] = [float(tau_min), 1e-10]
+
+    fit_initial = dict(initial) if initial else None
+    if fit_initial and tau_min and model_has_tau and "tau" in fit_initial:
+        # curve_fit requires the initial guess to lie within the bounds.
+        fit_initial["tau"] = max(float(fit_initial["tau"]), float(tau_min))
+
+    if fit_initial:
+        fit_cfg["initial_params"] = fit_initial
+    if fit_bounds:
+        fit_cfg["bounds"] = fit_bounds
     if fixed:
         fit_cfg["fixed_params"] = dict(fixed)
 
