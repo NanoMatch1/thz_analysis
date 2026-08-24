@@ -105,3 +105,7 @@
     range from `trusted_band_mask`) through the adapter into `invert_nk(snr_weights=)`
     and the KK calls, so the robustness is on by default in the pipeline rather than
     opt-in at the core API.
+
+## thz-core clean-up
+- [ ] **Refactor everything**
+  - Error bars in plot_current don't propagate correctly after the fft.

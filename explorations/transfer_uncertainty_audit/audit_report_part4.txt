@@ -1,0 +1,30 @@
+================================================================================================
+DOES THE ESTIMATED FLOOR FALL AS 1/sqrt(N_scans), THE WAY A REAL NOISE FLOOR MUST?
+================================================================================================
+  tail floor  = median |Y_avg| over the top 25% of the frequency axis (what the pipeline uses)
+  meas. noise = median over the same band of std_across_scans/sqrt(N) (the true random part)
+  ideal       = the 1/sqrt(N) scaling a genuine additive floor would follow
+
+--- reference_CNT_undoped-19mm.acc  (44 scans total)
+     N used   tail floor  meas. noise  floor/noise  floor vs N=all  ideal 1/sqrtN
+          4   5.7763e-03   1.9674e-04         29.4           1.000          1.000
+          8   4.2754e-03   1.0249e-03          4.2           0.740          0.707
+         16   3.4828e-03   7.0572e-04          4.9           0.603          0.500
+         32   3.4401e-03   4.5900e-04          7.5           0.596          0.354
+         44   2.6803e-03   4.4506e-04          6.0           0.464          0.302
+
+--- sample_CNT_doped-12mm.acc  (111 scans total)
+     N used   tail floor  meas. noise  floor/noise  floor vs N=all  ideal 1/sqrtN
+          4   2.8715e-04   1.9104e-03          0.2           1.000          1.000
+          8   8.3028e-04   1.1320e-03          0.7           2.891          0.707
+         16   1.9772e-03   6.4059e-04          3.1           6.886          0.500
+         32   2.4995e-03   4.3249e-04          5.8           8.705          0.354
+         64   2.5460e-03   2.9350e-04          8.7           8.866          0.250
+        111   1.7258e-03   2.5946e-04          6.7           6.010          0.190
+
+--- sample_CNT_doped-7mm.acc  (29 scans total)
+     N used   tail floor  meas. noise  floor/noise  floor vs N=all  ideal 1/sqrtN
+          4   4.1013e-03   7.6893e-04          5.3           1.000          1.000
+          8   4.7901e-03   3.9259e-04         12.2           1.168          0.707
+         16   4.0486e-03   3.7655e-04         10.8           0.987          0.500
+         29   3.2156e-03   4.9735e-04          6.5           0.784          0.371

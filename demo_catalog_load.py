@@ -96,7 +96,7 @@ def main() -> None:
 
     # ── step 3: query for the analysis you want ───────────────────────────────
     # "reflection runs that have a stored fit" — you don't need to know the path.
-    matches = catalog.find(measurement_type="2026-06-30_ref_testing", has_fits=True)
+    matches = catalog.find(measurement_type="reflection", has_fits=True)
     print(f"[3] find(measurement_type='reflection', has_fits=True) -> {len(matches)} match(es):")
     for record in matches:
         print("     " + describe_record(record))

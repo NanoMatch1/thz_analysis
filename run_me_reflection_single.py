@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,7 +37,11 @@ pipeline_registry.activate_recording()
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
-# data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
+data_dir = r'C:\Users\Samuel\Data\2026-08-07_cone_testing\export\test'
+data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-20_CNT-paper-doped_2'
+data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-20_CNT-paper-doped_2\export'
+data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-21_CNT-paper-doped_3\linescan'
+data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-21_CNT-paper-doped_3\comparison'
 
 
 # ── Configuration ───────────────────────────────────────
@@ -47,7 +52,7 @@ config: dict = {
         'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
         'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
-        'session_notes': 'gold misalign tests',            # free-text notes stored in the bundle
+        'session_notes': 'CNT sample doped inert holder',            # free-text notes stored in the bundle
         'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
         'uncertainty_draws': 200,       # MC draws for the above
     },
@@ -155,6 +160,8 @@ dataset.grouping.show_matches()
 # --- baseline removal (operates on the single main trace) ---
 thz.subtract_baseline(dataset)
 
+if config['general']['show_graph']:
+    dataset.plot_current()
 # --- OPTIONAL centering recalibration: reset all peaks to a common T0. ---
 # OFF by default, so the raw misalignment delay is preserved into H (the default demo).
 # Turn ON (config['centering']['recalibrate']) to SIMULATE correcting the angular-
@@ -181,7 +188,6 @@ thz.window_single_pulse_fixed_width(
     region_ps=config['regions'].get('pulse'),
     show_graph=config['general']['show_graph'],
 )  # window config read from dataset.config (single source of truth)
-dataset.plot_current()
 
 # --- FFT every trace onto ONE frequency grid (same n_fft -> identical grid). The
 #     fixed-width window keeps the FULL trace length, and rfft(y, n) truncates when
@@ -196,8 +202,61 @@ assert shared_n_fft >= required_n_fft, (
 thz.fft_spectrum(dataset, n_fft=shared_n_fft)
 
 
-if config['general']['show_graph']:
-    thz.plot_fft(dataset, normalise=False, scale='')
+def linescan_plots(dataset: DataSet, normalise: bool = False):
+    """Plot the FFT spectra for each linescan position, and the amplitude at selected THz frequencies across the linescan."""
+    data_dict = dataset.grab_data('fft')
+
+
+    def keyto(filename: str) -> float:
+        """Extract the (possibly negative) linescan position in mm from the filename."""
+        match = re.search(r'(-?\d+(?:\.\d+)?)mm\.acc$', filename)
+        if match is None:
+            raise ValueError(f"Could not parse a linescan position (e.g. '-5mm.acc') from filename: {filename!r}")
+        return float(match.group(1))
+
+    data_dict = {keyto(filename): value for filename, value in data_dict.items()}
+    sorted_keys = sorted(data_dict.keys())
+
+    fft_freq = data_dict[sorted_keys[0]]['fft_freq']
+    # amplitude (not raw complex value) at each frequency bin, one column per linescan position
+    amplitude_matrix = np.column_stack(
+        [np.abs(data_dict[key]['fft_spectrum']) for key in sorted_keys]
+    )
+
+    thz_values = [1.13, 1.5, 2, 2.5, 3, 4, 5]
+    thz_indices = [np.argmin(np.abs(fft_freq - thz_value * 1e12)) for thz_value in thz_values]  # THz -> Hz
+
+    fig, ax = plt.subplots(1, 2)
+
+    cmap = plt.get_cmap('viridis')
+    colours = cmap(np.linspace(0, 1, len(sorted_keys)))
+    for index, key in enumerate(sorted_keys):
+        data = data_dict[key]
+        ax[0].plot(data['fft_freq'] / 1e12, np.abs(data['fft_spectrum']), label=key, color=colours[index])
+
+    ax[0].set_yscale('log')
+    ax[0].set_xlabel('Frequency (THz)')
+    ax[0].set_ylabel('Amplitude')
+    ax[0].set_title('FFT Spectra for each linescan position')
+    ax[0].legend()
+
+    colours = cmap(np.linspace(0, 1, len(thz_indices)))
+    for colour, thz_freq, thz_index in zip(colours, thz_values, thz_indices):
+        intensity = amplitude_matrix[thz_index, :]
+        if normalise:
+            intensity = intensity / np.max(intensity)  # normalise to the maximum value for better comparison
+        ax[1].plot(sorted_keys, intensity, label=f'{thz_freq} THz', color=colour)
+    ax[1].set_xlabel('Linescan position (mm)')
+    ax[1].set_ylabel('Amplitude {}'.format('(normalised)' if normalise else ''))
+    ax[1].set_title('FFT intensity at THz Frequencies across linescan')
+    ax[1].legend()
+
+    plt.show()
+
+# linescan_plots(dataset, normalise=True)
+
+# if config['general']['show_graph']:
+#     thz.plot_fft(dataset, normalise=False, scale='')
 
 
 # fft_dict = dataset.grab_data('fft')
@@ -237,6 +296,8 @@ if config['phase_kk'].get('enabled', False):
 thz.compute_instrument_resolution(dataset, config)
 thz.compute_transfer_uncertainty(dataset)
 
+thz.plot_fft(dataset, normalise=False, scale='')
+
 # --- reflection-mode inversion: H -> n, k for a single AIR -> sample bounce,
 #     referenced to a gold mirror (geometry='gold': n_incident = 1, r_reference = -1). ---
 thz.invert_nk_reflection(
@@ -246,6 +307,8 @@ thz.invert_nk_reflection(
     polarization=config['geometry']['polarization'],
     r_reference=config['geometry']['r_reference'],
 )
+
+# dataset.plot_current(title='normalised', normalise=True)
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)

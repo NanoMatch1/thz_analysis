@@ -156,17 +156,31 @@ class BaseTHzData:
         self.headers = None
 
     def _resolve_filename(self) -> tuple:
-        # TODO: check if else logic is correct at this indentation level.
-        '''Extracts filename and scan index from headers if available.'''
+        '''Extracts filename and scan index from headers if available.
+
+        Header grammar is ``title <name> acc <scan_number>`` for a scan block inside
+        an .acc file, and ``title <name>`` for a single-trace .dat.  The scan number
+        is therefore the token FOLLOWING 'acc' — not a fixed column — and is None
+        when the header carries no 'acc' marker.
+
+        The whole header list is searched for the title line rather than only the
+        first entry, so a file that leads with another '%' directive still resolves.
+        '''
         for item in self.headers:
-            if 'title' in item.lower():
-                stringlist = item.split(' ') # Assumes format 'title filename ...'
-                title = stringlist[1]
-                scan_index = int(stringlist[4]) if len(stringlist) > 4 else None
-                return title, scan_index
-            else:
-                return 'unknown_file', None
-        return 'unknown_file', None # if header is empty
+            if 'title' not in item.lower():
+                continue
+            tokens = item.split(' ')
+            title = tokens[1] if len(tokens) > 1 else 'unknown_file'
+            scan_index = None
+            if 'acc' in tokens:
+                acc_position = tokens.index('acc')
+                if acc_position + 1 < len(tokens):
+                    try:
+                        scan_index = int(tokens[acc_position + 1])
+                    except ValueError:
+                        scan_index = None
+            return title, scan_index
+        return 'unknown_file', None # if header is empty or has no title line
 
     def _resolve_timestamp(self) -> str:
         '''Extracts timestamp from headers if available.'''

@@ -24,6 +24,9 @@ Orientation documents for this repo. **New here? Read in this order:**
 **docs/** — orientation / reference:
 - `cnt_reflection_measurement_brief.md` — CNT reflective-sample technical brief (this hub's headline doc)
 - `sandwich_extraction_explained.md` — substrate-sandwich (air|sub|sample|sub|air) transmission extraction
+- `quantity_registry.md` — **the single source of truth for displayable/exportable quantities**: how it
+  works, the `Quantity` fields, how to add one (`register(...)`), overlays, and who consumes it (viewer,
+  CSV export, the `display` plotting adapter)
 
 **reports/** — the CNT science narrative (findings log, tutorials, research):
 - `CNT_measurement_lab_notebook.md` — **the never-erased running findings log (`F1`–`F29`)**; current interpretation lives here

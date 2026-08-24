@@ -157,16 +157,19 @@ def _conductivity_fit_component(component: str) -> Callable:
 
 # ── built-in quantities (single source of truth) ─────────────────────────────────
 
+# fft_sigma / fft_phase_sigma are written by thz_adapter.compute_spectrum_uncertainty.
 register(Quantity(
     name="fft_mag", label="FFT magnitude", group="Spectrum", y_label="|FFT|",
     extract=_complex_component("fft_spectrum", "abs"),
-    mask_key="snr_mask", yscale="log", include_references=True, export_header="fft_mag",
+    mask_key="snr_mask", error_key="fft_sigma", yscale="log", include_references=True,
+    export_header="fft_mag",
 ))
 register(Quantity(
     name="fft_phase", label="FFT phase", group="Spectrum", y_label="arg FFT (rad)",
     extract=lambda pd: (None if pd.get("fft_spectrum") is None or _freq(pd) is None
                         else (np.asarray(_freq(pd)), np.unwrap(np.angle(pd["fft_spectrum"])))),
-    mask_key="snr_mask", include_references=True, export_header="fft_phase",
+    mask_key="snr_mask", error_key="fft_phase_sigma", include_references=True,
+    export_header="fft_phase",
 ))
 register(Quantity(
     name="transfer_mag", label="Transfer |H|", group="Transfer function", y_label="|H|",

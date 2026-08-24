@@ -39,9 +39,16 @@ matchbook/thz/
 ├── run_me_dataset_core.py      — main pipeline script (edit file_dir + run)
 ├── ANALYSIS_NOTES.md           — physics decisions and methodology log  ← READ THIS
 ├── TODO.md                     — tracked open work
+├── open_session.py              — reopen a saved .thzbundle via the catalogue; interactive
+│                                  REPL / CLI to browse, replay, fit, export, extract quantities
 ├── dataset_core/
 │   ├── adapters/
-│   │   └── thz_adapter.py      — THE main file: bridges DataSet ↔ thz-core
+│   │   ├── thz_adapter.py      — THE main file: bridges DataSet ↔ thz-core
+│   │   ├── display.py          — reusable registry-driven plotting: plot_quantity,
+│   │   │                          plot_time_domain, get_series (see docs/quantity_registry.md)
+│   │   ├── quantity_registry.py — single source of truth for displayable/exportable quantities
+│   │   ├── session_bundle.py / catalog/ — .thzbundle save/load + rebuildable catalogue index
+│   │   └── fitting.py / conductivity_fitting.py — Drude/Drude-Smith fitting, MC error bars
 │   ├── data_structures/
 │   │   └── thz.py              — THzData container (multi-scan + averaged working trace)
 │   ├── dataset.py              — DataSet, DataService, file loading, grouping
@@ -52,7 +59,9 @@ matchbook/thz/
     ├── test_reflection_pipeline_workflow.py — 5 tests (end-to-end + sub-sample)
     ├── test_segment_preserves_scans.py      — 2 tests (scan preservation)
     ├── test_time_shift_sweep.py             — 6 tests (time-shift sweep/slider)
-    └── test_window_selfref_workflow.py      — 5 tests (self-referencing + characterise_window)
+    ├── test_window_selfref_workflow.py      — 5 tests (self-referencing + characterise_window)
+    └── test_display.py                      — 17 tests (item selection, style resolution,
+                                                 data access, headless figure-build workflow)
 
 matchbook/thz/thz_core/        — nested thz-core repo clone (gitignored here,
                                   tracked as its own repo); imported as
@@ -267,25 +276,24 @@ container suites), thz-core 180 pass (incl. `test_remove_phase_offset.py`).
   (`ANALYSIS_NOTES §11`) carries the front-pulse timing itself and is unaffected;
   the conventional path needs the residual persisted (e.g. a sidecar file or
   header token) or re-measured in phase 2.
-- **n<1 in CNT window reflection inversion** — likely a residual ≈π phase offset.
-  The DC bin of the FFT anchors the display-unwrap at π (trace mean is slightly
-  negative after baseline subtraction), creating a constant phase offset in the
-  reference spectrum. Does not affect H directly, but indicates the phase
-  alignment deserves scrutiny before trusting absolute n.
 - **Window gating spans the full segment** — `core.window_time` has no pulse-centred
   width-based gate. The `alpha` kwarg is silently ignored with `type="hann"` (Hann
   takes no taper parameter). Currently the Hann is applied to the whole segmented
   trace. See `TODO.md` for the planned `gate_width_ps` fix.
-- **Contact gap (CNT-on-glass)** — 0.155–0.18 ps T0 shift changing with 90°
-  rotation indicates a ~33–38 µm air gap (`ANALYSIS_NOTES §9`). This degrades
-  the incident-index conditioning advantage of the window geometry, and it is what
-  drives CNT reflection **n below 1 at high frequency** (a flat linear phase in φ(H),
-  ~0.11–0.13 ps across all CNT-17 rotations — instrumental, not a code bug; the
-  reflection phase code was audited clean, `ANALYSIS_NOTES §9b`). Exact Fabry–Pérot
-  de-embedding is now **prototyped on synthetic data** (`explorations/explore_air_gap_deembedding.py`:
-  `x=(r_meas−r1)/(1−r1·r_meas)` recovers `|r2|` to 1e-16, n,k exactly with known gap d);
-  real-data application + pipeline integration are **pinned/pending** (the weak link is
-  estimating d — must come from the pulse round-trip delay, not the spectrum).
+- **Contact gap (CNT-on-glass) — the dominant limit.** A ~1–20 µm air gap between the
+  pressed CNT paper and the window's back face turns the measured reflection into a
+  Fabry–Pérot etalon rather than a single SiO₂→CNT interface — confirmed instrumental via
+  a flat linear phase in φ(H), not a code bug (`ANALYSIS_NOTES §9/§9b`); this is what
+  drives CNT reflection **n below 1 at high frequency**. Fabry–Pérot de-embedding is
+  implemented (exact single-gap math + an interactive position/width slider explorer wired
+  into `run_me_low-level.py`) and validated on **silicon controls in both s- and
+  p-polarisation** (recovers n≈3.418; gaps measured per-mount at 1–3 µm). **CNT-21 verdict
+  (2026-07-02):** the instrument itself is good to 0.5–2%, but every de-embed model —
+  single-gap, statistical-gap FP, graded EMT — stalls at a smooth ~10% mount-coupling
+  systematic that isn't a gap-model problem; the fibre-anisotropy signal (σ∥ ≫ σ⊥, 2–7×) is
+  robust regardless. The path past this ceiling is sample presentation (HR-Si deposited
+  route), not more inversion math — see `reports/CNT_measurement_lab_notebook.md` (F1–F29)
+  for the full trail.
 
 ### Open work (`TODO.md`)
 - Peak-centred time gating (`gate_width_ps`).
@@ -306,10 +314,12 @@ container suites), thz-core 180 pass (incl. `test_remove_phase_offset.py`).
   `phaseex` intercept removal, done deterministically); group delay preserved
   structurally by `align_to_common_time_axis` (split out of `zero_pad`).
   See `ANALYSIS_NOTES §18`.
+- ~~p-polarisation inversion~~ — closed-form p-pol root-picker in `thz_core.reflection_gap`
+  + `thz.fit_dual_pol_reflection`; validated on silicon in both polarisations as part of the
+  air-gap de-embed work above (F21/F22).
 
 ### Deferred
 - Geometry registry (replace `'gold'`/`'window'` string dispatch).
-- p-polarisation inversion.
 - Per-frequency uncertainty propagation.
 - Feed measured n_SiO₂(ω) (from `characterise_window`) into
   `invert_nk_reflection(n_window=...)` as a per-frequency array.

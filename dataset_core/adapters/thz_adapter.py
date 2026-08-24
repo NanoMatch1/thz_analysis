@@ -1857,9 +1857,16 @@ def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
     # transfer uncertainty (compute_transfer_uncertainty) is self-contained — it needs
     # BOTH the sample and reference per-bin SNR to propagate the ratio error.
     samp_obj.processing_dict['ref_snr_db'] = ref_snr_arr
+    # The scalar spectral floor each SNR was measured against. Stored per spectrum so the
+    # single-spectrum error bars (compute_spectrum_uncertainty) read the same number the
+    # mask and the transfer uncertainty use, rather than re-deriving it.
+    if values.get('samp_noise_floor') is not None:
+        samp_obj.processing_dict['noise_floor'] = float(values['samp_noise_floor'])
     if ref_obj is not None:
         ref_obj.processing_dict['snr_db'] = ref_snr_arr
         ref_obj.processing_dict['snr_mask'] = ref_snr_arr >= snr_thresh
+        if values.get('ref_noise_floor') is not None:
+            ref_obj.processing_dict['noise_floor'] = float(values['ref_noise_floor'])
 
 
 def _contiguous_false_bands(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -3704,10 +3711,81 @@ def apply_instrument_resolution(dataset: DataSet, config: dict | None = None) ->
                     and holder.data.shape[0] == n_freq):
                 holder.data = holder.data[::decimation_factor]
 
+    # Record that the decimation HAPPENED (not merely that it was requested), so plots
+    # can tell an already-decimated grid from an oversampled one — see
+    # _resolution_marker_stride.
+    resolution_cfg['resolution_applied'] = True
+    config['resolution'] = resolution_cfg
+
     print(
         f"[apply_instrument_resolution] decimated frequency-domain products by "
         f"{decimation_factor}x (kept every {decimation_factor}th bin)."
     )
+    return dataset
+
+
+def compute_spectrum_uncertainty(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Per-bin uncertainty on each INDIVIDUAL spectrum (samples and references alike).
+
+    The same additive-noise model ``compute_transfer_uncertainty`` uses for H, exposed one
+    level earlier so a raw FFT can be plotted with the error bars that actually drive
+    everything downstream::
+
+        sigma_|Y|(f) = noise_floor          (flat: white time noise -> flat spectral floor)
+        sigma_arg Y(f) = noise_floor/|Y(f)| (rad, high-SNR small-angle limit; capped at pi)
+
+    Written as ``fft_sigma`` / ``fft_phase_sigma`` so the quantity registry can hand them to
+    the results viewer and ``plot_fft`` without either knowing where they came from. Needs
+    ``transfer_function`` (or ``trusted_band_mask``) to have run — that is what measures the
+    floor.
+
+    Known limitation (measured, not theoretical — see
+    ``explorations/transfer_uncertainty_audit/``)
+    ------------------------------------------------------------------------------------
+    ``noise_floor`` is the median |Y| over the top ``mask.tail_fraction`` of the frequency
+    axis, which is only a noise estimate if the spectrum has actually reached a noise
+    PLATEAU there. On a short record with a sharp pulse it has not: the band is still
+    falling reproducible signal, so the "floor" is set by pulse content rather than by
+    noise. It then (a) sits several times above the true random scatter, (b) does not fall
+    as 1/sqrt(N_scans) when you average more, and (c) differs between two samples measured
+    on the same instrument. The resulting error bars are inflated, increasingly so toward
+    high frequency where they are formed as floor/|Y|. Check the reporter line below: if
+    the spectrum is still decaying through the floor band, treat the bars as an upper
+    bound. The measured cure is to estimate sigma from the repeat scans instead.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    written = 0
+    diagnostics = []
+    for filename, data_obj in dataset.data.items():
+        processing = getattr(data_obj, 'processing_dict', {})
+        spectrum = processing.get('fft_spectrum')
+        floor = processing.get('noise_floor')
+        if spectrum is None or floor is None:
+            continue
+        magnitude = np.abs(np.asarray(spectrum))
+        floor = float(floor)
+        processing['fft_sigma'] = np.full(magnitude.shape, floor)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            processing['fft_phase_sigma'] = np.minimum(floor / magnitude, np.pi)
+        written += 1
+
+        # Is the floor band a noise plateau, or still decaying signal? Compare the first
+        # and last thirds of the band the floor was measured over: a plateau is flat.
+        tail_fraction = float((config.get('mask', {}) or {}).get('tail_fraction', 0.2))
+        tail_points = max(8, int(np.ceil(magnitude.size * tail_fraction)))
+        band = magnitude[-tail_points:]
+        third = max(1, band.size // 3)
+        decay_ratio = float(np.median(band[:third]) / max(np.median(band[-third:]), 1e-30))
+        diagnostics.append((filename, floor, decay_ratio))
+
+    for filename, floor, decay_ratio in diagnostics:
+        note = ("  *** still decaying — floor is signal-limited, bars are an UPPER BOUND ***"
+                if decay_ratio > 2.0 else "")
+        print(f"[compute_spectrum_uncertainty] '{filename}': floor {floor:.3e}, "
+              f"floor-band decay {decay_ratio:.1f}x.{note}")
+    if written == 0:
+        print("[compute_spectrum_uncertainty] no spectral noise floors found "
+              "(run transfer_function first); skipping.")
     return dataset
 
 
@@ -3740,6 +3818,23 @@ def compute_transfer_uncertainty(dataset: DataSet, config: dict | None = None) -
     the measured per-timepoint repeat scatter σ_t(t) (available from the scans, higher
     at the peak) through the windowed DFT: σ_Y(f)² ≈ ½·Σ_t w(t)²·σ_t(t)². That needs
     stderr(t) plumbed through baseline+window (currently dropped) — a documented TODO.
+
+    MEASURED FAILURE MODE (``explorations/transfer_uncertainty_audit/``, 2026-08-20).
+    The floor is only a noise estimate where the spectrum has reached a noise plateau.
+    On a short record with a sharp pulse it has not: the top of the frequency axis is
+    still *reproducible pulse content*, so the floor is set by the signal. Consequences,
+    all confirmed against the individual .acc scans of a 3-file CNT reflection set:
+    the floor sat 4-12x above the true random scatter of the mean in the same band; it
+    did NOT fall as 1/sqrt(N_scans) (it wandered by up to 6x, sometimes upward, as scans
+    were added); and two samples on the same instrument got floors differing by ~2x
+    purely because their pulses differ above 7 THz. Because σ_|H|/|H| is built as
+    floor/|Y|, the error grows like 1/|Y| toward high frequency while the true random
+    error does not — the bars were 2-7x too large above 4 THz for a 111-scan sample and
+    ~10-15x too large across the whole band for a 29-scan one. Reducing instrument noise
+    therefore does not visibly shrink these bars. The cure is to estimate σ from the
+    repeat scans (block/batch-means over ``working_scans``) rather than from a spectral
+    tail; note ``working_scans`` is currently dropped by the first pipeline step (the
+    row count changes), so that plumbing has to be restored first.
     """
     config = config or getattr(dataset, 'config', None) or {}
     for filename, data_obj in dataset.data.items():
@@ -3757,6 +3852,10 @@ def compute_transfer_uncertainty(dataset: DataSet, config: dict | None = None) -
         relative_error = np.sqrt(relative_variance)
         processing['transfer_H_sigma'] = np.abs(transfer_H) * relative_error
         processing['transfer_phase_sigma'] = relative_error
+
+    # Same noise model, one level up: per-spectrum bars for the raw FFTs, so plot_fft and
+    # the results viewer show the uncertainty that produced these H bars.
+    compute_spectrum_uncertainty(dataset, config)
     return dataset
 
 
@@ -6244,14 +6343,19 @@ def _sample_items(dataset: DataSet):
 def _resolution_marker_stride(dataset: DataSet) -> int:
     """Marker spacing (in bins) that places one marker per resolution element.
 
-    If the data has already been decimated to the resolution grid
-    (``apply_instrument_resolution`` ran), every point is independent -> stride 1.
-    Otherwise the arrays are still zero-pad oversampled -> stride =
-    ``decimation_factor`` from ``compute_instrument_resolution`` so markers land on the
-    independent bins. Defaults to 1 when resolution has not been computed.
+    If the data has already been decimated to the resolution grid, every point is
+    independent -> stride 1. Otherwise the arrays are still zero-pad oversampled ->
+    stride = ``decimation_factor`` from ``compute_instrument_resolution`` so markers land
+    on the independent bins. Defaults to 1 when resolution has not been computed.
+
+    The test is whether ``apply_instrument_resolution`` has actually RUN
+    (``resolution_applied``), not whether it is configured to run
+    (``limit_to_instrument_resolution``). Plots drawn earlier in the pipeline — plot_fft
+    right after the transfer function, say — are still on the oversampled grid even when
+    the flag is on, and keying off the intent put a marker on every interpolated bin.
     """
     resolution_cfg = (getattr(dataset, 'config', None) or {}).get('resolution', {}) or {}
-    if resolution_cfg.get('limit_to_instrument_resolution', False):
+    if resolution_cfg.get('resolution_applied', False):
         return 1
     return max(1, int(resolution_cfg.get('decimation_factor', 1)))
 
@@ -6261,13 +6365,20 @@ def plot_fft(
     freq_range: tuple | None = None,
     normalise: bool = False,
     show_snr_mask: bool = True,
+    show_errorbars: bool = True,
     **kwargs,
 ) -> None:
     """Plot FFT magnitude for every file (samples and references).
 
-    When ``show_snr_mask`` is True and per-spectrum SNR masks have been
-    computed (i.e. ``transfer_function`` has run), regions below each
-    spectrum's own SNR threshold are dimmed.
+    Presented like every other frequency-domain quantity in the pipeline (and like the
+    results viewer): a faint guide line through all bins, solid markers only on the
+    INDEPENDENT instrument-resolution grid, untrusted SNR bands dimmed and shaded, and
+    error bars from the modelled spectral uncertainty.
+
+    ``show_snr_mask`` dims the bins below each spectrum's own SNR threshold (needs
+    ``transfer_function`` to have run). ``show_errorbars`` draws ``fft_sigma`` from
+    :func:`compute_spectrum_uncertainty` — note those bars carry that function's
+    documented signal-limited-floor caveat, and are an upper bound whenever it warns.
     """
     import matplotlib.pyplot as plt
 
@@ -6276,6 +6387,7 @@ def plot_fft(
         ax.set_yscale('log')
 
     marker_stride = _resolution_marker_stride(dataset)
+    plotted_errorbars = False
     for filename, data_obj in dataset.data.items():
         freq = data_obj.processing_dict.get('fft_freq')
         spectrum = data_obj.processing_dict.get('fft_spectrum')
@@ -6286,14 +6398,23 @@ def plot_fft(
         norm = np.abs(spectrum[norm_range]).max() if normalise else 1.0
         mag = np.abs(spectrum) / norm
         snr_mask = data_obj.processing_dict.get('snr_mask') if show_snr_mask else None
+        # The bars are in the same units as the plotted magnitude, so they follow the
+        # same normalisation.
+        sigma = data_obj.processing_dict.get('fft_sigma') if show_errorbars else None
+        if sigma is not None:
+            sigma = np.asarray(sigma) / norm
+            plotted_errorbars = True
         _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename,
-                            marker_every=marker_stride)
+                            marker_every=marker_stride, yerr=sigma)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
     ax.set_xlabel('Frequency (THz)')
     ax.set_ylabel('|FFT|')
-    ax.set_title('FFT Magnitude')
+    resolution_note = ('markers on the instrument-resolution grid'
+                       if marker_stride > 1 else 'markers on every (resolution) bin')
+    ax.set_title(f'FFT Magnitude — {resolution_note}'
+                 + (', error bars = modelled spectral noise' if plotted_errorbars else ''))
     ax.legend()
     plt.tight_layout()
     plt.show()

@@ -1,0 +1,64 @@
+================================================================================================
+1. TIME LOCALISATION OF THE >7 THz CONTENT (band-pass of the averaged windowed record)
+================================================================================================
+
+--- reference_CNT_undoped-19mm.acc
+    main pulse peak at index 89 (109.75 ps), amplitude 8.009e-02
+    >7 THz band: rms over record = 1.746e-04, max = 8.083e-04
+    6 largest >7 THz samples (index, t/ps, value, dist. from peak in samples, per-scan rms there):
+          82    109.40  -8.083e-04    -7   4.860e-04
+          87    109.65  -7.829e-04    -2   8.226e-04
+          86    109.60  +7.776e-04    -3   5.851e-04
+          83    109.45  +7.137e-04    -6   5.406e-04
+          81    109.35  +5.088e-04    -8   2.747e-04
+          88    109.70  +4.434e-04    -1   7.445e-04
+    fraction of >7 THz energy within +/-5 samples of the peak: 0.317
+    reproducible fraction (mean band amplitude / per-scan band rms) at the peak: 0.03
+
+--- sample_CNT_doped-12mm.acc
+    main pulse peak at index 89 (109.75 ps), amplitude 7.862e-02
+    >7 THz band: rms over record = 1.217e-04, max = 5.612e-04
+    6 largest >7 THz samples (index, t/ps, value, dist. from peak in samples, per-scan rms there):
+          82    109.40  -5.612e-04    -7   4.976e-04
+          86    109.60  +5.294e-04    -3   6.903e-04
+          87    109.65  -4.935e-04    -2   8.888e-04
+          83    109.45  +4.642e-04    -6   4.975e-04
+          81    109.35  +3.821e-04    -8   3.041e-04
+          96    110.10  -3.477e-04    +7   9.331e-05
+    fraction of >7 THz energy within +/-5 samples of the peak: 0.283
+    reproducible fraction (mean band amplitude / per-scan band rms) at the peak: 0.14
+
+--- sample_CNT_doped-7mm.acc
+    main pulse peak at index 89 (109.75 ps), amplitude 7.240e-02
+    >7 THz band: rms over record = 1.786e-04, max = 9.161e-04
+    6 largest >7 THz samples (index, t/ps, value, dist. from peak in samples, per-scan rms there):
+          86    109.60  +9.161e-04    -3   6.734e-04
+          87    109.65  -9.032e-04    -2   8.521e-04
+          82    109.40  -7.601e-04    -7   4.783e-04
+          83    109.45  +6.399e-04    -6   4.748e-04
+          88    109.70  +5.087e-04    -1   7.077e-04
+          85    109.55  -4.986e-04    -4   2.824e-04
+    fraction of >7 THz energy within +/-5 samples of the peak: 0.429
+    reproducible fraction (mean band amplitude / per-scan band rms) at the peak: 0.01
+
+================================================================================================
+2. STABILITY OF THE EMPIRICAL sigma_|H| vs NUMBER OF BLOCKS
+================================================================================================
+
+--- sample_CNT_doped-12mm.acc
+     f (THz)    pipeline   4 blocks   6 blocks   8 blocks  10 blocks
+        1.00  6.9294e-03 5.5464e-03 4.4047e-03 3.7606e-03 3.3361e-03
+        2.00  1.0098e-02 8.8692e-03 7.0547e-03 6.0304e-03 5.3246e-03
+        3.00  1.8852e-02 1.5587e-02 1.2379e-02 1.0569e-02 9.2581e-03
+        4.00  4.2667e-02 2.1419e-02 1.6895e-02 1.4343e-02 1.2540e-02
+        5.00  8.5105e-02 2.0181e-02 1.5936e-02 1.3262e-02 1.1985e-02
+        6.00  1.2023e-01 1.7010e-02 1.7543e-02 1.4294e-02 1.1374e-02
+
+--- sample_CNT_doped-7mm.acc
+     f (THz)    pipeline   4 blocks   6 blocks   8 blocks  10 blocks
+        1.00  8.9345e-03 7.3433e-04 6.2853e-04 7.9020e-04 6.5348e-04
+        2.00  1.2953e-02 1.2917e-03 1.1631e-03 1.2290e-03 1.0931e-03
+        3.00  2.4676e-02 2.2455e-03 2.0115e-03 2.0144e-03 1.7828e-03
+        4.00  5.8938e-02 5.0865e-03 4.2561e-03 4.9054e-03 4.4511e-03
+        5.00  1.2416e-01 1.0500e-02 8.1834e-03 9.2046e-03 9.0868e-03
+        6.00  1.8268e-01 1.1325e-02 1.3511e-02 9.0237e-03 1.4009e-02
