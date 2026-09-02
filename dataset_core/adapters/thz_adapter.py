@@ -3965,6 +3965,178 @@ def compute_spectrum_uncertainty(dataset: DataSet, config: dict | None = None) -
     return dataset
 
 
+def compute_noise_from_scans(
+    dataset: DataSet,
+    config: dict | None = None,
+    *,
+    ref_type: str = 'reference',
+    source: str = 'drift_aware',
+    n_blocks: int = 8,
+    report: bool = True,
+) -> DataSet:
+    """MEASURE the uncertainty from the repeat scans, instead of guessing it from the tail.
+
+    Drop-in replacement for :func:`compute_transfer_uncertainty`: it writes the same
+    ``fft_sigma`` / ``fft_phase_sigma`` / ``transfer_H_sigma`` / ``transfer_phase_sigma``
+    keys, so every plot and the results viewer pick the new bars up with no other
+    change. The difference is where the numbers come from.
+
+    ``compute_transfer_uncertainty`` reads a flat noise floor off the top of the
+    frequency axis. That is a dynamic-range metric and it only measures noise if the
+    spectrum has flattened into a plateau up there; on our records it has not, so the
+    floor is set by residual pulse content. Measured on the CNT data it sat 8-38x above
+    the real scatter, did not fall as 1/sqrt(M), and called a genuinely quieter session
+    noisier. See ANALYSIS_NOTES §20.
+
+    This stage instead uses the individual acquisitions the ``.acc`` already contains:
+    the scatter between them *is* the noise, measured at every frequency, with no
+    assumption that any band is signal-free.
+
+    How
+    ---
+    1. ``sigma(t)`` from the per-scan matrix, with each scan's amplitude and delay
+       fitted out first so acquisition drift is not miscounted as noise. The matrix has
+       had the pipeline's own (linear) taper and window applied to it — Phase 0 keeps
+       it in step — so it describes exactly the trace that was transformed.
+    2. Propagate through the DFT exactly (``thz_core.noise.spectral_noise_moments``),
+       scaled by ``1/n_scans`` to give the uncertainty of the *mean* spectrum.
+    3. Combine sample and reference in quadrature for H, as relative errors.
+
+    Parameters
+    ----------
+    source : {'drift_aware', 'within_scan'}
+        ``'within_scan'`` propagates only the noise within a scan. ``'drift_aware'``
+        (default) also takes a batch-means estimate over ``n_blocks`` contiguous blocks
+        of scans and keeps the larger per bin, so slow drift between scans is counted.
+        On a drift-limited measurement the difference is an order of magnitude, and
+        the within-scan number alone would be badly optimistic.
+    n_blocks : int
+        Blocks for the drift-aware estimate. Needs at least ``2*n_blocks`` scans;
+        falls back to within-scan below that.
+
+    Notes
+    -----
+    Files whose per-scan data did not survive are SKIPPED, not silently given a small
+    number — ``scan_matrix_status`` says so and the ``per_scan_data_survived``
+    diagnostic reports it. Run :func:`compute_transfer_uncertainty` instead if you need
+    a value for those.
+
+    The three-source decomposition (sigma_alpha / sigma_beta / sigma_tau) is fitted on
+    the RAW scans and stored as ``noise_parameters`` for reporting only. It is not used
+    for the bars: the model assumes sigma_alpha is constant in time, which the taper and
+    window break. Only the measured sigma(t) feeds the propagation.
+    """
+    from thz_core.thz_core.noise import (
+        block_spectral_scatter,
+        drift_corrected_scatter,
+        fit_noise_parameters,
+        spectral_noise_moments,
+    )
+
+    config = config or getattr(dataset, 'config', None) or {}
+    measured, skipped = [], []
+
+    for filename, data_obj in dataset.data.items():
+        processing = getattr(data_obj, 'processing_dict', {})
+        spectrum = processing.get('fft_spectrum')
+        freq = processing.get('fft_freq')
+        if spectrum is None or freq is None:
+            continue
+        if not scan_matrix_status(data_obj)['intact']:
+            skipped.append(filename)
+            continue
+
+        matrix = np.asarray(processing[_SCAN_MATRIX_KEY], dtype=float)
+        waveforms = matrix[:, 1:].T
+        n_scans = waveforms.shape[0]
+        dt = float(np.median(np.diff(matrix[:, 0])))
+        spectrum = np.asarray(spectrum)
+        n_fft = 2 * (spectrum.size - 1)
+
+        drift = drift_corrected_scatter(waveforms, dt)
+        # window=None: the scan matrix is already windowed, so the weighting is in
+        # sigma(t) rather than applied again here.
+        moments = spectral_noise_moments(drift.sigma_t, n_fft=n_fft, spectrum=spectrum,
+                                         n_averaged=n_scans)
+        sigma_magnitude = moments.sigma_magnitude
+        sigma_phase = moments.sigma_phase
+        used_source = 'within_scan'
+
+        if source == 'drift_aware' and n_scans >= 2 * n_blocks:
+            scan_spectra = np.fft.rfft(waveforms, n=n_fft, axis=1)
+            blocked = block_spectral_scatter(scan_spectra, n_blocks=n_blocks)
+            if blocked.shape == sigma_magnitude.shape:
+                # Keep the larger per bin: the batch-means estimate sees drift the
+                # within-scan propagation cannot, but it is noisier where drift is
+                # absent, so neither alone is right everywhere.
+                sigma_magnitude = np.maximum(sigma_magnitude, blocked)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    sigma_phase = np.minimum(
+                        np.nan_to_num(sigma_magnitude / np.abs(spectrum), nan=np.pi,
+                                      posinf=np.pi), np.pi)
+                used_source = f'drift_aware ({n_blocks} blocks)'
+
+        processing['fft_sigma'] = sigma_magnitude
+        processing['fft_phase_sigma'] = sigma_phase
+        processing['noise_drift'] = drift
+        processing['noise_source'] = used_source
+
+        raw = np.asarray(getattr(data_obj, 'raw_data', np.empty((0, 0))), dtype=float)
+        if raw.ndim == 2 and raw.shape[1] > 2:
+            raw_dt = float(np.median(np.diff(raw[:, 0]))) * 1e-12
+            parameters, _ = fit_noise_parameters(raw[:, 1:].T, raw_dt)
+            processing['noise_parameters'] = parameters
+        measured.append((filename, data_obj, n_scans, drift, used_source))
+
+    # H = Y_sample / Y_reference: relative errors add in quadrature.
+    for filename, data_obj in dataset.data.items():
+        processing = getattr(data_obj, 'processing_dict', {})
+        transfer_H = processing.get('transfer_H')
+        if transfer_H is None or processing.get('fft_sigma') is None:
+            continue
+        reference = dataset.get_reference(filename, ref_type=ref_type)
+        reference_processing = getattr(reference, 'processing_dict', None)
+        if reference_processing is None or reference_processing.get('fft_sigma') is None:
+            continue
+        with np.errstate(divide='ignore', invalid='ignore'):
+            relative = np.sqrt(
+                (processing['fft_sigma'] / np.abs(processing['fft_spectrum'])) ** 2
+                + (reference_processing['fft_sigma']
+                   / np.abs(reference_processing['fft_spectrum'])) ** 2
+            )
+        transfer_H = np.asarray(transfer_H)
+        magnitude_sigma = np.abs(transfer_H) * relative
+        # A bin where |Y| reaches zero has infinite relative error, which is honest but
+        # unplottable — matplotlib skips NaN in yerr and chokes on inf. NaN reads as
+        # "no usable error here", which is what it means.
+        processing['transfer_H_sigma'] = np.where(np.isfinite(magnitude_sigma),
+                                                  magnitude_sigma, np.nan)
+        processing['transfer_phase_sigma'] = np.minimum(
+            np.where(np.isfinite(relative), relative, np.pi), np.pi)
+        processing['uncertainty_method'] = 'measured_from_scans'
+
+    if report:
+        for filename, data_obj, n_scans, drift, used_source in measured:
+            parameters = data_obj.processing_dict.get('noise_parameters')
+            peak = float(np.max(np.abs(drift.mean_waveform))) or 1.0
+            decomposition = (
+                f"sigma_a {parameters.sigma_alpha / peak * 100:.3f}% of peak, "
+                f"sigma_b {parameters.sigma_beta * 100:.3f}%, "
+                f"sigma_tau {parameters.sigma_tau * 1e15:.2f} fs"
+                if parameters is not None else "decomposition unavailable"
+            )
+            print(f"[compute_noise_from_scans] '{filename}': {n_scans} scans, "
+                  f"{used_source}; {decomposition}; drift inflation "
+                  f"{drift.drift_inflation:.2f}x")
+        for filename in skipped:
+            print(f"[compute_noise_from_scans] '{filename}': SKIPPED — no per-scan data "
+                  f"survived; its error bars are unchanged (see the run report)")
+        if not measured:
+            print("[compute_noise_from_scans] no file had usable per-scan data; "
+                  "nothing measured. Falling back is compute_transfer_uncertainty.")
+    return dataset
+
+
 def compute_transfer_uncertainty(dataset: DataSet, config: dict | None = None) -> DataSet:
     """Estimate a faithful frequency-domain uncertainty on the transfer function.
 

@@ -10,6 +10,11 @@ import numpy as np
 from dataset_core import DataSet
 from dataset_core.adapters import thz_adapter as thz
 from dataset_core.adapters import pipeline_registry, session_bundle
+from dataset_core.adapters import diagnostics
+
+# thz-core is reached through the gitignored `thz_core` symlink at the repo root,
+# which points at the sibling ../thz-core checkout — hence the doubled name.
+from thz_core.thz_core import noise as thz_noise  # noqa: F401  (documents the path)
 
 # Record the pipeline into dataset.recipe (replayable/reopenable later). Run before the stages.
 pipeline_registry.activate_recording()
@@ -31,17 +36,20 @@ pipeline_registry.activate_recording()
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Data paths ──────────────────────────────────────────
-# data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export\raw'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\gold'
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign_tests\CNT'
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
-data_dir = r'C:\Users\Samuel\Data\2026-08-07_cone_testing\export\test'
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-20_CNT-paper-doped_2'
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-20_CNT-paper-doped_2\export'
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-21_CNT-paper-doped_3\linescan'
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-08-21_CNT-paper-doped_3\comparison'
+# Data root on this workstation. The Windows paths this script used to carry
+# (C:\Users\Samuel\Data\THz\...) do not exist here; DATA_ROOT below is the
+# equivalent, so a dataset is named by its path relative to it rather than by a
+# machine-specific absolute path.
+DATA_ROOT = os.environ.get('THZ_DATA_ROOT', '/home/match/data')
+
+# data_dir = os.path.join(DATA_ROOT, 'CNTs/2026-08-20_CNT-paper-doped_2/export')
+# data_dir = os.path.join(DATA_ROOT, 'CNTs/2026-08-21_CNT-paper-doped_3/linescan')
+data_dir = os.path.join(DATA_ROOT, 'CNTs/2026-08-21_CNT-paper-doped_3/comparison')
+
+assert os.path.isdir(data_dir), (
+    f"data_dir does not exist: {data_dir}\n"
+    f"Set THZ_DATA_ROOT, or point data_dir at a directory under {DATA_ROOT}."
+)
 
 
 # ── Configuration ───────────────────────────────────────
@@ -53,7 +61,11 @@ config: dict = {
         'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': 'CNT sample doped inert holder',            # free-text notes stored in the bundle
-        'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
+        # 'measured' = uncertainty from the repeat scans (default, honest).
+        # 'spectral_floor' = the old tail-median estimate, kept for comparison only.
+        'uncertainty': 'measured',
+        'uncertainty_source': 'drift_aware',  # or 'within_scan' to exclude slow drift
+        'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma
         'uncertainty_draws': 200,       # MC draws for the above
     },
     "resolution": {
@@ -291,12 +303,35 @@ if config['transfer'].get('correct_linear_phase', False):
 if config['phase_kk'].get('enabled', False):
     thz.phase_correct_kk(dataset, show_graph=config['general']['show_graph'])
 
-# thz.compute_instrument_resolution(dataset, config)
-# thz.compute_transfer_uncertainty(dataset)
 thz.compute_instrument_resolution(dataset, config)
-thz.compute_transfer_uncertainty(dataset)
 
-thz.plot_fft(dataset, normalise=False, scale='')
+# --- UNCERTAINTY: measured from the repeat scans, not read off the spectrum ---
+# compute_noise_from_scans writes the same fft_sigma / transfer_H_sigma keys the old
+# floor-based compute_transfer_uncertainty did, so every plot and the results viewer
+# pick the new bars up unchanged. What differs is where the numbers come from: the
+# scatter between the individual acquisitions in each .acc, with per-scan amplitude
+# and delay drift fitted out first, propagated exactly through the window and DFT.
+#
+# The old floor read a median off the top of the frequency axis, which only measures
+# noise if the spectrum has flattened into a plateau there. On these records it has
+# not, so the floor was set by pulse content: 8-38x above the true scatter, not
+# falling as 1/sqrt(M), and reporting a genuinely quieter session as noisier.
+# ANALYSIS_NOTES §20 has the evidence. Set 'uncertainty' below to 'spectral_floor' to
+# reproduce the old behaviour for comparison.
+if config['general'].get('uncertainty', 'measured') == 'measured':
+    thz.compute_noise_from_scans(
+        dataset,
+        ref_type='reference',
+        source=config['general'].get('uncertainty_source', 'drift_aware'),
+    )
+else:
+    thz.compute_transfer_uncertainty(dataset)
+    thz.compute_spectrum_uncertainty(dataset)
+
+if config['general']['show_graph']:
+    thz.plot_fft(dataset, normalise=False, scale='')
+    thz.plot_transfer_function(dataset)
+    thz.plot_transfer_phase(dataset)
 
 # --- reflection-mode inversion: H -> n, k for a single AIR -> sample bounce,
 #     referenced to a gold mirror (geometry='gold': n_incident = 1, r_reference = -1). ---
@@ -348,6 +383,11 @@ thz.apply_instrument_resolution(dataset, config)
 
 if config['general']['save_database']:
     dataset.save_database()
+
+# --- END-OF-RUN HEALTH REPORT ---
+# Checks every registered assumption against the final state and prints what is
+# strained. It never halts; docs/assumptions_ledger.md lists what is checked.
+diagnostics.run_report(dataset, config)
 
 thz.launch_results_viewer(dataset)
 plt.show()
