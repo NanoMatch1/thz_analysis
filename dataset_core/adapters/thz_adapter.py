@@ -5,6 +5,68 @@ import thz_core.thz_core as core
 import matplotlib.pyplot as plt
 from dataset_core.dataset import DataSet, DataService
 from dataset_core.data_structures.thz import THzDataReflection, THzData, BaseTHzData
+
+
+# ── thz-core resolution guard ────────────────────────────────────────────────
+# `import thz_core.thz_core` needs a top-level importable directory literally named
+# `thz_core` whose INNER thz_core/ is the package. The sibling checkout is named
+# `thz-core` — a hyphen, not a legal module name — so it cannot satisfy that import
+# on its own, and each machine bridges the gap with a link at the repo root.
+#
+# When that link is instead a real nested COPY of the repo, everything still imports
+# — from the wrong, usually older, tree. That has now cost real work twice: once when
+# uncommitted core changes sat in a gitignored nested clone through a machine
+# migration, and once when a stale nested copy shadowed a fresh checkout and produced
+# only `ImportError: cannot import name 'noise'`. Both times the failure named a
+# symptom rather than the cause.
+#
+# So: check the resolved location and version at import, and if it is wrong, say
+# exactly what is wrong and how to fix it on this platform.
+_MINIMUM_THZ_CORE_VERSION = (0, 3, 0)
+
+
+def _verify_thz_core_resolution() -> None:
+    import thz_core as _thz_core_namespace
+
+    resolved = os.path.realpath(os.path.dirname(core.__file__))
+    found = getattr(core, "__version__", "0.0.0")
+    try:
+        found_tuple = tuple(int(part) for part in found.split(".")[:3])
+    except ValueError:
+        found_tuple = (0, 0, 0)
+    if found_tuple >= _MINIMUM_THZ_CORE_VERSION:
+        return
+
+    required = ".".join(str(part) for part in _MINIMUM_THZ_CORE_VERSION)
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    link = os.path.join(repo_root, "thz_core")
+    sibling = os.path.join(os.path.dirname(repo_root), "thz-core")
+    is_link = os.path.islink(link)
+    raise ImportError(
+        f"thz_core {required} or newer is required, but version {found} was imported "
+        f"from:\n"
+        f"    {resolved}\n\n"
+        f"That is almost certainly a stale nested COPY of thz-core shadowing the real "
+        f"checkout, rather than a link to it.\n"
+        f"    repo-root entry : {link}\n"
+        f"    is it a link?   : {is_link}\n"
+        f"    sibling checkout: {sibling} "
+        f"({'exists' if os.path.isdir(sibling) else 'MISSING — clone it first'})\n\n"
+        f"To fix, replace the nested copy with a link to the sibling checkout.\n"
+        f"  FIRST, make sure the nested copy holds nothing uncommitted — this is "
+        f"exactly how work was lost before:\n"
+        f"      git -C \"{link}\" status\n"
+        f"  Then, on Windows (cmd, from the repo root):\n"
+        f"      rmdir /S /Q thz_core\n"
+        f"      mklink /J thz_core ..\\thz-core\n"
+        f"  or on Linux/macOS:\n"
+        f"      rm -rf '{link}' && ln -s ../thz-core '{link}'\n\n"
+        f"Then pull the branch you want inside {sibling}."
+    )
+
+
+_verify_thz_core_resolution()
 """Used to bridge the DataSet manager and the thz analysis library.
 
 Unit convention

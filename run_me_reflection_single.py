@@ -12,9 +12,11 @@ from dataset_core.adapters import thz_adapter as thz
 from dataset_core.adapters import pipeline_registry, session_bundle
 from dataset_core.adapters import diagnostics
 
-# thz-core is reached through the gitignored `thz_core` symlink at the repo root,
-# which points at the sibling ../thz-core checkout — hence the doubled name.
-from thz_core.thz_core import noise as thz_noise  # noqa: F401  (documents the path)
+# thz-core is NOT vendored here. It is a separate repo, checked out beside this one
+# as ../thz-core, and reached through a link at this repo's root named `thz_core`
+# (gitignored) — which is why the import spelling is the doubled `thz_core.thz_core`.
+# thz_adapter verifies that link resolves to a current checkout and explains how to
+# repair it if not, so there is no need to import from it directly here.
 
 # Record the pipeline into dataset.recipe (replayable/reopenable later). Run before the stages.
 pipeline_registry.activate_recording()
