@@ -31,6 +31,16 @@ is checked against real data at run time; none of them halts a run.
 - **Why it matters:** Amplitude and arrival time drift over a run — on our purge box, 5% and 9 fs over 80 minutes while the nitrogen equilibrates. Drift is not removed by averaging, and a measurement can be drift-limited rather than noise-limited, in which case acquiring more scans does nothing at all. It also inflates any naive repeat-scatter estimate that does not fit it out first.
 - **If it fails:** wait for the purge to settle, or interleave sample and reference A-B-A-B so the drift affects both equally; check drift_inflation before trusting more averaging
 
+### the purge has equilibrated before the acquisition started
+
+- **Check:** `purge_still_equilibrating` (severity when broken: **warn**)
+- **Why it matters:** Water vapour absorbs across the THz band, and its continuum absorption grows with frequency. So while a nitrogen purge is still displacing room air, the measured spectrum RISES, and rises MORE at high frequency. A measurement taken through that transient has a sample and a reference recorded in different atmospheres, which is a systematic no amount of averaging removes. 
+
+Crucially this does NOT require resolving the water lines: unresolved is not invisible, because a line narrower than the resolution still removes its energy from the band. Measured on a 111-scan CNT acquisition over 83 minutes, the band gain went +2.0% at 0.4-1 THz, +7.0% at 2-3 THz, +12.9% at 3-4 THz and +17.1% at 4-6 THz, while a settled reference acquisition on the same instrument was flat. 
+
+The TILT is what identifies water specifically: a laser power drift scales the whole spectrum uniformly and leaves the tilt unchanged, so a frequency-dependent gain cannot be explained that way.
+- **If it fails:** wait for the purge to settle (99% settling has been measured at ~3.7 hours, not the assumed 15 minutes), or interleave sample and reference A-B-A-B so both see the same atmosphere
+
 ## Stage: `transfer_function`
 
 ### the band the noise floor is read from has reached a noise plateau

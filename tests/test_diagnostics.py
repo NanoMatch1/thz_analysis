@@ -267,3 +267,43 @@ def test_applied_resolution_clears_the_oversampling_note():
                                                  "resolution_applied": True}})
     findings = diagnostics.run_diagnostics(dataset, stage="resolution")
     assert findings == []
+
+
+def test_purge_check_fires_on_a_frequency_dependent_drift():
+    """Water removal lifts the high band more than the low band; laser drift does not."""
+    rng = np.random.default_rng(3)
+    n_scans, n_samples = 24, 160
+    time_ps = np.arange(n_samples) * 0.05 + 100.0
+    argument = (time_ps - (time_ps[0] + 0.3 * (time_ps[-1] - time_ps[0]))) / 0.2
+    pulse = -argument * np.exp(-0.5 * argument ** 2)
+
+    def dataset_with(gain_is_frequency_dependent):
+        scans = []
+        for index in range(n_scans):
+            fraction = index / (n_scans - 1)
+            trace = pulse.copy()
+            if gain_is_frequency_dependent:
+                # Sharpen the pulse as the run proceeds: narrower in time is broader in
+                # frequency, so the high band gains more than the low — water's signature.
+                narrowed = (time_ps - (time_ps[0] + 0.3 * (time_ps[-1] - time_ps[0]))) \
+                    / (0.2 * (1 - 0.15 * fraction))
+                trace = -narrowed * np.exp(-0.5 * narrowed ** 2)
+            else:
+                trace = pulse * (1 + 0.15 * fraction)      # uniform: laser power drift
+            scans.append(BaseTHzData(
+                data=np.column_stack((time_ps,
+                                      trace + rng.standard_normal(n_samples) * 1e-4)),
+                headers=[f"scan {index}"]))
+        obj = THzData(data=scans, header=None, filename="sample_test.acc",
+                      data_type="acc")
+        dataset = FakeDataSet({obj.filename: obj})
+        thz._ensure_scan_matrix(obj)
+        return dataset
+
+    def fired(dataset):
+        findings = diagnostics.run_diagnostics(dataset, stage="acquisition")
+        return any(f.diagnostic == "purge_still_equilibrating" for f in findings)
+
+    assert fired(dataset_with(True)), "frequency-dependent drift should be flagged"
+    assert not fired(dataset_with(False)), (
+        "a uniform gain is laser drift, not water, and must not be flagged as purge")

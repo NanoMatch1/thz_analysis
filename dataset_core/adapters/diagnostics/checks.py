@@ -129,6 +129,89 @@ def acquisition_drift(dataset, config):
             )
 
 
+@diagnostic(
+    stage="acquisition",
+    assumption="the purge has equilibrated before the acquisition started",
+    why=(
+        "Water vapour absorbs across the THz band, and its continuum absorption grows "
+        "with frequency. So while a nitrogen purge is still displacing room air, the "
+        "measured spectrum RISES, and rises MORE at high frequency. A measurement taken "
+        "through that transient has a sample and a reference recorded in different "
+        "atmospheres, which is a systematic no amount of averaging removes. "
+        "\n\n"
+        "Crucially this does NOT require resolving the water lines: unresolved is not "
+        "invisible, because a line narrower than the resolution still removes its "
+        "energy from the band. Measured on a 111-scan CNT acquisition over 83 minutes, "
+        "the band gain went +2.0% at 0.4-1 THz, +7.0% at 2-3 THz, +12.9% at 3-4 THz and "
+        "+17.1% at 4-6 THz, while a settled reference acquisition on the same instrument "
+        "was flat. "
+        "\n\n"
+        "The TILT is what identifies water specifically: a laser power drift scales the "
+        "whole spectrum uniformly and leaves the tilt unchanged, so a frequency-"
+        "dependent gain cannot be explained that way."
+    ),
+    remedy=(
+        "wait for the purge to settle (99% settling has been measured at ~3.7 hours, not "
+        "the assumed 15 minutes), or interleave sample and reference A-B-A-B so both see "
+        "the same atmosphere"
+    ),
+    severity=Severity.WARN,
+)
+def purge_still_equilibrating(dataset, config):
+    from dataset_core.adapters.thz_adapter import _SCAN_MATRIX_KEY, scan_matrix_status
+
+    purge_config = config.get("purge", {}) or {}
+    low_band = tuple(purge_config.get("low_band_thz", (0.4, 1.0)))
+    high_band = tuple(purge_config.get("high_band_thz", (2.0, 3.0)))
+    tilt_limit = float(purge_config.get("tilt_change_limit", 0.02))
+    minimum_snr = float(purge_config.get("minimum_band_snr", 5.0))
+
+    for filename, data_obj in _samples(dataset):
+        if not scan_matrix_status(data_obj)["intact"]:
+            continue
+        matrix = np.asarray(data_obj.processing_dict[_SCAN_MATRIX_KEY], dtype=float)
+        waveforms = matrix[:, 1:].T
+        if waveforms.shape[0] < 8:
+            continue
+        dt = float(np.median(np.diff(matrix[:, 0])))
+        n_samples = waveforms.shape[1]
+        spectra = np.abs(np.fft.rfft(waveforms * np.hanning(n_samples),
+                                     n=n_samples, axis=1))
+        frequency_thz = np.fft.rfftfreq(n_samples, dt) * _HZ_TO_THZ
+
+        def band_mean(band):
+            inside = (frequency_thz >= band[0]) & (frequency_thz < band[1])
+            return spectra[:, inside].mean(axis=1) if inside.any() else None
+
+        low = band_mean(low_band)
+        high = band_mean(high_band)
+        if low is None or high is None or not np.all(low > 0):
+            continue
+
+        # Only trust the high band if it is actually above the top-of-axis level.
+        floor = spectra[:, frequency_thz > 0.75 * frequency_thz.max()].mean()
+        if floor <= 0 or high.mean() / floor < minimum_snr:
+            continue
+
+        tilt = high / low
+        edge = max(3, tilt.size // 10)
+        tilt_change = float(np.mean(tilt[-edge:]) / np.mean(tilt[:edge]) - 1.0)
+        gain_change = float(np.mean(high[-edge:]) / np.mean(high[:edge]) - 1.0)
+        if abs(tilt_change) > tilt_limit:
+            yield Problem(
+                filename=filename,
+                message=(
+                    f"the spectrum is still changing shape across the acquisition: the "
+                    f"{high_band[0]}-{high_band[1]} THz band moved {gain_change:+.1%} "
+                    f"relative to itself and {tilt_change:+.1%} relative to "
+                    f"{low_band[0]}-{low_band[1]} THz. A frequency-dependent drift like "
+                    f"this is the purge still displacing water, not laser power"
+                ),
+                detail={"tilt_change": tilt_change, "gain_change": gain_change,
+                        "low_band_thz": low_band, "high_band_thz": high_band},
+            )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # spectral — is the noise floor a noise floor?
 # ─────────────────────────────────────────────────────────────────────────────
