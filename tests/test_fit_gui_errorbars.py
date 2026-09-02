@@ -18,11 +18,23 @@ from thz_core.thz_core.fitting import drude_conductivity
 
 
 def _make_gui(**kwargs):
-    """Construct a FitGUI or skip the test if Tk can't initialise (headless)."""
-    import tkinter as tk
-    from thz_core.thz_core.fit_gui import FitGUI
+    """Construct a FitGUI or skip the test if Tk can't initialise (headless).
+
+    A machine without Tk fails earlier and differently than one with Tk but no
+    display: matplotlib raises ImportError while selecting the TkAgg backend, rather
+    than tkinter raising TclError while opening a window. Both mean the same thing
+    here — there is no GUI to test — so both skip. (Seen on the headless Raspberry Pi
+    workstation, where these five tests were otherwise permanently red and eroding
+    the signal from the rest of the suite.)
+    """
     try:
+        import tkinter as tk
+        from thz_core.thz_core.fit_gui import FitGUI
         return FitGUI(**kwargs)
+    except (ImportError, RuntimeError) as exc:
+        # Importing fit_gui selects an interactive matplotlib backend, so on a
+        # machine with no GUI the failure arrives here rather than at construction.
+        raise unittest.SkipTest(f"no usable display for tkinter: {exc}")
     except tk.TclError as exc:
         raise unittest.SkipTest(f"no display for tkinter: {exc}")
 

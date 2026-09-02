@@ -226,13 +226,21 @@ def test_marker_stride_logic():
             self.config = cfg
     # Not computed -> stride 1.
     assert thz._resolution_marker_stride(_DS({})) == 1
-    # Oversampled, flag off -> stride = decimation factor.
+    # Oversampled -> stride = decimation factor.
     assert thz._resolution_marker_stride(
         _DS({"resolution": {"decimation_factor": 15}})) == 15
-    # Already decimated -> stride 1.
+    # CONFIGURED to decimate, but apply_instrument_resolution has not run yet: the
+    # arrays are still oversampled, so markers must still land every 15th bin. Keying
+    # off the intent flag instead put a marker on every interpolated bin for any plot
+    # drawn earlier in the pipeline than the decimation step.
     assert thz._resolution_marker_stride(
         _DS({"resolution": {"decimation_factor": 15,
-                            "limit_to_instrument_resolution": True}})) == 1
+                            "limit_to_instrument_resolution": True}})) == 15
+    # Decimation has actually HAPPENED -> every point is independent -> stride 1.
+    assert thz._resolution_marker_stride(
+        _DS({"resolution": {"decimation_factor": 15,
+                            "limit_to_instrument_resolution": True,
+                            "resolution_applied": True}})) == 1
 
 
 def test_plot_helper_runs_headless_with_markers_and_error():
