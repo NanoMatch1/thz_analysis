@@ -1384,7 +1384,17 @@ def window_single_pulse_fixed_width(
             window_length=window_length,
             clipped=bool(clipped),
         )
+        # Store the realised window so downstream consumers (notably the repeat-scan
+        # noise estimator) can reproduce exactly what was applied, rather than
+        # rebuilding it from the plan and risking a subtly different array.
+        data_obj.processing_dict['window_function'] = window_function
         data_obj.data = np.column_stack((time_seconds, windowed))
+
+        # Same window on every individual scan. The peak search above is non-linear,
+        # so it runs once on the averaged trace; multiplying by the resulting window
+        # is linear, which keeps mean(scans) == the windowed averaged trace exactly.
+        carry_scan_matrix(data_obj, _ensure_scan_matrix(data_obj),
+                          lambda column: column * window_function, time_seconds)
 
         clip_note = "  *** CLIPPED at trace edge — reduce half_width_ps ***" if clipped else ""
         print(
@@ -1790,15 +1800,21 @@ def _ensure_scan_matrix(data_obj) -> np.ndarray:
     preprocessing steps (baseline, alignment, normalise) accumulate.
 
     **Staleness guard (single source of truth).** The matrix is only valid while
-    it has the *same row count* as ``data_obj.data``. Steps that change the row
-    count or resample the time axis (``global_truncate``, ``center_pulse``, and
-    the windowing-hygiene crop in ``centering_manual``) mutate ``data`` but
-    deliberately do **not** maintain this parallel matrix — keeping two full
-    representations in lockstep through every step is the coupling we want to
-    avoid. So instead of trusting the cache blindly, every call verifies the row
-    count and, on a mismatch (or when ``raw_data`` is single-scan / absent),
-    falls back to the averaged trace as a single "scan". This protects **all**
-    consumers in one place rather than each re-checking.
+    it has the *same row count* as ``data_obj.data``. Every call verifies the row
+    count and, on a mismatch (or when ``raw_data`` is single-scan / absent), falls
+    back to the averaged trace as a single "scan". This protects **all** consumers
+    in one place rather than each re-checking.
+
+    **Carrying the matrix through a row-changing step.** A step that changes the
+    row count must either call :func:`carry_scan_matrix` to re-apply its own
+    transform to the scans, or accept that the scatter is dropped here. The design
+    rule is that a step supplies *one decision* (see :func:`_plan_center_pad`) and
+    the helper applies it identically to every scan — so the coupling is one call
+    per step, not a second parallel implementation of the step.
+
+    The fallback is deliberately **loud**. Losing the scan matrix silently is how
+    a repeat-based noise estimate ends up quietly reporting the scatter of a single
+    trace, which is zero; see ``discarded_scan_matrix_report``.
     """
     target_rows = np.asarray(data_obj.data).shape[0]
 
@@ -1807,30 +1823,123 @@ def _ensure_scan_matrix(data_obj) -> np.ndarray:
         if np.asarray(matrix).shape[0] == target_rows:
             return matrix
         # Cached matrix went stale: a row-count-changing step ran since it was
-        # built. Drop the per-scan scatter and fall back to the averaged trace.
-        if not data_obj.processing_dict.get('_scan_matrix_stale_warned'):
-            print(
-                f"Note: '{getattr(data_obj, 'filename', '<unknown>')}' per-scan "
-                f"matrix is out of sync with the averaged trace "
-                f"({np.asarray(matrix).shape[0]} vs {target_rows} rows); a "
-                f"row-count-changing step ran. Using the averaged trace as a "
-                f"single scan from here."
-            )
-            data_obj.processing_dict['_scan_matrix_stale_warned'] = True
+        # built without carrying the scans along.
+        _record_scan_matrix_loss(
+            data_obj,
+            f"row count changed ({np.asarray(matrix).shape[0]} -> {target_rows}) "
+            f"without carry_scan_matrix",
+            n_scans_lost=max(0, np.asarray(matrix).shape[1] - 1),
+        )
         matrix = _averaged_as_single_scan(data_obj)
         data_obj.processing_dict[_SCAN_MATRIX_KEY] = matrix
         return matrix
 
-    raw = np.asarray(data_obj.raw_data, dtype=float)
+    raw = np.asarray(getattr(data_obj, 'raw_data', np.empty((0, 0))), dtype=float)
     if raw.ndim == 2 and raw.shape[1] >= 2 and raw.shape[0] == target_rows:
         time_seconds = raw[:, 0] / _S_TO_PS  # ps -> s, matching data_obj.data
         matrix = np.column_stack((time_seconds, raw[:, 1:]))
     else:
-        # No multi-scan raw_data, or it no longer matches the (already-mutated)
-        # averaged trace — fall back to the averaged trace as a single scan.
+        if raw.ndim == 2 and raw.shape[1] > 2 and raw.shape[0] != target_rows:
+            # There ARE individual scans; they just no longer line up with the
+            # already-mutated averaged trace. That is a lost measurement, not an
+            # absent one, so say so.
+            _record_scan_matrix_loss(
+                data_obj,
+                f"raw_data has {raw.shape[1] - 1} scans of {raw.shape[0]} rows but "
+                f"the working trace is {target_rows} rows; a row-changing step ran "
+                f"before the matrix was first built",
+                n_scans_lost=raw.shape[1] - 1,
+            )
         matrix = _averaged_as_single_scan(data_obj)
     data_obj.processing_dict[_SCAN_MATRIX_KEY] = matrix
     return matrix
+
+
+_SCAN_MATRIX_LOSS_KEY = 'scan_matrix_loss'
+
+
+def _record_scan_matrix_loss(data_obj, reason: str, n_scans_lost: int = 0) -> None:
+    """Record (once) that a file's per-scan scatter was dropped, and say so."""
+    if data_obj.processing_dict.get(_SCAN_MATRIX_LOSS_KEY):
+        return
+    filename = getattr(data_obj, 'filename', '<unknown>')
+    data_obj.processing_dict[_SCAN_MATRIX_LOSS_KEY] = {
+        'reason': reason, 'n_scans_lost': int(n_scans_lost)}
+    print(
+        f"[scan_matrix] '{filename}': DROPPED {n_scans_lost} individual scans — "
+        f"{reason}. Falling back to the averaged trace as a single scan; anything "
+        f"measuring repeat scatter (noise, drift) will now see none."
+    )
+
+
+def scan_matrix_status(data_obj) -> dict:
+    """Whether real per-scan data is still available for this object, and why not.
+
+    ``{'n_scans': int, 'intact': bool, 'reason': str | None}``. ``n_scans <= 1``
+    means every repeat-based estimate downstream is meaningless for this file.
+    """
+    matrix = data_obj.processing_dict.get(_SCAN_MATRIX_KEY)
+    n_scans = 0 if matrix is None else max(0, np.asarray(matrix).shape[1] - 1)
+    loss = data_obj.processing_dict.get(_SCAN_MATRIX_LOSS_KEY)
+    return {
+        'n_scans': n_scans,
+        'intact': bool(n_scans > 1),
+        'reason': None if loss is None else loss['reason'],
+    }
+
+
+def carry_scan_matrix(data_obj, previous_matrix, transform, time_seconds_out) -> None:
+    """Re-apply a row-changing step's own transform to every individual scan.
+
+    Call it from a step that mutates ``data_obj.data``, having fetched
+    ``previous_matrix`` with :func:`_ensure_scan_matrix` **before** the mutation (it
+    must still be in sync at that point).
+
+    Parameters
+    ----------
+    transform : callable
+        ``transform(amplitude_column) -> new_amplitude_column``. It must be the SAME
+        transform applied to the averaged trace, derived from a single decision taken
+        on that trace — never re-derived per scan (see :func:`_plan_center_pad`).
+    time_seconds_out : np.ndarray
+        The step's new time axis, shared by every scan.
+
+    Silently does nothing when there was no real per-scan data to begin with, so a
+    step can call it unconditionally.
+    """
+    if previous_matrix is None:
+        return
+    previous_matrix = np.asarray(previous_matrix, dtype=float)
+    if previous_matrix.shape[1] <= 2:
+        return  # single-scan fallback; nothing to carry
+    columns = [np.asarray(transform(previous_matrix[:, index]), dtype=float)
+               for index in range(1, previous_matrix.shape[1])]
+    time_seconds_out = np.asarray(time_seconds_out, dtype=float)
+    if any(column.shape[0] != time_seconds_out.shape[0] for column in columns):
+        _record_scan_matrix_loss(
+            data_obj, "carry_scan_matrix transform returned a mismatched length",
+            n_scans_lost=len(columns))
+        return
+    data_obj.processing_dict[_SCAN_MATRIX_KEY] = np.column_stack(
+        [time_seconds_out, *columns])
+
+
+def discarded_scan_matrix_report(dataset) -> list:
+    """Every file whose per-scan scatter was dropped during processing, with the cause.
+
+    The end-of-run counterpart to the per-file message: one place to check before
+    trusting any repeat-based number.
+    """
+    losses = []
+    for filename, data_obj in dataset.data.items():
+        status = scan_matrix_status(data_obj)
+        if status['reason'] is not None:
+            losses.append({'filename': filename, **status})
+    if losses:
+        print(f"[scan_matrix] {len(losses)} file(s) lost their per-scan data:")
+        for loss in losses:
+            print(f"    {loss['filename']}: {loss['reason']}")
+    return losses
 
 
 def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
@@ -2479,22 +2588,28 @@ def _pick_peak_manual(t_ps: np.ndarray, y: np.ndarray, title: str) -> float:
     return clicked['t_ps']
 
 
-def _center_pulse_trace(
+def _plan_center_pad(
     t: np.ndarray,
     y: np.ndarray,
     peak_mode: str = 'auto',
     taper_ps: float = 0.5,
     picker_title: str = 'Pick main pulse peak',
-) -> tuple:
-    """Core centering routine — operates on raw arrays, knows nothing about datasets.
+) -> dict:
+    """DECIDE how to centre-pad a trace, without applying it.
 
-    Returns (t_new, y_new, info) where info carries metadata needed by
-    callers for logging and by the graph helper for annotation.
+    Split out from the application so that ONE decision — taken from the averaged
+    trace, where the peak is well determined — can be applied identically to that
+    trace and to every individual scan behind it.
+
+    Locating the peak is a *non-linear* step. Re-deciding it per scan would let noise
+    move the peak by a sample and inject a timing spread that is an artefact of the
+    analysis rather than a property of the instrument. Deciding once and applying
+    identically is what keeps the per-scan matrix a faithful measure of the
+    acquisition's own scatter.
 
     Centres by padding the shorter side: prepend zeros if the peak is in the first
     half, append zeros if it is past the midpoint. If the peak is already at the
-    midpoint, t_new and y_new are copies of the inputs and info['already_centred']
-    is True.
+    midpoint the plan is a no-op and ``already_centred`` is True.
     """
     dt = float(np.median(np.diff(t)))
     t_ps = t * _S_TO_PS
@@ -2518,20 +2633,42 @@ def _center_pulse_trace(
     n_prepend = max(0, n_after - n_before)
     n_append = max(0, n_before - n_after)
 
-    info = {
+    # Resolve the taper length here rather than during application, so the plan fully
+    # determines the transform and two callers cannot resolve it differently.
+    taper_samples = int(round(taper_ps * 1e-12 / dt))
+    if n_prepend > 0:
+        resolved_taper = min(taper_samples, n_before)
+    elif n_append > 0:
+        resolved_taper = min(taper_samples, n_after)
+    else:
+        resolved_taper = 0
+
+    return {
         'already_centred': (n_prepend == 0 and n_append == 0),
         'n_prepend': n_prepend,
         'n_append': n_append,
         'peak_idx_original': peak_idx,
         'peak_idx_new': n_prepend + peak_idx,
-        'taper_samples': 0,
+        'taper_samples': resolved_taper,
         'dt_s': dt,
     }
 
-    if n_prepend == 0 and n_append == 0:
-        return t.copy(), y.copy(), info
 
-    taper_samples = int(round(taper_ps * 1e-12 / dt))
+def _apply_center_pad(t: np.ndarray, y: np.ndarray, plan: dict) -> tuple:
+    """APPLY a plan from :func:`_plan_center_pad`. Pure, deterministic, linear in ``y``.
+
+    Linearity in ``y`` is the property that matters: applying this to every scan and
+    then averaging gives exactly the same result as applying it to the average, so the
+    averaged pipeline is bit-for-bit unchanged while the per-scan scatter survives.
+    """
+    n_prepend = int(plan['n_prepend'])
+    n_append = int(plan['n_append'])
+    taper_count = int(plan['taper_samples'])
+    dt = float(plan['dt_s'])
+    y = np.asarray(y, dtype=float)
+
+    if n_prepend == 0 and n_append == 0:
+        return np.asarray(t).copy(), y.copy()
 
     t_prepend = t[0] - np.arange(n_prepend, 0, -1) * dt
     t_append = t[-1] + np.arange(1, n_append + 1) * dt
@@ -2542,21 +2679,36 @@ def _center_pulse_trace(
     # smooth: a RISING ramp over the leading pre-pulse samples when padding the front,
     # a FALLING ramp over the trailing post-pulse samples when padding the back. The
     # ramp is clamped to the pre/post-peak sample count so it never crosses the peak.
-    if n_prepend > 0:
-        rise_count = min(taper_samples, n_before)
-        if rise_count > 0:
-            rising_ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, rise_count, endpoint=False)))
-            y_new[n_prepend : n_prepend + rise_count] *= rising_ramp
-        info['taper_samples'] = rise_count
-    elif n_append > 0:
-        fall_count = min(taper_samples, n_after)
-        if fall_count > 0:
-            signal_end_index = n_prepend + len(y)
-            falling_ramp = 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fall_count, endpoint=False)))
-            y_new[signal_end_index - fall_count : signal_end_index] *= falling_ramp
-        info['taper_samples'] = fall_count
+    if n_prepend > 0 and taper_count > 0:
+        rising_ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, taper_count, endpoint=False)))
+        y_new[n_prepend : n_prepend + taper_count] *= rising_ramp
+    elif n_append > 0 and taper_count > 0:
+        signal_end_index = n_prepend + len(y)
+        falling_ramp = 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, taper_count, endpoint=False)))
+        y_new[signal_end_index - taper_count : signal_end_index] *= falling_ramp
 
-    return t_new, y_new, info
+    return t_new, y_new
+
+
+def _center_pulse_trace(
+    t: np.ndarray,
+    y: np.ndarray,
+    peak_mode: str = 'auto',
+    taper_ps: float = 0.5,
+    picker_title: str = 'Pick main pulse peak',
+) -> tuple:
+    """Core centering routine — operates on raw arrays, knows nothing about datasets.
+
+    Plan-then-apply (:func:`_plan_center_pad` then :func:`_apply_center_pad`), kept as
+    a single call for callers that only ever transform the averaged trace.
+
+    Returns (t_new, y_new, info) where info carries metadata needed by
+    callers for logging and by the graph helper for annotation.
+    """
+    plan = _plan_center_pad(t, y, peak_mode=peak_mode, taper_ps=taper_ps,
+                            picker_title=picker_title)
+    t_new, y_new = _apply_center_pad(t, y, plan)
+    return t_new, y_new, plan
 
 
 def _plot_centering_result(filename: str, pre_arr: np.ndarray, new_arr: np.ndarray, info: dict) -> None:
@@ -2612,21 +2764,45 @@ def taper_and_pad_traces_universal(
     peak_mode = centering_cfg.get('peak_mode', 'auto')
     taper_ps = centering_cfg.get('taper_ps', 0.5)
 
+    carried, dropped = 0, 0
     for filename, data_obj in dataset.data.items():
         data = data_obj.data
         t = data[:, 0]
         y = data[:, 1]
-        t_new, y_new, info = _center_pulse_trace(
+        # Fetch the per-scan matrix while it is still in sync with data_obj.data —
+        # this step is about to change the row count.
+        previous_matrix = _ensure_scan_matrix(data_obj)
+
+        # ONE decision, taken from the averaged trace (where the peak is well
+        # determined), then applied identically to the average and to every scan.
+        # Deciding per scan would let noise move the peak by a sample and fabricate
+        # a timing spread that the instrument never produced.
+        plan = _plan_center_pad(
             t, y, peak_mode=peak_mode, taper_ps=taper_ps,
             picker_title=f"'{filename}' — pick main pulse peak",
         )
+        t_new, y_new = _apply_center_pad(t, y, plan)
+        info = plan
+
         data_obj.processing_dict['pre_centering'] = np.column_stack((t, y))
         data_obj.processing_dict['centering_info'] = info
         data_obj.data = np.column_stack((t_new, y_new))
 
+        had_scans = np.asarray(previous_matrix).shape[1] > 2
+        carry_scan_matrix(data_obj, previous_matrix,
+                          lambda column: _apply_center_pad(t, column, plan)[1], t_new)
+        if had_scans and scan_matrix_status(data_obj)['intact']:
+            carried += 1
+        elif had_scans:
+            dropped += 1
+
         if show_graph:
             _plot_centering_result(f"{filename}", data_obj.processing_dict['pre_centering'], data_obj.data, info)
-        
+
+    print(f"[taper_and_pad_traces_universal] padded {len(dataset.data)} traces; "
+          f"per-scan data carried through for {carried}"
+          + (f", DROPPED for {dropped}" if dropped else "") + ".")
+
     if show_graph:
         plt.show()
 
