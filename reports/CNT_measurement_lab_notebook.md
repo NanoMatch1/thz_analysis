@@ -556,9 +556,184 @@ Samuel spotted two data-analysis artifacts and both were real bugs.
   new grazing regression + updated zero-gap-noop; 196 nested incl. the F22 p-pol round-trip that
   replaced the stale `not_implemented` assertion).
 
+### F30 — p-pol grazing-root collapse is triggered BY removing the front-pulse timing offset, not by a residual one; fixed in the root picker *(2026-07-09)*
+**Status: CURRENT** (extends F25/F26/F29). New MINTS 2026-07-07 doped **n-type** Si control
+(pressed in the SiO₂ window, p-pol) inverted fine on the PLAIN back ratio (n≈3.14–3.20) but
+railed to the grazing root **n = n₁·sinθ = 0.707** the moment `self_phase` (front-pulse phase
+referencing) was on. A previous FZ (high-resistivity) Si set worked in all modes.
+- **Mechanism (diagnosed, reproduced headlessly).** `self_phase` forms `H=(Y2_s/Y2_r)·(C/|C|)`,
+  `C=Y1_r/Y1_s` — it multiplies H by the FIRST(front)-reflection phase difference between
+  sample and reference. The MINTS sample & reference are separate acquisitions with a ~47 fs
+  front-pulse timing drift (arg(C) linear-through-origin ⇒ a *legitimate* offset). Removing it
+  rotates arg(H) onto ≈−π (Si is higher-index than SiO₂ ⇒ real-negative r), i.e. **Im(r) crosses
+  0**. Being near-lossless AND high-index, the sample sits ON the p-pol root-swap boundary (F26):
+  the physical high-index root then reads as slight gain (Im>0) and the F29 global passivity vote
+  collapses the whole band onto the passive **grazing twin**.
+- **Samuel's fix hypothesis (eat the ~47 fs≈1-sample delay by a clean integer time-shift + crop,
+  via a new `align_to_reference(crop_to_overlap=True)`) was DISPROVEN.** A time-shift sweep on the
+  sample spectra shows the flip happens *exactly when the offset is fully eaten* (−47/−50 fs →
+  0.723), identical to `self_phase`; the plain ratio only survives because the *uncorrected* 47 fs
+  keeps arg(H) a hair short of π. **Removing the offset (by ANY method — self_phase, cross-corr,
+  crop) is the trigger, not the cure.** The physical high-index root (n≈3.3) is PRESENT in the
+  corrected H but unpicked; the twin degenerates to n₁sinθ.
+- **Real fix = the root picker, not the timing stage.** `thz_core.invert._invert_p_pol_index`
+  now applies a **physicality override**: n₁·sinθ is the evanescent/TIR floor, so if the passivity
+  vote lands at/below it while the other quadratic branch is genuinely high-index, take the
+  high-index branch (even if it reads slight gain k<0 — an honest "phase over-rotated / residual
+  gap" flag, far better than 0.707). Additive: it never overrides a vote that already picked
+  high-index, so every conductor / low-loss-dielectric round trip is unchanged. MINTS self_phase
+  now returns **n≈3.30**; FZ unchanged (3.44). Regression test
+  `test_p_pol_grazing_override_when_physical_root_reads_as_gain` (synthetic reproduces the exact
+  collapse: old vote picks grazing twin, override holds n=3.28). Tests: dataset_core 204,
+  nested thz_core 193 (+invert 24) pass.
+- **New diagnostic** `thz.plot_first_reflection_phase_diagnostic` (adapter, wired into
+  run_me_low-level behind `general.selfref_phase_diagnostic`): shows front(Y1) & back(Y2)
+  magnitudes, arg(C) with a timing-fit, arg(H) plain-vs-self_phase, **Im(r) with the Im(r)=0
+  root-swap line (the smoking gun)**, |H|, and n both ways vs grazing/Si guides; prints a
+  `GRAZING-ROOT FLIP` flag. Note: |C| and `selfref_quality` (std|C|) MISS this — the front spots
+  match in amplitude (|C|≈0.96 both sets); the signal is entirely in front-pulse PHASE.
+- **Caveat for the operator:** with the picker fixed, `self_phase` returns the physical branch —
+  but a k<0 output is the flag that arg(H) is slightly over-rotated (residual gap / imperfect
+  timing). Use ONE timing correction (self_phase alone on the shared axis is cleanest), not
+  self_phase + align together.
+
+### F31 — Bare|doped CNT relative geometry: within a single run the measurement drifts, with a smooth spectral TILT (+0.07/hour at 1.6 THz) and a sub-sample TIMING walk (+17 fs/hour) that the time-domain peak cannot see *(2026-08-20)*
+**Status: PARTLY SUPERSEDED → F32** (the *measurements* stand; the "cause still open" and the
+implied worry about sample degradation are resolved — it is the nitrogen purge equilibrating).
+New sample concept (Samuel): one 2 cm strip carrying 1 cm bare CNT +
+1 cm doped CNT, measured on the same holder with only a lateral stage translation between
+them, referencing **doped against bare** for a relative measurement — sidestepping the
+mirror-swap misalignment that F20/F23/F28 identified as the limiter. This first dataset
+(`2026-08-20_CNT-paper-doped_2`) is a **plain air|CNT single bounce**, not the windowed
+back-reflection geometry, and contains only the doped half plus a placeholder gold.
+- **Motivation for the analysis:** before trusting any bare→doped ratio, we need to know
+  whether the sample is stable *during* a run. New module
+  `dataset_core/adapters/acquisition_tracking.py` + `run_me_acquisition_drift.py` keep every
+  `.acc` acquisition separate (timestamps are in the per-scan headers) and track it against
+  elapsed time. Deliberately no inversion — this is a stability diagnostic only.
+- **Finding 1 — the drift is a smooth spectral TILT, not a flat gain.** Doped CNT over 130 min:
+  amplitude ratio +1.2%/hour at 0.3 THz rising monotonically to **+7.4%/hour at 1.6 THz**
+  (total +2% → +19% across the band). Gold over 87 min shows the SAME functional form at
+  ~1/5 the size (−0.8%/hour at 0.3 THz to +1.6%/hour at 1.6 THz). Time-domain peak grows
+  +15.9% (sample) / +8.0% (gold) — larger than the windowed RMS energy (+13.3% / +2.2%),
+  i.e. the pulse is also **sharpening**, not just gaining.
+- **Roughness hypothesis TESTED and REJECTED.** A slow flattening of the tape against its
+  mount would give the Rayleigh law ln(A_late/A_early) ∝ f² . Fitting 0.25–2.2 THz, a plain
+  **linear-in-f** tilt fits far better than f² (residuals 4–9× smaller; R² 0.992 vs 0.928 on
+  the sample, 0.979 vs 0.905 on gold). So the tilt is NOT the roughness/contact-settling
+  story — worth remembering, since that was the appealing explanation. Cause still open.
+- **Finding 2 — a sub-sample timing walk that the peak bin cannot resolve.** Fitting the
+  slope of arg(Y_n/Y_start) over 0.3–2.0 THz gives **+16.7 fs/hour on the doped CNT (+35.8 fs
+  total) and +7.0 fs/hour on gold (+12.1 fs)**, with a scan-to-scan scatter of only
+  0.5–0.8 fs — so the trend is ~50σ, not noise. The sample step is 50 fs, so the doped run's
+  drift is **72% of one step and the time-domain peak index never moves.** This is the
+  time-invisible regime of F19 (a <25 fs error still wrecks CNT n through near-mirror
+  conditioning) showing up *within a single acquisition run*.
+- **Consequence for the bare|doped plan (actionable).** A sequential bare-then-doped
+  measurement separated by ~2 h inherits both a ~30 fs relative delay and a frequency-dependent
+  ~10–20% amplitude tilt — precisely the two error channels the relative geometry was meant to
+  remove. **Interleave the two positions (A-B-A-B) rather than running them back to back**, so
+  the drift is common-mode between neighbouring pairs and cancels in the ratio.
+- **Caveat:** gold and doped were taken hours apart (11:38–13:06 vs 14:24–16:34) at different
+  lock-in sensitivities, so gold-vs-sample is indicative of common mode, not a controlled
+  comparison. Numbers above are from a read while the sample run was **still acquiring**.
+- **Incidental observation, unexplained:** the doped-CNT reflected pulse is INVERTED relative
+  to gold (main lobe +75 mV vs gold −180 mV, whole waveform sign-flipped). A conducting CNT at
+  45° s-pol should reflect with the same sign as gold. Suspect a lock-in phase difference
+  between the two runs (the sensitivity was also changed). Worth settling before any gold-
+  referenced inversion is attempted on this geometry.
+
+### F32 — The F31 within-run drift IS the nitrogen purge equilibrating, and it takes ~4 hours, not 15 minutes. Sample degradation is currently HIDDEN underneath it *(2026-08-20, Samuel supplied the mechanism)*
+**Status: CURRENT** (resolves F31's open cause). Samuel: the sample sits in a leaky
+nitrogen-purged box assumed to equilibrate in ~15 min. The F31 drift is that purge, still
+running.
+- **Mechanism (Samuel's, confirmed on both observables).** *Timing* = the gas refractive index
+  changing as air is displaced by N₂. *Amplitude gain + pulse sharpening* = water vapour
+  absorption falling; it dominates at high frequency, so removing it both raises the amplitude
+  and shortens the transform-limited pulse.
+- **A leaky box equilibrates as 1−exp(−t/τ), and that saturation is the decisive test** — a purge
+  settles to a plateau, sample degradation does not. Fitted on the 12mm run (174 acq, 130 min):
+  **timing τ = 38 min** (plateau +40 fs, exponential fits **45× better than linear**);
+  **amplitude τ ≈ 47–49 min** at 1.0/1.6/2.0 THz (plateaus +10.5%/+17.9%/+21.2%, exponential
+  7–16× better). At 0.5 THz there is barely a transient to fit (1.6×) — consistent, since the
+  water effect is a high-frequency one.
+- **The clincher: the second run shows NOTHING.** The 7mm run (43 acq, 31.5 min, started 16:39
+  with the box left closed after the 12mm run) gives **+2.4 fs of timing drift and a flat
+  amplitude** — every observable returns "no transient". Same sample, same laser, same optics.
+  A drift that appears only in the run following a chamber disturbance is not degradation and
+  not instrument drift.
+- **τ_water > τ_gas (49 vs 38 min) is expected and meaningful:** the bulk gas exchanges first,
+  then water keeps desorbing from the chamber walls. **Use the amplitude (water) τ as the one
+  that governs when it is safe to measure.**
+- **The practical number: 99% settling = 4.6τ ≈ 3.7 h; even 95% ≈ 2.4 h.** The assumed 15 min is
+  ~0.3τ ≈ 26% equilibrated. This is the real cost of opening the chamber.
+- **Timing SIGN confirms it is the dry-gas swap, not the water.** N₂ is *more* refractive than
+  air (n−1 = 2.98e-4 vs 2.77e-4), so air→N₂ lengthens the optical path and the pulse arrives
+  **later** — which is what we measure (+40 fs). Water vapour *raises* n across 0.3–2 THz (most
+  of its rotational oscillator strength lies above this band ⇒ positive index contribution), so
+  water removal alone would make the pulse arrive **earlier**. The two oppose; the measured sign
+  says the gas swap wins. **Checkable prediction: if the delay were purely the air→N₂ swap the
+  implied optical path inside the box is ≈ 57 cm** — and since water removal opposes it, the true
+  path is ≥ that. Worth measuring against the actual geometry as an independent confirmation.
+- **Why this was not identified spectroscopically:** the reflection record is ~4.5 ps ⇒ true
+  resolution 0.22 THz, while water rotational lines are ~GHz wide. **The lines are unresolvable
+  here**, so the water signature can only ever appear as a smooth broadband tilt rising with
+  frequency — which is exactly what F31 measured, and why F31's "smooth vs f² roughness" test
+  (roughness correctly rejected) could not go further. To *monitor* purge state spectroscopically
+  a long-record scan (≥50 ps) is needed; for the short reflection records, this drift tool is the
+  instrument.
+- **Consequence — the important one (Samuel).** Sample degradation, if present, is currently
+  **masked**: it would push amplitude DOWN while the purge pushes it UP by up to +21%. Nothing in
+  this dataset constrains degradation. Two ways forward: (a) improve the purge / stop disturbing
+  it, and (b) once equilibrated, a flat run like the 7mm one *is* a clean degradation test.
+- **Levers on the purge:** τ = V/Q, so raising the purge flow or shrinking the chamber volume
+  shortens τ directly; better sealing mainly improves the final dryness (the plateau), not τ.
+  Samuel's lateral translation stage is already the right pattern — change what you can from
+  outside without opening the box. **And it is now measurable:** run
+  `purge_equilibration_report` after any disturbance and wait for the verdict to read
+  EQUILIBRATED instead of guessing.
+- **Data note:** the 12mm run was mispositioned — Samuel found it sat about halfway between the
+  doped and bare halves of the strip. Irrelevant to the purge finding, but that run is not a
+  clean doped measurement.
+
+**Usability metric (`purge_settling_assessment`).** The intuitive criterion — "within X% of the
+extrapolated plateau" — was rejected as the primary test: the plateau is an extrapolation, poorly
+constrained until ~1τ has been observed, and distance-from-plateau ignores how long you intend to
+measure. The criterion used instead is the **residual drift over a measurement window**,
+`d(t,T) = |span|·exp(−t/τ)·(1−exp(−T/τ))`, which *is* the systematic error the purge injects into
+an average of length T; it inverts in closed form for the wait time. Threshold anchored at **0.5%**
+= the bottom of the F28 instrument floor, so below it the purge stops being the limiting term.
+Reported alongside is whether the run is **purge-limited or noise-limited** (residual drift vs the
+statistical uncertainty of the same average) — once noise-limited, waiting longer buys nothing.
+Output is a **cut index**, so a contaminated run is re-averaged from a later acquisition rather
+than discarded.
+- **Pitfall found while building it — a short run cannot fit its own τ.** The 7mm control fits as
+  a straight line and self-reports EQUILIBRATED, but carrying τ = 47 min over from the 12mm run
+  shows it was still ~0.6%/30 min from settled and needed ~7 more minutes. **Always pass
+  `known_tau_seconds` for runs shorter than ~1τ.** Independent consistency check: the 12mm run at
+  its end predicts 0.68%/30 min and the 7mm run (starting ~30 min later) predicts 0.58% — the same
+  curve seen from two runs.
+- **Figure `plot_purge_equilibration`** (built for showing collaborators): exponential fit +
+  extrapolated plateau + the straight-line (degradation) fit that visibly misses at both ends; a
+  residual panel scaled to the *exponential* residuals so the linear ones run off-panel; the
+  independent timing observable; and an optional control column (undisturbed chamber) on shared
+  y-limits. A real ~2% excursion at 80–90 min into the 12mm run shows up cleanly in the residual
+  panel — unexplained, but it is the only structured feature in an otherwise flat residual.
+
 ---
 
 ## Diagnostics & tools built for this work
+- **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
+  metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
+- **`purge_equilibration_report`** / `fit_exponential_equilibration` — fits 1−exp(−t/τ) to the
+  timing and amplitude drift and returns an EQUILIBRATED / PURGE TRANSIENT verdict with the
+  settling time; the exponential *saturation* is what distinguishes a purge from degradation [F32].
+- **`purge_settling_assessment`** — residual-drift-over-window usability criterion returning a CUT
+  INDEX (and purge- vs noise-limited); pass `known_tau_seconds` for runs shorter than ~1τ [F32].
+- **`plot_purge_equilibration`** — the collaborator-facing purge-vs-degradation figure: fit,
+  residual, independent timing observable, optional undisturbed-chamber control column [F32].
+- **`plot_first_reflection_phase_diagnostic`** — front-reflection phase + the self_phase p-pol
+  grazing-root-flip check (Im(r)=0 root-swap panel) [F30].
 - **`selfref_quality`** — flags front-spot drift via std(|C|) (window self-referencing).
 - **`min_one_plus_r`** floor in `invert_nk_reflection` — masks the r=−1 blow-up; warns on |H|>1 [F6].
 - **`detrend_transfer_phase`** — experimental linear-phase removal, to *see* the F5 spikes vanish.

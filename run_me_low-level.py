@@ -13,6 +13,10 @@ import os
 
 from dataset_core import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import pipeline_registry, session_bundle
+
+# Record the pipeline into dataset.recipe (replayable/reopenable later). Run before the stages.
+pipeline_registry.activate_recording()
 
 # from thz_core import (
 #     align_on_peak,
@@ -62,7 +66,14 @@ def display_crop_regions(dataset):
 # ── Data paths ──────────────────────────────────────────
 
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\silicon\p-pol' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
-# data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\p-pol' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\p-pol' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export\mints'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
+# data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol_2\export'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
+# data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-10_sio2-E_testing\export'
 
 
 # ── Physical parameters ─────────────────────────────────
@@ -73,8 +84,17 @@ PS_TO_S = 1e-12
 config: dict = {
     "general": {
         'show_graph': True,
-        'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
-        'save_database': True,          # save the dataset database after processing
+        'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
+        'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
+        'save_database': False,          # save the dataset database after processing
+        'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
+        'session_notes': '',            # free-text notes stored in the bundle
+        'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
+        'uncertainty_draws': 200,       # MC draws for the above
+        'selfref_phase_diagnostic': False
+    },
+    'grouping': {
+        'keywords': ['type', 'series'],  # group by type and series (sample vs reference)
     },
     "geometry": {
         "theta_external_deg": 45.0,   # external incidence angle
@@ -83,9 +103,18 @@ config: dict = {
     },
     "regions": {
         'first_reflection': (146.5, 159.5),  # cnt
-        'second_reflection': (170.4, 186.9),  # cnt
+        'second_reflection': (170.4, 184.5),  # cnt
         # "first_reflection": (145, 157.3),  # silicon
         # "second_reflection": (174, 183),  # silicon
+    },
+    "transfer": {
+        "self_reference": False,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
+        "self_phase": True,          # H = (Y2/Y2)·(C/|C|): front pulse for TIMING only, no amp norm
+                                     #   (ignored if self_reference True; replaces align_to_reference)
+        "apply_snr_mask": True,     # build the SNR-based trusted-band mask
+        "min_ref_amp_rel": 1e-3,
+        "regularization_eps": 1e-30,
+        "unwrap_phase": True,
     },
     "centering": {
         "mode": "crop",  # 'crop' or 'pad'
@@ -95,7 +124,7 @@ config: dict = {
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
         "alpha": 1.0,            # tukey only
-        "half_width_ps": 3,    # fixed half-width — SAME window for every pulse
+        "half_width_ps": 5,    # fixed half-width — SAME window for every pulse
     },
     "pad": {
         "extend_factor": 1.0,
@@ -113,19 +142,26 @@ config: dict = {
         "limit_to_instrument_resolution": True,
         "broadening_factor": 1.0,   # >1 (e.g. 2.0) for the conservative Hann main-lobe width
     },
-    "transfer": {
-        "self_reference": False,     # H = (Y2/Y1)_sample / (Y2/Y1)_ref (front-pulse referencing)
-        "self_phase": True,          # H = (Y2/Y2)·(C/|C|): front pulse for TIMING only, no amp norm
-                                     #   (ignored if self_reference True; replaces align_to_reference)
-        "apply_snr_mask": True,     # build the SNR-based trusted-band mask
-        "min_ref_amp_rel": 1e-3,
-        "regularization_eps": 1e-30,
-        "unwrap_phase": True,
-    },
+
     "mask": {
-        "snr_thresh_db": 10,
+        "snr_thresh_db": 5,
         "tail_fraction": 0.25,
         "min_contiguous_bins": 3,
+    },
+    "kk_nk": {
+        # Geometry-agnostic n<->k Kramers-Kronig reconstruction of k from the (trusted)
+        # phase-derived n. For silicon/weak-k samples the amplitude-derived k is unreliable
+        # (it blows up at high f); n is clean, so rebuild k from it.
+        #   kk_band_thz : restrict the KK integral to the CLEAN interior band and hold n
+        #                 flat outside — excludes the band-edge n roll-off that otherwise
+        #                 manufactures the high-f ramp. Set to where n is reliable.
+        #   anchor_mode : 'zero_high' pins k=0 at the top of that band (right for
+        #                 transparent/lightly-doped samples, k->0 at high f, e.g. Si).
+        #                 Use 'measured' for conductive films (CNT) where k stays large.
+        "enabled": False,
+        "kk_band_thz": (1, 2),
+        "anchor_mode": "zero_high",
+        "clip_negative": True,
     },
     "phase_kk": {
         # Kramers-Kronig (analytical-fit) phase correction (arXiv:2412.18662): removes the
@@ -133,7 +169,7 @@ config: dict = {
         # (unlike phase_detrend, which strips material delay too). Polarization-independent;
         # only the downstream invert uses 's'/'p'. Runs between transfer and invert.
         "enabled": False,
-        "f_end_thz": 2.5,       # KK truncation freq; None -> top of the trusted SNR band
+        "f_end_thz": 2.0,       # KK truncation freq; None -> top of the trusted SNR band
         "fit_band_thz": (1, 2),    # None -> (0.15, 0.85) * f_end
         "use_snr_mask": True,
     },
@@ -152,7 +188,20 @@ config: dict = {
     "derive": {
         # Background permittivity subtracted to isolate free-carrier conductivity:
         # sigma = -i*omega*eps0*(eps - eps_background). 1.0 = vacuum; 11.7 = silicon.
-        "eps_background": 11.6
+        "eps_background": 11.7
+    },
+    "drude": {
+        # Headless joint sigma_1+sigma_2 Drude fit (see the stage after derive_eps_sigma).
+        "enabled": False,
+        "fit_band_thz": (0.35, 1.6),
+    },
+    "fit": {
+        # Interactive fit GUI (with the MC error bars); results save into the bundle.
+        "interactive": False,
+        "quantity": "sigma",              # 'sigma' | 'eps' | 'n'
+        "model": "drude_conductivity",
+        "sample": None,                   # substring filter, e.g. 'n-type'
+        "fit_band_thz": (0.7, 1.6),
     },
     "air_gap": {
         # Route-A contact-gap de-embed (SiO2 | air d | CNT). When enabled, strips the gap
@@ -162,8 +211,8 @@ config: dict = {
         # (~0-5 um); larger d over-strips and pushes n below 1. Pin d with the Si
         # benchmark (known n=3.418) before trusting absolute numbers.
         "enabled": False,
-        "position_um": 1,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
-        "width_um": 0.0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
+        "position_um": 5,    # d_mean: mean gap (round-trip phase strip). PLACEHOLDER pending Si.
+        "width_um": 0,       # sigma_d: roughness spread (Debye-Waller magnitude un-suppression).
         "max_boost": 0.0e3,    # clip on 1/W so the suppressed high-f tail cannot explode.
     },
 }
@@ -173,7 +222,7 @@ config: dict = {
 
 dataset = DataSet(data_dir, config=config)
 dataset.load_all_data()
-# dataset.plot_current()
+dataset.plot_current()
 # display_crop_regions(dataset)
 thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
 thz.taper_and_pad_traces(dataset)
@@ -185,7 +234,7 @@ thz.taper_and_pad_traces(dataset)
 
 
 # --- pair sample <-> reference ---
-dataset.group_files(keywords=['type', 'polarization'])
+dataset.group_files(keywords=config['grouping']['keywords'])
 # dataset.group_files(keywords=['type', 'polarization'])
 dataset.grouping.show_matches()
 
@@ -200,11 +249,13 @@ dataset.grouping.show_matches()
 # both off). self_phase corrects the timing structurally in the frequency domain (via the
 # front-pulse phase), so skip the cross-correlation when it is on.
 # if not config['transfer'].get('self_reference', False) and not config['transfer'].get('self_phase', False):
-#     first_region = config['regions'].get('first_reflection')
-#     correlation_roi = first_region if (first_region and None not in first_region) else None
-#     thz.align_to_reference(
-#         dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=False, subsample_correction=True
-#     )
+# first_region = config['regions'].get('first_reflection')
+# correlation_roi = first_region if (first_region and None not in first_region) else None
+# thz.align_to_reference(
+#     dataset, timing_segment='first_reflection', roi=correlation_roi, show_graph=True, subsample_correction=False, crop_to_overlap=True
+# )
+# thz.global_truncate(dataset)  # crop all traces to the same length (shortest trace)
+dataset.plot_current()
 
 thz.define_reflection_regions(dataset, config)
 thz.subtract_baseline(dataset)
@@ -340,6 +391,30 @@ thz.invert_nk_reflection(
     n_window=config['geometry']['n_sio2'],
 )
 
+# --- KK RECONSTRUCTION OF k FROM n (opt-in) ---
+# Rebuild the weak/ill-conditioned extinction k from the trusted phase-derived n via the
+# geometry-agnostic n<->k Kramers-Kronig relation. Config in config['kk_nk'] (clean band +
+# anchor mode). Runs AFTER invert_nk_reflection and BEFORE derive_eps_sigma so sigma is
+# derived from the reconstructed k. Stashes measured k as processing['k_measured'].
+if config.get('kk_nk', {}).get('enabled', False):
+    thz.reconstruct_extinction_kk(dataset, show_graph=config['general']['show_graph'])
+
+# --- FIRST-REFLECTION PHASE DIAGNOSTIC (opt-in) ---
+# Shows the front (first) reflection phase and how front-pulse referencing (self_phase /
+# self_reference) propagates it into H and n. Built for the failure where a p-pol sample
+# inverts fine on the PLAIN back ratio but rails to the grazing root (n ~ 0.707) once
+# self_phase is on: self_phase multiplies H by C/|C| (C = Y1_r/Y1_s = the front-pulse phase
+# ratio), and for a conductive/high-index sample near the p-pol root-swap boundary
+# (Im(r)~0) that injected phase flips the inversion onto the spurious grazing twin. |C| and
+# selfref_quality miss it (they read amplitude; the front spots match in |.| but differ in
+# phase). Runs AFTER invert (reuses the stored r_reference/theta_internal to re-invert both
+# candidate H). Prints a GRAZING-ROOT FLIP flag per sample.
+if config['general'].get('selfref_phase_diagnostic', False):
+    thz.plot_first_reflection_phase_diagnostic(
+        dataset, config, show=config['general']['show_graph'],
+        save_dir=os.path.join(data_dir, 'first_reflection_diagnostic'),
+    )
+
 # thz.detrend_transfer_phase(dataset, show_graph=config['general']['show_graph'])
 
 # --- AIR-GAP DE-EMBED (Route A, non-interactive) ---
@@ -354,6 +429,41 @@ if config['air_gap'].get('enabled', False):
 
 # --- complex permittivity + optical conductivity from n, k ---
 thz.derive_eps_sigma(dataset)
+
+# --- MONTE-CARLO UNCERTAINTY PROPAGATION (opt-in) ---
+# Push the transfer uncertainty through the window-geometry inversion (+ air-gap de-embed if on)
+# + derive, giving error bars on n/k/eps/sigma. The inline reinvert mirrors THIS pipeline's exact
+# inversion sequence. Runs before apply_instrument_resolution so the error arrays decimate onto
+# the same grid. NOTE: additive-noise-only input -> optimistic lower bound.
+if config['general'].get('propagate_uncertainty', False):
+    from dataset_core.adapters import uncertainty
+
+    def _window_reflection_reinvert(current_dataset):
+        thz.invert_nk_reflection(
+            current_dataset,
+            geometry='window',
+            theta_deg=config['geometry']['theta_external_deg'],
+            polarization=config['geometry']['polarization'],
+            n_window=config['geometry']['n_sio2'],
+            report=False,
+        )
+        if config['air_gap'].get('enabled', False):
+            thz.deembed_air_gap_reflection(current_dataset)
+        thz.derive_eps_sigma(current_dataset)
+
+    uncertainty.propagate_uncertainty(
+        dataset, _window_reflection_reinvert,
+        n_draws=config['general'].get('uncertainty_draws', 200),
+    )
+
+# --- DRUDE FIT (headless; opt-in) — one joint fit to sigma_1 AND sigma_2. ---
+# Geometry-agnostic KK-consistency check on the window-reflection sigma. Prints
+# sigma_DC / tau / plasma freq / joint R^2 per sample.
+from dataset_core.adapters import conductivity_fitting as conductivity
+if config.get('drude', {}).get('enabled', False):
+    conductivity.fit_conductivity(dataset, fit_band_thz=config['drude'].get('fit_band_thz'))
+
+    # plt.show()
 
 # --- OPTIONAL: collapse every frequency-domain product onto the true-resolution grid ---
 # No-op unless config['resolution']['limit_to_instrument_resolution'] is True. When on,
@@ -391,8 +501,25 @@ if config['general'].get('air_gap_explorer', False):
 if config['general'].get('save_database', False):
     dataset.save_database()
 
+# --- INTERACTIVE FITTING (opt-in): fit GUI with the MC error bars; results save in the bundle. ---
+if config.get('fit', {}).get('interactive', False):
+    from dataset_core.adapters import fitting
+    _fit_cfg = config['fit']
+    fitting.fit_interactive(dataset, quantity=_fit_cfg.get('quantity', 'sigma'),
+                            model=_fit_cfg.get('model', 'drude_conductivity'),
+                            samples=_fit_cfg.get('sample'), fit_band_thz=_fit_cfg.get('fit_band_thz'))
+
+# --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in): set config['general']['save_session'] to a path
+#     or True. Reopen with session_bundle.load_session (fast) or replay_recipe (recompute). ---
+_session_target = config['general'].get('save_session', False)
+if _session_target:
+    _bundle_dir = _session_target if isinstance(_session_target, str) else os.path.join(
+        data_dir, f"{dataset.seriesname}.thzbundle")
+    session_bundle.save_session(dataset, _bundle_dir, notes=config['general'].get('session_notes', ''))
 # --- inspect / launch the interactive result viewer ---
-thz.result_viewer(dataset)
+# thz.result_viewer(dataset)
+thz.launch_results_viewer(dataset)
+plt.show()
 
 # breakpoint()
 

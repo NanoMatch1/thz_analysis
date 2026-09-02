@@ -1966,9 +1966,16 @@ def _write_snr_masks(samp_obj, ref_obj, mask_metrics: dict) -> None:
     # transfer uncertainty (compute_transfer_uncertainty) is self-contained — it needs
     # BOTH the sample and reference per-bin SNR to propagate the ratio error.
     samp_obj.processing_dict['ref_snr_db'] = ref_snr_arr
+    # The scalar spectral floor each SNR was measured against. Stored per spectrum so the
+    # single-spectrum error bars (compute_spectrum_uncertainty) read the same number the
+    # mask and the transfer uncertainty use, rather than re-deriving it.
+    if values.get('samp_noise_floor') is not None:
+        samp_obj.processing_dict['noise_floor'] = float(values['samp_noise_floor'])
     if ref_obj is not None:
         ref_obj.processing_dict['snr_db'] = ref_snr_arr
         ref_obj.processing_dict['snr_mask'] = ref_snr_arr >= snr_thresh
+        if values.get('ref_noise_floor') is not None:
+            ref_obj.processing_dict['noise_floor'] = float(values['ref_noise_floor'])
 
 
 def _contiguous_false_bands(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -3155,6 +3162,7 @@ def align_to_reference(
     subsample_correction: bool | None = None,
     timing_segment: str = 'second_reflection',
     show_graph: bool = False,
+    crop_to_overlap: bool = False,
 ) -> DataSet:
     """Shift each sample in time so it shares its reference's T0 (cross-correlation).
 
@@ -3198,6 +3206,17 @@ def align_to_reference(
         ``data_obj.processing_dict`` where ``transfer_function`` reads it.
     show_graph : bool
         If True, plot reference + sample before/after alignment per sample.
+    crop_to_overlap : bool
+        If True, after all integer shifts are applied, every object in the dataset
+        (samples and references, including ``first_reflection`` segments of
+        ``THzDataReflection``) is cropped to the global time overlap so every
+        trace shares an identical ``t[0]`` and ``t[-1]``. This is essential when
+        an integer-sample shift slides one axis relative to another: without the
+        crop, downstream steps that assume a common axis (FFT, transfer function)
+        will silently misalign. The sub-sample residual is unaffected. Use when
+        the first reflection is the physical T0 anchor and you want to remove the
+        integer delay cleanly. Cost: ``|integer_shift|`` samples trimmed from the
+        dataset's global overlap boundary.
     """
     if subsample_correction is None:
         subsample_correction = SUBSAMPLE_TIMING_CORRECTION
@@ -3304,6 +3323,53 @@ def align_to_reference(
             ax.set_title(f'Align to reference — {filename}')
             ax.legend()
             plt.show()
+
+    if crop_to_overlap:
+        # Collect every time-domain data holder across all objects — samples,
+        # references, and first_reflection sub-holders for THzDataReflection.
+        # All are on time axes that may have been shifted by different integer
+        # amounts. Find the global overlap and crop every holder to it, so that
+        # t[0] and t[-1] are identical across the whole dataset.
+        holders = []
+        for obj in dataset.data.values():
+            holders.append(obj)
+            if isinstance(obj, THzDataReflection) and obj.first_reflection is not None:
+                holders.append(obj.first_reflection)
+
+        dt_overlap = float(np.median(np.diff(holders[0].data[:, 0])))
+        t_overlap_start = max(float(h.data[0, 0]) for h in holders)
+        t_overlap_end = min(float(h.data[-1, 0]) for h in holders)
+
+        if t_overlap_end <= t_overlap_start:
+            print(
+                "[align_to_reference] crop_to_overlap: Warning — no common time overlap "
+                "found after alignment shifts; skipping crop."
+            )
+        else:
+            half_dt = dt_overlap * 0.5
+            for h in holders:
+                t = h.data[:, 0]
+                n_before = int(t.shape[0])
+                mask = (t >= t_overlap_start - half_dt) & (t <= t_overlap_end + half_dt)
+                h.data = h.data[mask]
+                # Crop the per-scan working matrix if it exists and is still row-aligned.
+                sm = h.processing_dict.get(_SCAN_MATRIX_KEY)
+                if sm is not None:
+                    sm_arr = np.asarray(sm)
+                    if sm_arr.shape[0] == n_before:
+                        h.processing_dict[_SCAN_MATRIX_KEY] = sm_arr[mask]
+                    else:
+                        # Stale matrix — drop it; _ensure_scan_matrix will recover.
+                        h.processing_dict.pop(_SCAN_MATRIX_KEY, None)
+
+            lengths = [h.data.shape[0] for h in holders]
+            n_final = lengths[0]
+            all_equal = len(set(lengths)) == 1
+            print(
+                f"[align_to_reference] crop_to_overlap: common axis "
+                f"[{t_overlap_start * _S_TO_PS:.4f}, {t_overlap_end * _S_TO_PS:.4f}] ps "
+                f"-> {n_final} samples per trace (all equal: {all_equal})."
+            )
 
     return dataset
 
@@ -3821,10 +3887,81 @@ def apply_instrument_resolution(dataset: DataSet, config: dict | None = None) ->
                     and holder.data.shape[0] == n_freq):
                 holder.data = holder.data[::decimation_factor]
 
+    # Record that the decimation HAPPENED (not merely that it was requested), so plots
+    # can tell an already-decimated grid from an oversampled one — see
+    # _resolution_marker_stride.
+    resolution_cfg['resolution_applied'] = True
+    config['resolution'] = resolution_cfg
+
     print(
         f"[apply_instrument_resolution] decimated frequency-domain products by "
         f"{decimation_factor}x (kept every {decimation_factor}th bin)."
     )
+    return dataset
+
+
+def compute_spectrum_uncertainty(dataset: DataSet, config: dict | None = None) -> DataSet:
+    """Per-bin uncertainty on each INDIVIDUAL spectrum (samples and references alike).
+
+    The same additive-noise model ``compute_transfer_uncertainty`` uses for H, exposed one
+    level earlier so a raw FFT can be plotted with the error bars that actually drive
+    everything downstream::
+
+        sigma_|Y|(f) = noise_floor          (flat: white time noise -> flat spectral floor)
+        sigma_arg Y(f) = noise_floor/|Y(f)| (rad, high-SNR small-angle limit; capped at pi)
+
+    Written as ``fft_sigma`` / ``fft_phase_sigma`` so the quantity registry can hand them to
+    the results viewer and ``plot_fft`` without either knowing where they came from. Needs
+    ``transfer_function`` (or ``trusted_band_mask``) to have run — that is what measures the
+    floor.
+
+    Known limitation (measured, not theoretical — see
+    ``explorations/transfer_uncertainty_audit/``)
+    ------------------------------------------------------------------------------------
+    ``noise_floor`` is the median |Y| over the top ``mask.tail_fraction`` of the frequency
+    axis, which is only a noise estimate if the spectrum has actually reached a noise
+    PLATEAU there. On a short record with a sharp pulse it has not: the band is still
+    falling reproducible signal, so the "floor" is set by pulse content rather than by
+    noise. It then (a) sits several times above the true random scatter, (b) does not fall
+    as 1/sqrt(N_scans) when you average more, and (c) differs between two samples measured
+    on the same instrument. The resulting error bars are inflated, increasingly so toward
+    high frequency where they are formed as floor/|Y|. Check the reporter line below: if
+    the spectrum is still decaying through the floor band, treat the bars as an upper
+    bound. The measured cure is to estimate sigma from the repeat scans instead.
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    written = 0
+    diagnostics = []
+    for filename, data_obj in dataset.data.items():
+        processing = getattr(data_obj, 'processing_dict', {})
+        spectrum = processing.get('fft_spectrum')
+        floor = processing.get('noise_floor')
+        if spectrum is None or floor is None:
+            continue
+        magnitude = np.abs(np.asarray(spectrum))
+        floor = float(floor)
+        processing['fft_sigma'] = np.full(magnitude.shape, floor)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            processing['fft_phase_sigma'] = np.minimum(floor / magnitude, np.pi)
+        written += 1
+
+        # Is the floor band a noise plateau, or still decaying signal? Compare the first
+        # and last thirds of the band the floor was measured over: a plateau is flat.
+        tail_fraction = float((config.get('mask', {}) or {}).get('tail_fraction', 0.2))
+        tail_points = max(8, int(np.ceil(magnitude.size * tail_fraction)))
+        band = magnitude[-tail_points:]
+        third = max(1, band.size // 3)
+        decay_ratio = float(np.median(band[:third]) / max(np.median(band[-third:]), 1e-30))
+        diagnostics.append((filename, floor, decay_ratio))
+
+    for filename, floor, decay_ratio in diagnostics:
+        note = ("  *** still decaying — floor is signal-limited, bars are an UPPER BOUND ***"
+                if decay_ratio > 2.0 else "")
+        print(f"[compute_spectrum_uncertainty] '{filename}': floor {floor:.3e}, "
+              f"floor-band decay {decay_ratio:.1f}x.{note}")
+    if written == 0:
+        print("[compute_spectrum_uncertainty] no spectral noise floors found "
+              "(run transfer_function first); skipping.")
     return dataset
 
 
@@ -3857,6 +3994,23 @@ def compute_transfer_uncertainty(dataset: DataSet, config: dict | None = None) -
     the measured per-timepoint repeat scatter σ_t(t) (available from the scans, higher
     at the peak) through the windowed DFT: σ_Y(f)² ≈ ½·Σ_t w(t)²·σ_t(t)². That needs
     stderr(t) plumbed through baseline+window (currently dropped) — a documented TODO.
+
+    MEASURED FAILURE MODE (``explorations/transfer_uncertainty_audit/``, 2026-08-20).
+    The floor is only a noise estimate where the spectrum has reached a noise plateau.
+    On a short record with a sharp pulse it has not: the top of the frequency axis is
+    still *reproducible pulse content*, so the floor is set by the signal. Consequences,
+    all confirmed against the individual .acc scans of a 3-file CNT reflection set:
+    the floor sat 4-12x above the true random scatter of the mean in the same band; it
+    did NOT fall as 1/sqrt(N_scans) (it wandered by up to 6x, sometimes upward, as scans
+    were added); and two samples on the same instrument got floors differing by ~2x
+    purely because their pulses differ above 7 THz. Because σ_|H|/|H| is built as
+    floor/|Y|, the error grows like 1/|Y| toward high frequency while the true random
+    error does not — the bars were 2-7x too large above 4 THz for a 111-scan sample and
+    ~10-15x too large across the whole band for a 29-scan one. Reducing instrument noise
+    therefore does not visibly shrink these bars. The cure is to estimate σ from the
+    repeat scans (block/batch-means over ``working_scans``) rather than from a spectral
+    tail; note ``working_scans`` is currently dropped by the first pipeline step (the
+    row count changes), so that plumbing has to be restored first.
     """
     config = config or getattr(dataset, 'config', None) or {}
     for filename, data_obj in dataset.data.items():
@@ -3874,6 +4028,10 @@ def compute_transfer_uncertainty(dataset: DataSet, config: dict | None = None) -
         relative_error = np.sqrt(relative_variance)
         processing['transfer_H_sigma'] = np.abs(transfer_H) * relative_error
         processing['transfer_phase_sigma'] = relative_error
+
+    # Same noise model, one level up: per-spectrum bars for the raw FFTs, so plot_fft and
+    # the results viewer show the uncertainty that produced these H bars.
+    compute_spectrum_uncertainty(dataset, config)
     return dataset
 
 
@@ -4241,6 +4399,237 @@ def selfref_quality(dataset: DataSet, config: dict | None = None) -> dict:
                 f"suspect. Re-align to the back reflection (do NOT divide H by C — that only "
                 f"trades the front-spot error for a worse timing error)."
             )
+    return results
+
+
+def plot_first_reflection_phase_diagnostic(
+    dataset: DataSet,
+    config: dict | None = None,
+    show: bool = True,
+    save_dir: str | None = None,
+) -> dict:
+    """Show the FIRST-reflection phase and how ``self_phase`` propagates it into n.
+
+    Diagnostic only — changes no data. Built for the failure mode where a p-pol
+    window-coupled sample inverts fine on the PLAIN back ratio but rails to the
+    grazing root (``n = n_air*sin(theta) ~ 0.707``) the moment front-pulse
+    referencing (``self_phase`` or ``self_reference``) is switched on.
+
+    The mechanism this display exposes
+    ----------------------------------
+    ``self_phase`` forms ``H = (Y2_s/Y2_r) * (C/|C|)`` with ``C = Y1_r / Y1_s`` —
+    i.e. it multiplies H by the RELATIVE PHASE of the FIRST (front) reflection
+    between sample and reference. If that front-pulse phase carries anything
+    beyond a clean timing offset (e.g. the sample and reference were separate
+    acquisitions with a small stage drift), ``arg(C)`` is injected straight into
+    ``arg(H)``. For a conductive / high-index sample sitting near the p-pol
+    root-swap boundary (``Im(r) ~ 0``, lab notebook F26) that rotation flips the
+    global passivity vote in ``invert_nk_reflection`` onto the spurious grazing
+    twin — so n collapses to ~0.707 across the whole band.
+
+    ``|C|`` and ``selfref_quality`` (which key on ``std(|C|)``) do NOT catch this:
+    the front spots can be perfectly matched in AMPLITUDE (``|C| ~ 1``) while their
+    PHASE differs. This plot puts that phase, and its consequence for n, on screen.
+
+    Panels per sample
+    -----------------
+    1. Front (``Y1``) and back (``Y2``) magnitudes, sample vs reference.
+    2. ``arg(C) = arg(Y1_r/Y1_s)`` — the phase injected into H by front referencing
+       — with a straight-line fit (a pure timing offset is linear through the
+       origin; a non-zero intercept / curvature is a genuine front-pulse mismatch).
+    3. ``arg(H)`` plain vs self_phase (the rotation the correction applies).
+    4. ``Im(r)`` plain vs self_phase with the ``Im(r)=0`` root-swap line — the flip
+       trigger.
+    5. ``|H|`` (identical for both — self_phase is phase-only).
+    6. resulting ``n`` plain vs self_phase, with the grazing-root and Si=3.418 guides.
+
+    Requires the pipeline to have run through ``invert_nk_reflection`` (it reuses
+    the stored ``r_reference`` / ``theta_internal_rad`` to re-invert each candidate
+    H exactly as the pipeline would). Reads the front spectra from the
+    ``THzDataReflection.first_reflection`` segment.
+
+    Parameters
+    ----------
+    config : dict, optional
+        Uses ``config['geometry']`` (polarization, n_sio2) and the stored geometry.
+    show : bool
+        Call ``plt.show()`` at the end.
+    save_dir : str, optional
+        If given, save one PNG per sample there.
+
+    Returns
+    -------
+    dict
+        ``{filename: {'n_plain_median', 'n_selfphase_median', 'argC_median',
+        'grazing_root', 'flip_suspected'}}`` over the trusted band.
+    """
+    from thz_core import thz_core as _core
+
+    config = config or getattr(dataset, 'config', None) or {}
+    geometry_cfg = config.get('geometry', {})
+    polarization = geometry_cfg.get('polarization', 's')
+    n_window = geometry_cfg.get('n_sio2', 1.96)
+
+    results: dict = {}
+    for filename, data_obj in _sample_items(dataset):
+        processing = data_obj.processing_dict
+        ref_obj = dataset.get_reference(filename, ref_type='reference')
+        if ref_obj is None:
+            print(f"[first_reflection_diagnostic] no reference for '{filename}', skipping.")
+            continue
+
+        # Back (second-reflection) spectra live on the primary object; front
+        # (first-reflection) spectra live on the .first_reflection segment.
+        first_samp = getattr(data_obj, 'first_reflection', None)
+        first_ref = getattr(ref_obj, 'first_reflection', None)
+        if first_samp is None or first_ref is None:
+            print(
+                f"[first_reflection_diagnostic] '{filename}' has no first_reflection "
+                f"segment (not a window-coupled reflection dataset); skipping."
+            )
+            continue
+
+        freq = processing.get('fft_freq')
+        Y2_s = processing.get('fft_spectrum')
+        Y2_r = ref_obj.processing_dict.get('fft_spectrum')
+        Y1_s = first_samp.processing_dict.get('fft_spectrum')
+        Y1_r = first_ref.processing_dict.get('fft_spectrum')
+        r_reference = processing.get('r_reference')
+        theta_internal_rad = processing.get('theta_internal_rad')
+        if any(v is None for v in (freq, Y2_s, Y2_r, Y1_s, Y1_r, r_reference, theta_internal_rad)):
+            print(
+                f"[first_reflection_diagnostic] '{filename}' missing spectra or geometry "
+                f"(run through invert_nk_reflection first); skipping."
+            )
+            continue
+
+        freq = np.asarray(freq, dtype=float)
+        H_plain = Y2_s / Y2_r
+        front_correction = Y1_r / Y1_s                       # C
+        with np.errstate(divide='ignore', invalid='ignore'):
+            phase_only = np.where(np.abs(front_correction) > 0,
+                                  front_correction / np.abs(front_correction), 1.0 + 0.0j)
+        H_selfphase = H_plain * phase_only                   # self_phase H
+
+        mask = processing.get('transfer_mask')
+        if mask is None:
+            mask = np.isfinite(H_plain)
+
+        def _invert(H):
+            r_sample = np.asarray(r_reference) * np.asarray(H)
+            n, k, _ = _core.invert_nk_reflection(
+                freq, r_sample, mask, theta_rad=float(theta_internal_rad),
+                polarization=polarization, n_incident=n_window,
+            )
+            return np.real(n), np.real(k), r_sample
+
+        n_plain, _, r_plain = _invert(H_plain)
+        n_selfphase, _, r_selfphase = _invert(H_selfphase)
+
+        grazing_root = float(np.real(np.asarray(n_window)).mean()) * np.sin(float(theta_internal_rad))
+
+        fthz = freq * _HZ_TO_THZ
+        band = (fthz >= 0.15) & (fthz <= 3.0)
+        trusted = band & np.asarray(mask, dtype=bool)
+
+        def _median(values):
+            selected = np.asarray(values)[trusted]
+            selected = selected[np.isfinite(selected)]
+            return float(np.nanmedian(selected)) if selected.size else float('nan')
+
+        argC_median = _median(np.angle(front_correction))
+        n_plain_median = _median(n_plain)
+        n_selfphase_median = _median(n_selfphase)
+        # Flip suspected when self_phase lands near grazing while plain did not.
+        flip_suspected = (
+            np.isfinite(n_selfphase_median)
+            and abs(n_selfphase_median - grazing_root) < 0.15
+            and (not np.isfinite(n_plain_median) or n_plain_median > grazing_root + 0.5)
+        )
+        results[filename] = dict(
+            n_plain_median=n_plain_median,
+            n_selfphase_median=n_selfphase_median,
+            argC_median=argC_median,
+            grazing_root=grazing_root,
+            flip_suspected=bool(flip_suspected),
+        )
+        status = "GRAZING-ROOT FLIP" if flip_suspected else "ok"
+        print(
+            f"[first_reflection_diagnostic] {status}  '{filename}': "
+            f"n plain {n_plain_median:.3f} -> self_phase {n_selfphase_median:.3f} "
+            f"(grazing {grazing_root:.3f}); median arg(C)={argC_median:+.3f} rad "
+            f"(front-pulse phase injected into H)."
+        )
+
+        if not (show or save_dir):
+            continue
+
+        figure, axes = plt.subplots(3, 2, figsize=(14, 11), layout='constrained')
+        figure.suptitle(f'First-reflection phase diagnostic — {filename}', fontsize=12)
+
+        def _unwrapped_angle(series):
+            out = np.full(series.shape, np.nan)
+            finite = np.isfinite(series)
+            if np.count_nonzero(finite) > 1:
+                out[finite] = np.unwrap(np.angle(series[finite]))
+            return out
+
+        axes[0, 0].plot(fthz[band], np.abs(Y1_s)[band], 'C0', label='|Y1_s| front sample')
+        axes[0, 0].plot(fthz[band], np.abs(Y1_r)[band], 'C1', label='|Y1_r| front ref')
+        axes[0, 0].plot(fthz[band], np.abs(Y2_s)[band], 'C0--', alpha=.5, label='|Y2_s| back sample')
+        axes[0, 0].plot(fthz[band], np.abs(Y2_r)[band], 'C1--', alpha=.5, label='|Y2_r| back ref')
+        axes[0, 0].set_title('spectral magnitudes')
+        axes[0, 0].legend(fontsize=7)
+
+        argC = _unwrapped_angle(front_correction)
+        axes[0, 1].plot(fthz[band], argC[band], 'C2', label='arg(C)=arg(Y1_r/Y1_s)')
+        fit_bins = trusted & np.isfinite(argC)
+        if np.count_nonzero(fit_bins) > 2:
+            slope, intercept = np.polyfit(fthz[fit_bins], argC[fit_bins], 1)
+            axes[0, 1].plot(fthz[band], slope * fthz[band] + intercept, 'k--', lw=1,
+                            label=f'linear fit: {slope:+.2f} rad/THz, {intercept:+.2f} @0')
+            delay_fs = slope / (2 * np.pi) * 1e3
+            axes[0, 1].text(0.02, 0.94, f'~timing offset {delay_fs:+.0f} fs',
+                            transform=axes[0, 1].transAxes, fontsize=8, va='top')
+        axes[0, 1].axhline(0, color='k', lw=.5)
+        axes[0, 1].set_title('FIRST-reflection phase injected into H by self_phase')
+        axes[0, 1].legend(fontsize=8)
+
+        axes[1, 0].plot(fthz[band], _unwrapped_angle(H_plain)[band], 'C3', label='arg(H) plain')
+        axes[1, 0].plot(fthz[band], _unwrapped_angle(H_selfphase)[band], 'C4', label='arg(H) self_phase')
+        axes[1, 0].set_title('transfer-function phase')
+        axes[1, 0].legend(fontsize=8)
+
+        axes[1, 1].plot(fthz[band], np.imag(r_plain)[band], 'C3', label='Im(r) plain')
+        axes[1, 1].plot(fthz[band], np.imag(r_selfphase)[band], 'C4', label='Im(r) self_phase')
+        axes[1, 1].axhline(0, color='r', ls=':', label='Im(r)=0 (p-pol root-swap)')
+        axes[1, 1].set_title('Im(r): the branch-flip trigger')
+        axes[1, 1].legend(fontsize=8)
+
+        axes[2, 0].plot(fthz[band], np.abs(H_plain)[band], 'C3', label='|H| plain')
+        axes[2, 0].plot(fthz[band], np.abs(H_selfphase)[band], 'C4', ls='--', label='|H| self_phase')
+        axes[2, 0].set_title('|H| (self_phase is phase-only -> identical)')
+        axes[2, 0].legend(fontsize=8)
+
+        axes[2, 1].plot(fthz[band], n_plain[band], 'C3', label='n plain')
+        axes[2, 1].plot(fthz[band], n_selfphase[band], 'C4', label='n self_phase')
+        axes[2, 1].axhline(grazing_root, color='r', ls=':', label=f'grazing root {grazing_root:.3f}')
+        axes[2, 1].axhline(3.418, color='g', ls=':', alpha=.5, label='Si 3.418')
+        axes[2, 1].set_ylim(0, 5)
+        axes[2, 1].set_title('refractive index n')
+        axes[2, 1].legend(fontsize=8)
+
+        for axis in axes.flat:
+            axis.set_xlabel('Frequency (THz)')
+            axis.grid(alpha=0.3)
+
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            safe = ''.join(c if c.isalnum() or c in '-_' else '_' for c in filename)[:60]
+            figure.savefig(os.path.join(save_dir, f'first_reflection_diagnostic_{safe}.png'), dpi=110)
+
+    if show and results:
+        plt.show()
     return results
 
 
@@ -4710,6 +5099,7 @@ def invert_nk_reflection(
     r_reference: complex = -1.0 + 0.0j,
     n_window: complex | np.ndarray = 1.95,
     config: dict | None = None,
+    report: bool = True,
 ) -> DataSet:
     """Reflection-mode n,k for each sample (single-interface, semi-infinite).
 
@@ -4753,6 +5143,14 @@ def invert_nk_reflection(
     n_window : complex or np.ndarray
         Window refractive index for the 'window' geometry (scalar, or a
         per-frequency n_SiO2(f) array). Ignored for 'gold'.
+    config : dict, optional
+        ``config['invert']`` keys:
+
+        ``min_one_plus_r`` : float, default 0.05
+            Mask bins where |1+r| < min_one_plus_r to avoid the singularity at r=-1.
+        ``anchor_phase_origin`` : bool, default True
+            Anchor the phase origin to avoid phase wrapping issues.
+    report : bool
     """
     config = config or getattr(dataset, 'config', None) or {}
     theta_external_rad = np.deg2rad(theta_deg)
@@ -4761,9 +5159,10 @@ def invert_nk_reflection(
         geometry, theta_external_rad, r_reference, n_window, polarization,
     )
 
-    print("---- Angles ----")
-    print(f"External angle = {np.rad2deg(theta_external_rad):.2f} deg")
-    print(f"Internal angle = {np.rad2deg(theta_internal_rad):.2f} deg")
+    if report:
+        print("---- Angles ----")
+        print(f"External angle = {np.rad2deg(theta_external_rad):.2f} deg")
+        print(f"Internal angle = {np.rad2deg(theta_internal_rad):.2f} deg")
 
 
     for filename, data_obj in dataset.data.items():
@@ -4794,14 +5193,15 @@ def invert_nk_reflection(
         finite_H = np.isfinite(H)
         unphysical_fraction = float(np.mean(np.abs(H[finite_H]) > 1.0)) if np.any(finite_H) else 0.0
         n_singular = int(metrics.get('n_singular_bins', 0)) if isinstance(metrics, dict) else 0
-        if n_singular > 0 or unphysical_fraction > 0.05:
-            print(
-                f"[invert_nk_reflection] '{filename}': near-mirror inversion — "
-                f"{unphysical_fraction * 100:.0f}% of bins have |H|>1 (unphysical, coupling "
-                f"artifact) and {n_singular} bins are singular (|1+r|<min_one_plus_r). The "
-                f"sample reflects ~like the reference, so n is ill-conditioned there. Set "
-                f"config['invert']['min_one_plus_r'] (e.g. 0.05) to mask the blow-ups."
-            )
+        if report:
+            if n_singular > 0 or unphysical_fraction > 0.05:
+                print(
+                    f"[invert_nk_reflection] '{filename}': near-mirror inversion — "
+                    f"{unphysical_fraction * 100:.0f}% of bins have |H|>1 (unphysical, coupling "
+                    f"artifact) and {n_singular} bins are singular (|1+r|<min_one_plus_r). The "
+                    f"sample reflects ~like the reference, so n is ill-conditioned there. Set "
+                    f"config['invert']['min_one_plus_r'] (e.g. 0.05) to mask the blow-ups."
+                )
 
         data_obj.processing_dict['reflection_r'] = r_sample
         data_obj.processing_dict['reflection_geometry'] = geometry
@@ -4812,6 +5212,342 @@ def invert_nk_reflection(
         data_obj.processing_dict['invert_metrics'] = metrics
 
         data_obj.data = np.column_stack((freq, n, k))
+
+    return dataset
+
+
+def _fill_nonfinite_edge_hold(values, fallback):
+    """Replace non-finite entries by holding the nearest finite value (edge-clamped).
+
+    Gives a continuous array with no artificial steps. If every entry is non-finite the
+    array is filled with ``fallback``.
+    """
+    values = np.asarray(values, dtype=float).copy()
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return np.full_like(values, fallback)
+    idx = np.arange(len(values))
+    finite_idx = idx[finite]
+    # For each position, the nearest finite index (ties -> lower), i.e. forward+backward fill.
+    nearest = finite_idx[np.searchsorted(finite_idx, idx).clip(0, len(finite_idx) - 1)]
+    prev = finite_idx[(np.searchsorted(finite_idx, idx, side='right') - 1).clip(0, len(finite_idx) - 1)]
+    use_prev = np.abs(idx - prev) <= np.abs(idx - nearest)
+    source = np.where(use_prev, prev, nearest)
+    return values[source]
+
+
+def _hold_flat_outside_band(values, band_mask, fallback):
+    """Hold ``values`` flat (at the nearest in-band value) OUTSIDE the given band.
+
+    Returns ``(held, lo, hi)`` where ``lo/hi`` are the first/last in-band-and-finite
+    indices. Continuing flat past the band edge — rather than letting the untrusted
+    band-edge roll-off feed the KK integral — is what stops a spurious ramp: a large
+    ``n − n∞`` excursion at a low-SNR edge injects a linear phase into the transform.
+    Any remaining non-finite entries are filled by :func:`_fill_nonfinite_edge_hold`.
+    """
+    values = np.asarray(values, dtype=float).copy()
+    in_band = np.asarray(band_mask, dtype=bool) & np.isfinite(values)
+    if not np.any(in_band):
+        return _fill_nonfinite_edge_hold(values, fallback), 0, len(values) - 1
+    idx = np.where(in_band)[0]
+    lo, hi = int(idx[0]), int(idx[-1])
+    held = values.copy()
+    held[:lo] = values[lo]
+    held[hi + 1:] = values[hi]
+    return _fill_nonfinite_edge_hold(held, fallback), lo, hi
+
+
+def _resolve_kk_anchor_mode(kk_cfg, anchor_frequency_hz):
+    """Map the ``kk_nk`` config to an anchor mode, honouring the legacy ``use_snr_anchor``."""
+    anchor_mode = kk_cfg.get('anchor_mode', None)
+    if anchor_mode is not None:
+        return str(anchor_mode)
+    if 'use_snr_anchor' in kk_cfg:                       # backward compatibility
+        return 'measured' if kk_cfg['use_snr_anchor'] else 'none'
+    if anchor_frequency_hz is not None:
+        return 'explicit'
+    return 'zero_high'                                   # default: weak-k / transparent samples
+
+
+def reconstruct_extinction_kk(
+    dataset: DataSet,
+    config: dict | None = None,
+    show_graph: bool = False,
+) -> DataSet:
+    """Rebuild the extinction ``k`` from the refractive index ``n`` via the KK relation.
+
+    ``n − n∞`` and ``k`` are the real and imaginary parts of the causal complex index
+    ``ñ = n + i·k``, so they are a Kramers-Kronig (Hilbert) pair. This stage replaces the
+    amplitude-derived ``k`` — which in reflection is corrupted by coupling/air-gap
+    systematics, or is simply weak and poorly conditioned — with a ``k`` reconstructed from
+    the phase-derived ``n``, which is trustworthy. The relation is **geometry-agnostic**: a
+    property of the material response, independent of s/p polarization, reflection vs
+    transmission, or the reference model. All of that lives upstream in how ``n`` was got.
+
+    Clean integration band (important)
+    ----------------------------------
+    The KK integral is dominated by wherever ``n − n∞`` is large. At the low/high edges of
+    the measured band ``n`` rolls off (low SNR), and feeding that roll-off into the integral
+    manufactures a spurious linear ramp in ``k`` (the classic "k shoots up at high f").
+    ``config['kk_nk']['kk_band_thz']`` restricts the integral to a clean interior band and
+    holds ``n`` flat outside it. Set it to the frequency span over which ``n`` is reliable.
+
+    Anchoring
+    ---------
+    The KK integrals run to infinity; band-limited data bias the raw transform at the edges.
+    Anchoring pins the result to one trusted value and removes the leading bias.
+    ``config['kk_nk']['anchor_mode']``:
+
+    - ``'zero_high'`` (default): pin ``k = 0`` at the top of the clean band. Correct for
+      transparent / weakly-absorbing / lightly-doped samples whose ``k → 0`` at high f
+      (e.g. silicon). This is what tames the high-frequency blow-up.
+    - ``'measured'``: pin to the measured ``k`` at the highest-SNR bin. Use when ``k`` is
+      large and locally trustworthy somewhere (conductive films, e.g. CNT) — NOT when ``k``
+      is globally corrupted, since the anchor value would itself be wrong.
+    - ``'none'``: unsubtracted transform (offset by ``n∞`` only).
+    - ``'explicit'``: pin ``anchor_value`` at ``anchor_frequency_thz``.
+
+    Consistency check
+    -----------------
+    Because the relation is bidirectional, this also reconstructs ``n`` from the measured
+    ``k`` and reports the RMS disagreement with the measured ``n`` over the clean band — a
+    geometry-free diagnostic of the amplitude systematic. Stored, not applied.
+
+    Parameters
+    ----------
+    config : dict, optional
+        ``config['kk_nk']`` keys:
+
+        ``enabled`` : bool — honoured by callers/run scripts; this function always runs.
+        ``kk_band_thz`` : (lo, hi) THz or None — clean band for the integral (see above).
+            None → the transfer trusted-band mask (may still include edge roll-off).
+        ``anchor_mode`` : see above. Default ``'zero_high'``.
+        ``anchor_frequency_thz`` / ``anchor_value`` : for ``anchor_mode='explicit'``.
+        ``n_infinity`` : float or None — high-frequency limit of ``n`` (1.0 for a vacuum
+            background; ``sqrt(eps_inf)`` for a dielectric/Drude medium, e.g. 3.42 for Si).
+            Default: ``sqrt(config['derive']['eps_background'])`` if set, else 1.0.
+        ``clip_negative`` : bool (default True) — clip the reconstructed ``k`` to ≥ 0
+            (physical for a passive medium).
+        ``on_non_passive`` : ``'keep_measured'`` (default) | ``'apply'`` | ``'nan'`` — what to
+            do when the raw KK is systematically negative (the in-band ``n`` implies
+            out-of-band absorption it cannot capture, e.g. a Drude free-carrier tail).
+            ``'keep_measured'`` leaves the measured ``k`` in place and stashes the rejected
+            reconstruction as ``k_kk_rejected``; ``'apply'`` overwrites anyway; ``'nan'``
+            blanks the band. In all cases a warning is printed.
+        ``passivity_reject_ratio`` : float (default 0.25) — the non-passive threshold on
+            ``mean(raw k) / mean|raw k|`` over the band.
+        ``run_consistency_check`` : bool (default True) — also reconstruct n from measured k.
+        ``use_snr_anchor`` : deprecated alias — True → ``'measured'``, False → ``'none'``.
+
+    For a weakly-absorbing sample the reconstruction is applied (``kk_nk_metrics['applied']``
+    True). For a conductive/doped sample it is flagged non-passive and, by default, the
+    measured ``k`` is kept — use a Drude fit (``conductivity_fitting``) there instead.
+
+    Notes
+    -----
+    Reads ``processing_dict['n']``, ``['k']``, ``['fft_freq']``, ``['transfer_mask']``,
+    ``['snr_db']``. Stashes the measured ``k`` as ``k_measured`` and overwrites ``k``.
+    Stores ``kk_nk_metrics`` and (if requested) ``n_kk_from_k``. Insert AFTER
+    ``invert_nk_reflection`` and BEFORE ``derive_eps_sigma`` (re-derive σ from the new k).
+    """
+    config = config or getattr(dataset, 'config', None) or {}
+    kk_cfg = config.get('kk_nk', {}) or {}
+    derive_cfg = config.get('derive', {}) or {}
+
+    n_infinity = kk_cfg.get('n_infinity', None)
+    if n_infinity is None:
+        eps_background = derive_cfg.get('eps_background', None)
+        n_infinity = float(np.sqrt(eps_background)) if eps_background else 1.0
+    n_infinity = float(n_infinity)
+
+    run_consistency_check = bool(kk_cfg.get('run_consistency_check', True))
+    clip_negative = bool(kk_cfg.get('clip_negative', True))
+    # What to do when the reconstruction is non-passive (raw KK systematically negative ->
+    # the in-band n implies out-of-band absorption it cannot capture, e.g. a Drude tail):
+    #   'keep_measured' (default) — leave the measured k untouched, stash k_kk_rejected, warn.
+    #   'apply'                   — overwrite with the reconstruction anyway (+ clip/warn).
+    #   'nan'                     — blank the band (NaN) so downstream shows 'no reliable k'.
+    on_non_passive = str(kk_cfg.get('on_non_passive', 'keep_measured'))
+    passivity_reject_ratio = float(kk_cfg.get('passivity_reject_ratio', 0.25))
+
+    kk_band_thz = kk_cfg.get('kk_band_thz', None)
+    kk_band_hz = None if kk_band_thz is None else (
+        float(kk_band_thz[0]) / _HZ_TO_THZ, float(kk_band_thz[1]) / _HZ_TO_THZ)
+
+    anchor_frequency_thz = kk_cfg.get('anchor_frequency_thz', None)
+    anchor_frequency_hz = None if anchor_frequency_thz is None else float(anchor_frequency_thz) / _HZ_TO_THZ
+    anchor_mode = _resolve_kk_anchor_mode(kk_cfg, anchor_frequency_hz)
+    explicit_anchor_value = kk_cfg.get('anchor_value', None)
+
+    for filename, data_obj in dataset.data.items():
+        if dataset.data.is_reference(filename):
+            continue
+        processing = data_obj.processing_dict
+        n = processing.get('n')
+        k = processing.get('k')
+        freq = processing.get('fft_freq')
+        if n is None or k is None or freq is None:
+            print(f"[reconstruct_extinction_kk] '{filename}': no n/k, skipping.")
+            continue
+
+        freq = np.asarray(freq, dtype=float)
+        n = np.asarray(n, dtype=float)
+        k = np.asarray(k, dtype=float)
+        trusted_mask = processing.get('transfer_mask')
+
+        # The clean band the KK integral runs over: the explicit kk_band, intersected with
+        # the trusted mask; falls back to the trusted mask, then to all finite n.
+        band = np.isfinite(n)
+        if trusted_mask is not None:
+            band = band & np.asarray(trusted_mask, dtype=bool)
+        if kk_band_hz is not None:
+            band = band & (freq >= kk_band_hz[0]) & (freq <= kk_band_hz[1])
+        if not np.any(band):
+            print(f"[reconstruct_extinction_kk] '{filename}': empty KK band, skipping.")
+            continue
+
+        # Hold n flat outside the clean band so the untrusted roll-off cannot ramp the KK.
+        n_hold, lo, hi = _hold_flat_outside_band(n, band, fallback=n_infinity)
+        k_clean = np.where(np.isfinite(k), k, 0.0)
+
+        # Resolve the anchor (frequency + value) for this sample per the chosen mode.
+        if anchor_mode == 'none':
+            anchor_bin, anchor_freq_hz, anchor_k = None, None, None
+        elif anchor_mode == 'zero_high':
+            anchor_bin, anchor_freq_hz, anchor_k = hi, float(freq[hi]), 0.0
+        elif anchor_mode == 'zero_low':
+            anchor_bin, anchor_freq_hz, anchor_k = lo, float(freq[lo]), 0.0
+        elif anchor_mode == 'measured':
+            snr_db = processing.get('snr_db')
+            band_idx = np.where(band)[0]
+            if snr_db is not None:
+                anchor_bin = int(band_idx[np.argmax(np.nan_to_num(
+                    np.asarray(snr_db, dtype=float)[band_idx], nan=-np.inf))])
+            else:
+                anchor_bin = int(band_idx[len(band_idx) // 2])
+            anchor_freq_hz, anchor_k = float(freq[anchor_bin]), float(k[anchor_bin])
+        elif anchor_mode == 'explicit':
+            band_idx = np.where(band)[0]
+            target = anchor_frequency_hz if anchor_frequency_hz is not None else float(freq[hi])
+            anchor_bin = int(band_idx[np.argmin(np.abs(freq[band_idx] - target))])
+            anchor_freq_hz = float(freq[anchor_bin])
+            anchor_k = float(explicit_anchor_value) if explicit_anchor_value is not None else float(k[anchor_bin])
+        else:
+            raise ValueError(f"unknown kk_nk anchor_mode '{anchor_mode}'")
+
+        k_kk = core.extinction_from_refractive_index(
+            freq, n_hold, n_infinity=n_infinity,
+            anchor_frequency_hz=anchor_freq_hz, anchor_extinction=anchor_k,
+        )
+        # Passivity diagnostics on the RAW (pre-clip) transform. A symmetric ripple around
+        # zero (transparent sample) has ~50% negative bins but a mean near 0; a systematic
+        # negative MEAN flags a passivity violation -> real out-of-band absorption.
+        raw_band = k_kk[band]
+        negative_fraction = float(np.mean(raw_band < 0)) if raw_band.size else 0.0
+        raw_band_mean = float(np.mean(raw_band)) if raw_band.size else 0.0
+        raw_band_scale = float(np.mean(np.abs(raw_band))) + 1e-12
+        if clip_negative:
+            k_kk = np.maximum(k_kk, 0.0)
+
+        metrics = dict(
+            n_infinity=n_infinity,
+            anchor_mode=anchor_mode,
+            anchor_frequency_thz=None if anchor_freq_hz is None else anchor_freq_hz * _HZ_TO_THZ,
+            anchor_k=anchor_k,
+            kk_band_thz=None if kk_band_hz is None else (kk_band_hz[0] * _HZ_TO_THZ, kk_band_hz[1] * _HZ_TO_THZ),
+            band_thz=(float(freq[lo] * _HZ_TO_THZ), float(freq[hi] * _HZ_TO_THZ)),
+            trusted_bins=int(np.count_nonzero(band)),
+            negative_fraction=negative_fraction,
+            raw_band_mean=raw_band_mean,
+            clipped_negative=clip_negative,
+        )
+
+        # Bidirectional consistency: reconstruct n from the measured k (n is trusted, so
+        # anchor it at its own measured value at the anchor bin) and compare.
+        if run_consistency_check:
+            anchor_n = float(n[anchor_bin]) if anchor_bin is not None else None
+            n_kk_from_k = core.refractive_index_from_extinction(
+                freq, k_clean, n_infinity=n_infinity,
+                anchor_frequency_hz=anchor_freq_hz, anchor_refractive_index=anchor_n,
+            )
+            processing['n_kk_from_k'] = n_kk_from_k
+            metrics['n_consistency_rms'] = float(np.sqrt(np.mean((n_kk_from_k[band] - n[band]) ** 2)))
+            metrics['k_shift_rms'] = float(np.sqrt(np.mean((k_kk[band] - k_clean[band]) ** 2)))
+
+        # Passivity gate. A systematically negative raw MEAN (not just >50% negative bins,
+        # which a symmetric ripple around zero also has) means the in-band n does NOT
+        # determine a passive (k>=0) response on its own: the raw KK wants k<0 across the
+        # band. That is the signature of significant absorption OUTSIDE the clean band — most
+        # often a free-carrier (Drude) tail whose k is set by the low-frequency n dispersion
+        # a reflection measurement rolls off. KK cannot recover that from in-band n.
+        non_passive = raw_band_mean < -passivity_reject_ratio * raw_band_scale
+        metrics['non_passive'] = bool(non_passive)
+
+        processing['k_measured'] = k
+        if non_passive and on_non_passive == 'keep_measured':
+            processing['k_kk_rejected'] = k_kk          # keep the reconstruction for inspection
+            applied_k = k                               # leave the measured k in place
+            metrics['applied'] = False
+        elif non_passive and on_non_passive == 'nan':
+            processing['k_kk_rejected'] = k_kk
+            applied_k = np.where(band, np.nan, k)
+            metrics['applied'] = False
+        else:                                           # passive, or on_non_passive == 'apply'
+            applied_k = k_kk
+            metrics['applied'] = True
+
+        processing['k'] = applied_k
+        processing['kk_nk_metrics'] = metrics
+        data_obj.data = np.column_stack((freq, n, applied_k))
+
+        anchor_note = (
+            f"{anchor_mode} anchor at {metrics['anchor_frequency_thz']:.2f} THz (k={anchor_k:.3f})"
+            if anchor_freq_hz is not None else f"{anchor_mode} (unsubtracted)"
+        )
+        consistency_note = (
+            f", n-consistency RMS {metrics['n_consistency_rms']:.3f}"
+            if 'n_consistency_rms' in metrics else ""
+        )
+        if metrics['applied']:
+            outcome = (f"applied ({negative_fraction * 100:.0f}% neg"
+                       f"{'-clipped' if clip_negative else ''})")
+        else:
+            outcome = f"NON-PASSIVE -> kept measured k ({on_non_passive})"
+        print(
+            f"[reconstruct_extinction_kk] '{filename}': KK k from n "
+            f"(band {metrics['band_thz'][0]:.2f}-{metrics['band_thz'][1]:.2f} THz, "
+            f"n_inf={n_infinity:.3f}, {anchor_note}, {outcome}{consistency_note})."
+        )
+        if non_passive:
+            print(
+                f"[reconstruct_extinction_kk] '{filename}': WARNING raw KK k is systematically "
+                f"negative (mean {raw_band_mean:+.3f}) — in-band n implies out-of-band (e.g. Drude "
+                f"free-carrier) absorption it cannot capture. For this conductive/doped sample use a "
+                f"Drude fit (conductivity_fitting); KK-from-n is reliable only for weakly-absorbing samples."
+            )
+
+        if show_graph:
+            f_thz = freq * _HZ_TO_THZ
+            plot_band = band if np.any(band) else np.isfinite(freq)
+            fig, (ax_k, ax_n) = plt.subplots(1, 2, figsize=(13, 4.5), layout='constrained')
+            fig.suptitle(f'reconstruct_extinction_kk — {filename}')
+            ax_k.plot(f_thz[plot_band], k[plot_band], color='steelblue', alpha=0.7,
+                      label='k measured (amplitude)')
+            ax_k.plot(f_thz[plot_band], k_kk[plot_band], color='darkorange',
+                      label='k from n (KK)')
+            if anchor_freq_hz is not None:
+                ax_k.axvline(anchor_freq_hz * _HZ_TO_THZ, color='0.5', ls=':', lw=0.8,
+                             label=f'{anchor_mode} anchor')
+            ax_k.axhline(0, color='0.7', lw=0.6)
+            ax_k.set_xlabel('Frequency (THz)'); ax_k.set_ylabel('k')
+            ax_k.set_title('extinction: measured vs KK'); ax_k.legend(fontsize=8); ax_k.grid(alpha=0.3)
+            ax_n.plot(f_thz[plot_band], n[plot_band], color='steelblue', label='n measured (phase)')
+            if run_consistency_check:
+                ax_n.plot(f_thz[plot_band], processing['n_kk_from_k'][plot_band],
+                          color='darkorange', alpha=0.7, label='n from measured k (KK check)')
+            ax_n.set_xlabel('Frequency (THz)'); ax_n.set_ylabel('n')
+            ax_n.set_title('refractive index consistency'); ax_n.legend(fontsize=8); ax_n.grid(alpha=0.3)
+            plt.show()
 
     return dataset
 
@@ -5775,6 +6511,7 @@ def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]
 def _sample_items(dataset: DataSet):
     """Yield (filename, data_obj) for non-reference files."""
     for filename, data_obj in dataset.data.items():
+        print(f"Checking '{filename}' for sample plotting...")
         if not dataset.data.is_reference(filename):
             yield filename, data_obj
 
@@ -5782,14 +6519,19 @@ def _sample_items(dataset: DataSet):
 def _resolution_marker_stride(dataset: DataSet) -> int:
     """Marker spacing (in bins) that places one marker per resolution element.
 
-    If the data has already been decimated to the resolution grid
-    (``apply_instrument_resolution`` ran), every point is independent -> stride 1.
-    Otherwise the arrays are still zero-pad oversampled -> stride =
-    ``decimation_factor`` from ``compute_instrument_resolution`` so markers land on the
-    independent bins. Defaults to 1 when resolution has not been computed.
+    If the data has already been decimated to the resolution grid, every point is
+    independent -> stride 1. Otherwise the arrays are still zero-pad oversampled ->
+    stride = ``decimation_factor`` from ``compute_instrument_resolution`` so markers land
+    on the independent bins. Defaults to 1 when resolution has not been computed.
+
+    The test is whether ``apply_instrument_resolution`` has actually RUN
+    (``resolution_applied``), not whether it is configured to run
+    (``limit_to_instrument_resolution``). Plots drawn earlier in the pipeline — plot_fft
+    right after the transfer function, say — are still on the oversampled grid even when
+    the flag is on, and keying off the intent put a marker on every interpolated bin.
     """
     resolution_cfg = (getattr(dataset, 'config', None) or {}).get('resolution', {}) or {}
-    if resolution_cfg.get('limit_to_instrument_resolution', False):
+    if resolution_cfg.get('resolution_applied', False):
         return 1
     return max(1, int(resolution_cfg.get('decimation_factor', 1)))
 
@@ -5799,13 +6541,20 @@ def plot_fft(
     freq_range: tuple | None = None,
     normalise: bool = False,
     show_snr_mask: bool = True,
+    show_errorbars: bool = True,
     **kwargs,
 ) -> None:
     """Plot FFT magnitude for every file (samples and references).
 
-    When ``show_snr_mask`` is True and per-spectrum SNR masks have been
-    computed (i.e. ``transfer_function`` has run), regions below each
-    spectrum's own SNR threshold are dimmed.
+    Presented like every other frequency-domain quantity in the pipeline (and like the
+    results viewer): a faint guide line through all bins, solid markers only on the
+    INDEPENDENT instrument-resolution grid, untrusted SNR bands dimmed and shaded, and
+    error bars from the modelled spectral uncertainty.
+
+    ``show_snr_mask`` dims the bins below each spectrum's own SNR threshold (needs
+    ``transfer_function`` to have run). ``show_errorbars`` draws ``fft_sigma`` from
+    :func:`compute_spectrum_uncertainty` — note those bars carry that function's
+    documented signal-limited-floor caveat, and are an upper bound whenever it warns.
     """
     import matplotlib.pyplot as plt
 
@@ -5814,6 +6563,7 @@ def plot_fft(
         ax.set_yscale('log')
 
     marker_stride = _resolution_marker_stride(dataset)
+    plotted_errorbars = False
     for filename, data_obj in dataset.data.items():
         freq = data_obj.processing_dict.get('fft_freq')
         spectrum = data_obj.processing_dict.get('fft_spectrum')
@@ -5824,14 +6574,23 @@ def plot_fft(
         norm = np.abs(spectrum[norm_range]).max() if normalise else 1.0
         mag = np.abs(spectrum) / norm
         snr_mask = data_obj.processing_dict.get('snr_mask') if show_snr_mask else None
+        # The bars are in the same units as the plotted magnitude, so they follow the
+        # same normalisation.
+        sigma = data_obj.processing_dict.get('fft_sigma') if show_errorbars else None
+        if sigma is not None:
+            sigma = np.asarray(sigma) / norm
+            plotted_errorbars = True
         _plot_with_snr_mask(ax, freq * _HZ_TO_THZ, mag, snr_mask, label=filename,
-                            marker_every=marker_stride)
+                            marker_every=marker_stride, yerr=sigma)
 
     if freq_range is not None:
         ax.set_xlim(freq_range)
     ax.set_xlabel('Frequency (THz)')
     ax.set_ylabel('|FFT|')
-    ax.set_title('FFT Magnitude')
+    resolution_note = ('markers on the instrument-resolution grid'
+                       if marker_stride > 1 else 'markers on every (resolution) bin')
+    ax.set_title(f'FFT Magnitude — {resolution_note}'
+                 + (', error bars = modelled spectral noise' if plotted_errorbars else ''))
     ax.legend()
     plt.tight_layout()
     plt.show()
@@ -6525,6 +7284,34 @@ def result_viewer(dataset: DataSet, show_snr_mask: bool = True) -> ResultViewer:
     you want to inspect noise-dominated regions explicitly).
     """
     return ResultViewer(dataset, show_snr_mask=show_snr_mask)
+
+
+# NEW (Phase 2): registry-driven viewer + export that supersede ResultViewer / export_results.
+# Lazy imports avoid a circular dependency (results_viewer imports this module). Swap
+# ``thz.result_viewer(dataset)`` -> ``thz.launch_results_viewer(dataset)`` to adopt the new one.
+def launch_results_viewer(dataset: DataSet, **kwargs):
+    """Registry-driven results viewer (replacement for :func:`result_viewer`)."""
+    from dataset_core.adapters.results_viewer import launch_results_viewer as _viewer
+    return _viewer(dataset, **kwargs)
+
+
+def export_quantities(dataset: DataSet, export_dir: str | None = None):
+    """Registry-driven CSV export (replacement for :func:`export_results`)."""
+    from dataset_core.adapters.results_viewer import export_quantities as _export
+    return _export(dataset, export_dir)
+
+
+def merge_datasets(datasets, labels=None, **kwargs):
+    """Merge processed datasets into one for combined display (see session_merge)."""
+    from dataset_core.adapters.session_merge import merge_datasets as _merge
+    return _merge(datasets, labels=labels, **kwargs)
+
+
+def merge_sessions(bundle_dirs, labels=None, **kwargs):
+    """Load + merge several .thzbundle directories (see session_merge)."""
+    from dataset_core.adapters.session_merge import merge_sessions as _merge
+    return _merge(bundle_dirs, labels=labels, **kwargs)
+
 
 def validate_thz(dataset: DataSet, verbose=True, label: str = "Validation") -> dict:
     """Check if dataset has the required structure for THz processing."""

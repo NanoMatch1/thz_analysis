@@ -95,3 +95,26 @@ def test_p_pol_recovers_passive_not_gain_twin():
         _, k, _ = core.invert_nk_reflection(
             frequency_hz, r, mask, theta_rad=theta, n_incident=1.0, polarization="p")
     assert np.all(k[np.isfinite(k)] >= -1e-9)
+
+
+def test_p_pol_grazing_override_when_physical_root_reads_as_gain():
+    # F30 (MINTS doped-Si p-pol): front-pulse phase referencing (self_phase / time alignment)
+    # rotates arg(H) a hair PAST the real-negative reflection point, so Im(r) tips positive and
+    # the PHYSICAL high-index root reads as slight gain. The passivity vote alone would then
+    # collapse the whole band onto the grazing twin (n -> n1 sin(theta) ~ 0.707 -- the "rails to
+    # 0.7" failure). The physicality override must hold the high-index branch instead.
+    frequency_hz = np.linspace(0.3e12, 2.5e12, 300)
+    n_incident = 1.96
+    theta = np.deg2rad(21.15)  # internal angle, 45 deg external SiO2 window
+    planted = 3.3 - 0.02j * np.ones_like(frequency_hz)  # high index, near-lossless
+    r = np.asarray(fresnel_reflection_p(n_incident, planted, theta), dtype=np.complex128)
+    r = r * np.exp(1j * 0.12)  # over-rotate the phase -> Im(r) tips, physical root looks like gain
+    mask = np.ones(frequency_hz.size, dtype=bool)
+    grazing = n_incident * np.sin(theta)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        n, k, _ = core.invert_nk_reflection(
+            frequency_hz, r, mask, theta_rad=theta, n_incident=n_incident, polarization="p")
+    finite = np.isfinite(n)
+    assert np.nanmedian(n) > 2.5                                  # held the physical high-index branch
+    assert np.mean(np.abs(n[finite] - grazing) < 0.05) < 0.05    # did NOT collapse to the grazing twin
