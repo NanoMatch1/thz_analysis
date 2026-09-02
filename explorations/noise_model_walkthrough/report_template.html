@@ -1,0 +1,645 @@
+<title>Where the Noise Comes From</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --ground:      #f4f6f7;
+  --raised:      #ffffff;
+  --sunk:        #eaeef0;
+  --ink:         #10161c;
+  --ink-muted:   #55606b;
+  --ink-faint:   #7d8892;
+  --rule:        #dbe1e5;
+  --rule-strong: #b8c2c9;
+  --accent:      #2a78d6;
+  --additive:    #2a78d6;
+  --multiplic:   #c9521f;
+  --jitter:      #12805a;
+  --warn-bg:     #fdf3e7;
+  --warn-rule:   #e0a86a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground:      #14181c;
+    --raised:      #1b2126;
+    --sunk:        #0f1418;
+    --ink:         #edf1f4;
+    --ink-muted:   #a2adb7;
+    --ink-faint:   #7c8792;
+    --rule:        #2b3238;
+    --rule-strong: #3d464e;
+    --accent:      #4a94ea;
+    --additive:    #4a94ea;
+    --multiplic:   #e5763f;
+    --jitter:      #2eab7c;
+    --warn-bg:     #241d13;
+    --warn-rule:   #7a5a2e;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground:      #14181c;
+  --raised:      #1b2126;
+  --sunk:        #0f1418;
+  --ink:         #edf1f4;
+  --ink-muted:   #a2adb7;
+  --ink-faint:   #7c8792;
+  --rule:        #2b3238;
+  --rule-strong: #3d464e;
+  --accent:      #4a94ea;
+  --additive:    #4a94ea;
+  --multiplic:   #e5763f;
+  --jitter:      #2eab7c;
+  --warn-bg:     #241d13;
+  --warn-rule:   #7a5a2e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size: 17px;
+  line-height: 1.65;
+  margin: 0;
+  padding: 0 20px 96px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1120px; margin: 0 auto; }
+.col  { max-width: 640px; }
+
+h1, h2, h3, .label, .stat-value, table, .meta {
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* ── masthead ─────────────────────────────────────────── */
+header { padding: 72px 0 40px; border-bottom: 2px solid var(--rule-strong); }
+h1 {
+  font-size: clamp(2.1rem, 5.5vw, 3.1rem);
+  font-weight: 700; line-height: 1.08; letter-spacing: -0.022em;
+  margin: 0 0 18px; text-wrap: balance; max-width: 16ch;
+}
+.standfirst {
+  font-size: 1.14rem; color: var(--ink-muted); margin: 0; max-width: 62ch;
+}
+.label {
+  font-size: 0.685rem; font-weight: 600; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.masthead-label { display: block; margin-bottom: 16px; }
+
+.meta {
+  display: flex; flex-wrap: wrap; gap: 0 36px;
+  margin-top: 32px; padding-top: 22px; border-top: 1px solid var(--rule);
+  font-size: 0.83rem; color: var(--ink-muted);
+}
+.meta div { display: flex; flex-direction: column; gap: 3px; }
+.meta b {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-weight: 500; color: var(--ink); font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── the three sources, up front ──────────────────────── */
+.sources { display: grid; gap: 14px; grid-template-columns: repeat(3, 1fr); margin: 0; }
+@media (max-width: 760px) { .sources { grid-template-columns: 1fr; } }
+.source {
+  background: var(--raised); border: 1px solid var(--rule);
+  border-top: 3px solid var(--src); border-radius: 3px; padding: 20px 22px 22px;
+}
+.source .sym {
+  font-family: "IBM Plex Mono", monospace; font-size: 1.05rem;
+  color: var(--src); font-weight: 500;
+}
+.source .stat-value {
+  font-size: 1.9rem; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; margin: 6px 0 2px; line-height: 1.1;
+}
+.source .unit { font-size: 0.95rem; color: var(--ink-faint); font-weight: 400; }
+.source p { font-size: 0.92rem; line-height: 1.5; color: var(--ink-muted); margin: 12px 0 0; }
+.source .origin {
+  display: block; margin-top: 10px; font-size: 0.8rem;
+  color: var(--src); font-family: "IBM Plex Sans", sans-serif; font-weight: 500;
+}
+
+/* ── sections ─────────────────────────────────────────── */
+section { padding-top: 60px; }
+h2 {
+  font-size: 1.42rem; font-weight: 600; letter-spacing: -0.012em;
+  line-height: 1.25; margin: 0 0 6px; text-wrap: balance; max-width: 30ch;
+}
+.step-no {
+  font-family: "IBM Plex Mono", monospace; font-size: 0.8rem;
+  color: var(--accent); font-weight: 500; display: block; margin-bottom: 10px;
+}
+h3 {
+  font-size: 1rem; font-weight: 600; margin: 32px 0 8px; letter-spacing: -0.005em;
+}
+p { margin: 0 0 16px; }
+.col > p:last-child { margin-bottom: 0; }
+
+figure { margin: 26px 0 0; }
+figure img {
+  display: block; width: 100%; height: auto;
+  background: var(--raised); border: 1px solid var(--rule); border-radius: 3px;
+}
+figcaption {
+  font-family: "IBM Plex Sans", sans-serif; font-size: 0.83rem;
+  color: var(--ink-muted); margin-top: 11px; max-width: 76ch; line-height: 1.5;
+}
+figcaption b { color: var(--ink); font-weight: 600; }
+
+.fig-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .fig-light { display: none; }
+  :root:not([data-theme="light"]) .fig-dark  { display: block; }
+}
+:root[data-theme="dark"] .fig-light { display: none; }
+:root[data-theme="dark"] .fig-dark  { display: block; }
+
+/* ── pull quote / key claim ───────────────────────────── */
+.claim {
+  border-left: 3px solid var(--accent); padding: 4px 0 4px 20px;
+  margin: 26px 0; font-size: 1.08rem; color: var(--ink);
+}
+.claim b { font-weight: 600; }
+
+.note {
+  background: var(--warn-bg); border: 1px solid var(--warn-rule);
+  border-radius: 3px; padding: 18px 20px; margin: 26px 0 0;
+  font-size: 0.95rem; line-height: 1.55;
+}
+.note .label { display: block; margin-bottom: 7px; color: var(--ink-muted); }
+.note p { margin: 0 0 12px; }
+.note p:last-child { margin: 0; }
+
+/* ── tables ───────────────────────────────────────────── */
+.table-scroll { overflow-x: auto; margin: 24px 0 0; }
+table {
+  border-collapse: collapse; width: 100%; font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+th {
+  text-align: right; font-weight: 600; font-size: 0.7rem; letter-spacing: 0.055em;
+  text-transform: uppercase; color: var(--ink-faint);
+  padding: 0 14px 9px 0; border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
+}
+th:first-child, td:first-child { text-align: left; padding-left: 0; }
+th:last-child, td:last-child { padding-right: 0; }
+td {
+  text-align: right; padding: 9px 14px 9px 0;
+  border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+td:first-child { font-family: "Source Serif 4", serif; font-size: 0.92rem; }
+tbody tr:last-child td { border-bottom: none; }
+.mono { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; }
+.tag {
+  display: inline-block; padding: 1px 8px; border-radius: 2px;
+  font-size: 0.72rem; font-weight: 500; letter-spacing: 0.02em;
+}
+.tag-jitter { color: var(--jitter); background: color-mix(in srgb, var(--jitter) 12%, transparent); }
+.tag-add    { color: var(--additive); background: color-mix(in srgb, var(--additive) 12%, transparent); }
+.tag-mult   { color: var(--multiplic); background: color-mix(in srgb, var(--multiplic) 12%, transparent); }
+
+code {
+  font-family: "IBM Plex Mono", monospace; font-size: 0.87em;
+  background: var(--sunk); padding: 1px 5px; border-radius: 2px;
+}
+.eq {
+  background: var(--sunk); border: 1px solid var(--rule); border-radius: 3px;
+  padding: 16px 20px; margin: 20px 0; font-family: "IBM Plex Mono", monospace;
+  font-size: 0.87rem; overflow-x: auto; line-height: 1.7;
+}
+.eq .t-add  { color: var(--additive); }
+.eq .t-mult { color: var(--multiplic); }
+.eq .t-jit  { color: var(--jitter); }
+
+ul { margin: 0 0 16px; padding-left: 22px; }
+li { margin-bottom: 9px; }
+li::marker { color: var(--ink-faint); }
+
+footer {
+  margin-top: 76px; padding-top: 26px; border-top: 2px solid var(--rule-strong);
+  font-family: "IBM Plex Sans", sans-serif; font-size: 0.84rem; color: var(--ink-muted);
+}
+footer p { margin: 0 0 10px; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:focus-visible, :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="label masthead-label">THz-TDS noise model · walkthrough</span>
+  <h1>Where the Noise Comes From</h1>
+  <p class="standfirst">
+    A THz waveform's noise is not one number and it is not flat. It has three physical
+    sources that live in different places on the pulse, and telling them apart says which
+    part of the instrument is limiting you. This walks through that measurement on a real
+    CNT acquisition, and shows why the noise floor we had been quoting was measuring
+    something else entirely.
+  </p>
+  <div class="meta">
+    <div><span class="label">Dataset</span><b>{{FILE}}</b></div>
+    <div><span class="label">Scans</span><b>{{N_SCANS}}</b></div>
+    <div><span class="label">Acquisition</span><b>{{MINUTES}} min</b></div>
+    <div><span class="label">Sampling</span><b>{{DT}} fs</b></div>
+    <div><span class="label">Record</span><b>{{SPAN}} ps</b></div>
+  </div>
+</header>
+
+<section>
+  <div class="col">
+    <h2>The three sources</h2>
+    <p>
+      Every measured waveform is the true pulse plus a noise term whose size changes along
+      the record. The model splits that size into three contributions, each with a
+      different physical origin and a different signature in time:
+    </p>
+    <div class="eq">σ²(t) = <span class="t-add">σ<sub>α</sub>²</span> + <span class="t-mult">[σ<sub>β</sub>·μ(t)]²</span> + <span class="t-jit">[σ<sub>τ</sub>·μ̇(t)]²</span></div>
+    <p>
+      They are separable precisely <em>because</em> they sit in different places: the additive
+      term is the only one present where there is no pulse, the multiplicative term peaks
+      where the pulse peaks, and the jitter term peaks on the pulse's steep flanks where a
+      small timing error produces a large amplitude error.
+    </p>
+  </div>
+
+  <div class="sources" style="margin-top:28px">
+    <div class="source" style="--src: var(--additive)">
+      <span class="sym">σ<sub>α</sub></span>
+      <div class="stat-value">{{ALPHA_PCT}}<span class="unit">% of peak</span></div>
+      <span class="origin">Detection electronics</span>
+      <p>
+        Additive, flat in time. Amplifier and digitiser noise that is there whether or not a
+        pulse arrives. Absolute value {{ALPHA}} in detector units.
+      </p>
+    </div>
+    <div class="source" style="--src: var(--multiplic)">
+      <span class="sym">σ<sub>β</sub></span>
+      <div class="stat-value">{{BETA}}<span class="unit">%</span></div>
+      <span class="origin">Laser power fluctuation</span>
+      <p>
+        Multiplicative, so it scales with the signal. Shot-to-shot pump energy variation
+        modulates the whole pulse by a fixed fraction.
+      </p>
+    </div>
+    <div class="source" style="--src: var(--jitter)">
+      <span class="sym">σ<sub>τ</sub></span>
+      <div class="stat-value">{{TAU}}<span class="unit">fs</span></div>
+      <span class="origin">Delay line / path length</span>
+      <p>
+        Timing jitter. Optical path length wobble means the sampling instant is slightly
+        wrong, which on a steep flank reads as an amplitude error.
+      </p>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="note">
+      <span class="label">Reading these numbers</span>
+      <p>
+        The three amplitudes are not directly comparable — they carry different units. What
+        makes them comparable is how much <em>variance</em> each contributes over the whole
+        record: <b>{{SHARE_ADD}}% additive, {{SHARE_MULT}}% multiplicative,
+        {{SHARE_JIT}}% jitter</b> for this acquisition.
+      </p>
+      <p>
+        Jitter dominating is a statement about this pulse as much as this instrument: a
+        {{TAU}} fs timing error is tiny, but the CNT pulse is steep, so μ̇ is large and a
+        tiny time error becomes a sizeable amplitude error.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 1</span>
+    <h2>What we are actually working with</h2>
+    <p>
+      The pipeline consumes one averaged waveform. But the instrument recorded
+      {{N_SCANS}} separate scans over {{MINUTES}} minutes, and the file keeps every one of
+      them. The spread between those scans is a direct measurement of the noise — it is
+      already in the data, and until now we were averaging it away and then trying to
+      recover it from the spectrum instead.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG01_LIGHT}}" alt="111 individual THz scans overlaid in faint blue with their mean in dark, and a zoom on the pulse peak showing the scan-to-scan spread.">
+    <img class="fig-dark" src="{{FIG01_DARK}}" alt="111 individual THz scans overlaid in faint blue with their mean in dark, and a zoom on the pulse peak showing the scan-to-scan spread.">
+    <figcaption>
+      <b>The raw material.</b> Every scan (faint) and their mean (dark). The zoom shows what
+      matters: the scans do not lie on top of each other, and the width of that bundle at
+      each delay is the noise at that delay.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 2</span>
+    <h2>The noise is not flat in time</h2>
+    <p>
+      Take the standard deviation across scans at every delay point and plot it under the
+      pulse. If noise were a single number — the usual assumption behind a flat "noise
+      floor" — this would be a horizontal line. It is not.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG02_LIGHT}}" alt="Measured noise amplitude versus delay, in orange, with the pulse shape behind it in grey. The noise is flat away from the pulse and rises sharply where the pulse is.">
+    <img class="fig-dark" src="{{FIG02_DARK}}" alt="Measured noise amplitude versus delay, in orange, with the pulse shape behind it in grey. The noise is flat away from the pulse and rises sharply where the pulse is.">
+    <figcaption>
+      <b>Structure tied to the pulse.</b> Flat far from the pulse, rising by more than an
+      order of magnitude where the pulse is. That structure is the evidence that more than
+      one mechanism is at work — and it is what lets the three be separated.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 3</span>
+    <h2>Splitting it into the three sources</h2>
+    <p>
+      Fitting the model gives one number per mechanism. Drawn separately against the
+      measured curve, each term visibly accounts for a different feature: the flat floor
+      away from the pulse, the broad hump under the peak, the narrow spikes on the flanks.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG03_LIGHT}}" alt="The measured noise amplitude with the three fitted model terms drawn separately: a flat blue additive line, an orange multiplicative curve peaking at the pulse, and a green jitter curve spiking on the flanks.">
+    <img class="fig-dark" src="{{FIG03_DARK}}" alt="The measured noise amplitude with the three fitted model terms drawn separately: a flat blue additive line, an orange multiplicative curve peaking at the pulse, and a green jitter curve spiking on the flanks.">
+    <figcaption>
+      <b>Each term explains a different part of the record.</b> The additive term
+      (<span style="color:var(--additive)">blue</span>) sets the baseline away from the
+      pulse. The multiplicative term
+      (<span style="color:var(--multiplic)">orange</span>) follows the pulse envelope. The
+      jitter term (<span style="color:var(--jitter)">green</span>) spikes where the pulse is
+      steepest. Their sum is the black curve; the measured curve is grey behind it.
+    </figcaption>
+  </figure>
+  <div class="col">
+    <div class="note">
+      <span class="label">Where this one does not fit yet</span>
+      <p>
+        Look at the two broad shoulders in the measured curve around 109.4 and 109.9 ps: the
+        model under-predicts them, while over-predicting the single narrow central spike. The
+        fit quality number reports this honestly — a relative profile mismatch of
+        <b>{{PROFILE_ERR}}</b> where the estimator's own statistical noise at
+        {{N_SCANS}} scans would only account for about {{PROFILE_EXPECTED}}.
+      </p>
+      <p>
+        The most likely explanation is that adjacent time samples are <em>correlated</em> by
+        the lock-in time constant, which breaks the model's assumption that each sample's
+        noise is independent. That is worth chasing, and it does not affect the measured
+        σ(t) curve itself — only the three-way decomposition of it.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 4</span>
+    <h2>The instrument does not sit still</h2>
+    <p>
+      Each scan carries a wall-clock timestamp, so the fitted per-scan amplitude and arrival
+      time can be plotted against real elapsed time. Over {{MINUTES}} minutes the amplitude
+      climbs {{DRIFT_AMP}}% and the pulse arrives {{DRIFT_DELAY}} fs later, both with the
+      saturating shape of a system settling toward equilibrium.
+    </p>
+    <p>
+      This is the purge box coming to equilibrium — the signature already identified in the
+      lab notebook. Falling water vapour raises the transmitted amplitude; the air-to-nitrogen
+      refractive index change shifts the arrival time. What is new here is that the noise
+      estimator recovers it for free, as a by-product of doing its job properly.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG04_LIGHT}}" alt="Two stacked panels showing per-scan relative amplitude and per-scan delay against elapsed time in minutes. Both rise and saturate over about 80 minutes.">
+    <img class="fig-dark" src="{{FIG04_DARK}}" alt="Two stacked panels showing per-scan relative amplitude and per-scan delay against elapsed time in minutes. Both rise and saturate over about 80 minutes.">
+    <figcaption>
+      <b>Drift over the acquisition.</b> Amplitude (top) and arrival time (bottom) per scan
+      against wall-clock time. Note the excursion near 35 minutes — a distinct disturbance,
+      not part of the smooth settling, and the kind of event that is invisible once the scans
+      are averaged.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 5</span>
+    <h2>Drift is not noise</h2>
+    <p>
+      That drift is a problem for a naive noise estimate. If you simply take the spread
+      across scans, a pulse that grew 5% over the run looks like a very noisy pulse. The
+      estimator therefore fits out each scan's amplitude and delay first, and measures the
+      scatter of what remains.
+    </p>
+    <div class="claim">
+      Counting drift as noise would have inflated the estimate <b>{{INFLATION}}×</b> on this
+      acquisition.
+    </div>
+    <p>
+      Two things worth being clear about. The correction happens <em>inside the estimator</em> —
+      the averaged waveform the pipeline analyses is never modified, so this is a diagnostic
+      decomposition and not a silent fix applied to your data. And drift being separated out
+      does not make it harmless: it is a real systematic that averaging does not remove, which
+      is why it is reported rather than discarded.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG05_LIGHT}}" alt="Raw scan-to-scan scatter in orange versus the drift-corrected scatter in blue, with the difference shaded.">
+    <img class="fig-dark" src="{{FIG05_DARK}}" alt="Raw scan-to-scan scatter in orange versus the drift-corrected scatter in blue, with the difference shaded.">
+    <figcaption>
+      <b>What drift was contributing.</b> The shaded gap is the portion of the apparent
+      scatter that was systematic amplitude and timing walk rather than random noise.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 6</span>
+    <h2>Into the frequency domain</h2>
+    <p>
+      The measured σ(t) is pushed through the same window and DFT the pipeline uses, giving a
+      genuine per-bin uncertainty on the spectrum. Comparing it against the tail-median
+      "noise floor" we had been quoting shows the size of the problem.
+    </p>
+    <div class="claim">
+      The conventional floor sits <b>{{FLOOR_RATIO}}× above</b> the measured uncertainty.
+    </div>
+    <p>
+      The floor is the median of |Y| over the top quarter of the frequency axis. That is only
+      a noise measurement if the spectrum has flattened into a noise plateau up there. On a
+      short record with a sharp pulse it has not — there is still real pulse content at the
+      sampling limit — so the number that comes back is set by the signal, not the noise.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG06_LIGHT}}" alt="Log-scale spectrum with error bars, showing the tail-median noise floor as a dashed orange line far above the measured uncertainty in green.">
+    <img class="fig-dark" src="{{FIG06_DARK}}" alt="Log-scale spectrum with error bars, showing the tail-median noise floor as a dashed orange line far above the measured uncertainty in green.">
+    <figcaption>
+      <b>Two claims about the same measurement.</b> The mean spectrum with propagated error
+      bars, the tail-median floor (dashed), and the measured uncertainty (solid). Because
+      the error on the transfer function is built as floor ÷ |Y|, an inflated floor produces
+      error bars that grow toward high frequency for reasons that have nothing to do with
+      the measurement.
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 7</span>
+    <h2>Which estimator is measuring noise?</h2>
+    <p>
+      There is a clean test that needs no theory. Averaging fewer scans <em>is</em> more
+      noise, by a known amount: uncertainty must fall as 1/√M. So compute both estimates from
+      the first M scans for increasing M. Multiply each by √M and anything that is genuinely
+      measuring noise will hold flat.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG07_LIGHT}}" alt="Left panel, log-log uncertainty against number of scans averaged: the measured uncertainty follows the ideal one-over-root-M line while the tail floor rises. Right panel, the same quantities scaled by root M: measured holds flat at one, the floor climbs to eight.">
+    <img class="fig-dark" src="{{FIG07_DARK}}" alt="Left panel, log-log uncertainty against number of scans averaged: the measured uncertainty follows the ideal one-over-root-M line while the tail floor rises. Right panel, the same quantities scaled by root M: measured holds flat at one, the floor climbs to eight.">
+    <figcaption>
+      <b>The decisive test.</b> Left: the measured uncertainty
+      (<span style="color:var(--jitter)">green</span>) tracks the ideal 1/√M line; the
+      tail-median floor (<span style="color:var(--multiplic)">orange</span>) goes the wrong
+      way entirely. Right: the same, scaled by √M so a correct estimator is a flat line at 1.
+      The floor climbs to 8×.
+    </figcaption>
+  </figure>
+  <div class="col">
+    <p>
+      This is the direct explanation for something that had been puzzling: improving the
+      instrument's noise never seemed to shrink the error bars. It could not. The quantity
+      being reported was not responding to noise at all.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step-no">Step 8</span>
+    <h2>What actually limits this measurement</h2>
+    <p>
+      With an honest noise number, the interesting question becomes what dominates. Compare
+      the within-scan noise against a batch-means estimate that also sees the slow drift.
+    </p>
+  </div>
+  <figure>
+    <img class="fig-light" src="{{FIG08_LIGHT}}" alt="Uncertainty against frequency: within-scan noise in blue is roughly flat, the drift-inclusive estimate in orange rises far above it in the mid-band, and the tail floor is a flat dashed line.">
+    <img class="fig-dark" src="{{FIG08_DARK}}" alt="Uncertainty against frequency: within-scan noise in blue is roughly flat, the drift-inclusive estimate in orange rises far above it in the mid-band, and the tail floor is a flat dashed line.">
+    <figcaption>
+      <b>Drift-limited, not noise-limited.</b> In the 1–1.5 THz band the drift-inclusive
+      uncertainty runs roughly an order of magnitude above the within-scan noise. Averaging
+      longer will not help this measurement; stabilising the acquisition will.
+    </figcaption>
+  </figure>
+  <div class="col">
+    <p>
+      That is an actionable result and it points somewhere specific. Since the drift here is
+      the purge settling, the fix is not a better detector or more scans — it is waiting for
+      equilibrium, or interleaving sample and reference so the drift affects both equally.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>The survey</h2>
+    <p>
+      The same fit across every acquisition in the two CNT sessions. The consistency is
+      itself a check: these were recorded on the same instrument, so the additive and
+      multiplicative terms should agree between them, and they do.
+    </p>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Acquisition</th>
+          <th>Scans</th>
+          <th>σ<sub>α</sub> / peak</th>
+          <th>σ<sub>β</sub></th>
+          <th>σ<sub>τ</sub></th>
+          <th>Drift inflation</th>
+          <th>Dominant</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{SURVEY_ROWS}}
+      </tbody>
+    </table>
+  </div>
+  <div class="col">
+    <p style="margin-top:24px">
+      Additive noise sits between {{ALPHA_MIN}}% and {{ALPHA_MAX}}% of peak across all five,
+      and laser fluctuation between {{BETA_MIN}}% and {{BETA_MAX}}% — tight, as they should
+      be for one instrument on two consecutive days. The delay-line jitter is
+      sub-femtosecond to a couple of femtoseconds throughout. What varies is the
+      <em>drift</em>, and that varies with how settled the purge was when the run started.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>What this does not tell you</h2>
+    <ul>
+      <li>
+        <b>The decomposition is not yet a good fit.</b> Profile mismatch of {{PROFILE_ERR}}
+        against an expected {{PROFILE_EXPECTED}} means the three-term model is missing
+        something — most likely correlation between adjacent time samples from the lock-in.
+        The total σ(t) is measured, not modelled, so error bars built from it are unaffected;
+        it is the attribution between the three sources that carries the caveat.
+      </li>
+      <li>
+        <b>Per-bin error bars cannot express frequency correlation.</b> Because σ(t) varies
+        with time, its transform enters the spectrum as a convolution, correlating
+        neighbouring bins. The bars shown are the correct marginals for any single bin and
+        are mildly pessimistic for a feature spanning several.
+      </li>
+      <li>
+        <b>Below about eight repeats, the estimate is unreliable.</b> A variance estimate from
+        M samples carries a relative error of 1/√(2(M−1)) — roughly 40% at M = 4. This depends
+        only on the number of repeats, not on how noisy each one is.
+      </li>
+      <li>
+        <b>Nothing here is wired into the pipeline yet.</b> These numbers come from the raw
+        <code>.acc</code> files. Connecting the estimator to the processing chain needs the
+        per-scan matrix to survive the first pipeline step, which it currently does not.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="col">
+    <p>
+      <b>Reproduce:</b> <code>explorations/noise_model_walkthrough/noise_model_walkthrough.py</code>
+      regenerates every figure and number here. The estimators live in
+      <code>thz_core/noise.py</code> with {{N_TESTS}} known-answer tests in
+      <code>tests/test_noise.py</code>.
+    </p>
+    <p>
+      <b>Method:</b> the three-source model and the drift treatment follow L. Mohtashemi
+      et al., <em>Maximum-likelihood parameter estimation in terahertz time-domain
+      spectroscopy</em>, Optics Express <b>29</b>, 4912 (2021). The tail-median floor it
+      replaces is the dynamic-range definition of M. Naftaly and R. Dudley, Optics Letters
+      <b>34</b>, 1213 (2009) — a valid instrument specification, but not a measurement
+      uncertainty.
+    </p>
+    <p style="color:var(--ink-faint)">Generated {{DATE}} from {{FILE}}.</p>
+  </div>
+</footer>
+
+</div>
