@@ -1,5 +1,5 @@
 __pycache__/
 *.py[cod]
 .venv/
-thz_core/
+thz_core
 

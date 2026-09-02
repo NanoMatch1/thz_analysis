@@ -1,0 +1,27 @@
+# Runtime dependencies for thz_analysis (dataset_core orchestration layer).
+#
+# Reconstructed 2026-08-24 by AST-scanning every import in the repo, because no
+# dependency file existed. Lower bounds mirror the style of thz-core's
+# pyproject.toml; the versions in the comments are what the Linux workstation
+# venv resolved to and is tested against.
+#
+# Install:  python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+#
+# NOTE: thz_core is NOT installed from PyPI. It is reached through the
+# gitignored `thz_core` symlink pointing at the sibling ../thz-core checkout,
+# so run scripts from this repo root. See the project memory
+# "thz-core-local-copy-layout".
+
+numpy>=1.23          # tested with 2.5.2
+scipy>=1.9           # tested with 1.18.1
+matplotlib>=3.6      # tested with 3.11.1
+pandas>=2.0          # tested with 3.0.5  — dataset_core/data_structures/decorators.py
+h5py>=3.8            # tested with 3.16.0 — dataset_core/io/database/save_load.py
+
+# Test runner
+pytest>=7.0          # tested with 9.1.1
+pytest-cov
+
+# Optional, exploration only: thz_tools_testing.py imports `thztools`. Not
+# required by the pipeline or the test suite; install it by hand if you need
+# that script.

@@ -30,7 +30,7 @@ data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-25_misalign
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\reflection_testing\2026-06-24_refl_testing\cone_tests'
 data_dir = r'C:\Users\Samuel\Data\THz\diagnostics\2026-06-30_ref_testing'
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-1_CNT\export'
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon\export'
+data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-08-21_CNT-paper-doped_3'
 
 
 # ── Configuration ───────────────────────────────────────

@@ -1,5 +1,56 @@
 # TODO
 
+## Migration (2026-08-24, Windows → Linux workstation) — RESOLVED
+
+- [x] **Recover the missing thz-core functions.** `thz_analysis` called 14
+  symbols absent from the `thz-core` checkout, leaving the suite at
+  **128 passed / 32 failed**. Found and merged the same day
+  (thz-core `ed8626b`, merging `recover/nested-thz-core-2026-08`).
+
+  **Where it was:** the old Windows machine kept the live thz_core working tree
+  nested at `matchbook\thz\thz_core\`, which was listed in thz-analysis's
+  `.gitignore`. So the code was invisible to the repo that contained it, and
+  had never been committed to the repo it belonged to. It was not lost — just
+  in a directory that no `git status` anywhere would ever mention.
+
+  **What came back:** 2460 insertions over 23 files — new `window.py` (319) and
+  `reflection_gap.py` (188); `transfer.py` +271 (`self_referenced_transfer`,
+  `remove_phase_offset`); `invert.py` +208 (incl. the
+  `config['invert']['min_one_plus_r']` singularity floor); `invert_grid.py`,
+  `kramers_kronig.py`, `multilayer.py`, `fit_gui.py`, `fitting/`; and tests
+  `test_window.py`, `test_remove_phase_offset.py`, `test_invert_grid.py`,
+  `test_multilayer.py`.
+
+  **Verification:** thz-core 166 → **200 passed**; thz_analysis 128/32 →
+  **160 passed, 0 failed**. No source was patched to make anything pass — the
+  32 failures resolved purely by the functions existing. The recovery commit
+  deletes no file develop had, and every test-file change is additive.
+
+  **Two cleanups it needed** (thz-core `9b36570`): the capture was made with
+  `git add -A` on a live tree, so it swept in 33 tracked `.pyc` files, and it
+  resurrected `tests/test_segment_and_fresnel.py` — deliberately deleted in
+  `ecab2d9` when it was split into `test_fresnel.py`. That file imports
+  `segment_waveform`, which no longer exists, and broke collection entirely.
+
+  **The lesson worth keeping:** a gitignored directory that is itself a working
+  copy is invisible to every safety net git provides. Nothing warns you, and
+  `git status` in the parent repo stays clean while months of work sit
+  uncommitted. On this machine the equivalent path is a *symlink*
+  (`thz_analysis/thz_core -> ../thz-core`), so there is exactly one checkout and
+  the same trap cannot recur — but the general rule stands: never let a
+  gitignored path hold the only copy of anything.
+
+## Testing hygiene
+
+- [ ] **Tests must not mutate tracked repo artifacts.** Running `pytest tests`
+  rewrites the tracked file
+  `explorations/air_gap_cnt_reflection/mem_phase_validation.png` (78 KB → 89 KB),
+  so a clean checkout shows a dirty working tree after any test run, and the
+  diff is unreviewable binary noise. Point the figure-writing test at a
+  `tmp_path` fixture (or gate it behind an explicit `--write-figures` flag) and
+  keep the committed PNG as a reference the test compares against rather than
+  overwrites.
+
 ## dataset_core — two-phase pipeline
 
 - [ ] **Persist the sub-sample alignment residual across segmentation.**
