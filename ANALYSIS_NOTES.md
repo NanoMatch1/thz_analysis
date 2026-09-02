@@ -1285,3 +1285,233 @@ self_reference does) — confirming it is phase-only. Plus the Si real-data chec
 not just THzDataReflection — it only touches processing_dict keys. Transmission caveat:
 its linear phase is the sample propagation delay (signal), so KK misplacement removal is
 inappropriate there.
+
+## §20  Measurement noise from repeated scans — why we stopped reading it off the spectrum  ★ (2026-09-02)
+
+The trigger: improving the instrument's noise never shrank the high-frequency error
+bars on the transfer function, and had not for as long as anyone had been watching.
+That is not a subtle symptom — it says the quantity being reported is not responding
+to noise at all. It wasn't.
+
+### What the old "noise floor" actually measured
+`thz_core.transfer._noise_floor` takes the **median |Y| over the top 25% of the
+frequency axis** and calls it the noise. That figure is Naftaly & Dudley's
+**dynamic-range** definition (Opt. Lett. 34, 1213 (2009)) — a perfectly good
+*instrument specification*, and the standard way to quote one. It is only an
+*uncertainty* if the spectrum has flattened into a noise plateau in the band it is
+read from.
+
+On our records it has not. The traces are short (~9 ps after padding) and the pulse
+is steep, so there is still real, reproducible pulse content at the sampling limit.
+Band-passing above 7 THz puts all six largest samples within 8 samples of the pulse
+peak, and 28–43% of that band's energy within ±5 samples of it. It is signal.
+
+Three measured consequences, on `CNTs/2026-08-20_CNT-paper-doped_2`:
+
+1. the floor sits **8–38×** above the true random scatter of the averaged spectrum in
+   its own band;
+2. it does **not** fall as 1/√M. Sub-sampling the scans, `floor·√M` — which must be
+   constant for anything measuring noise — spreads by **7.6×**, and the 12 mm sample's
+   floor went *up* 6× as scans were added from 4 to 111;
+3. two samples measured on the same instrument minutes apart get floors differing ~2×,
+   purely because their pulses differ above 7 THz.
+
+And the decisive one: the 2026-08-21 session was genuinely **2.3× quieter per scan**
+than 2026-08-20, and the floor reported it as **3.9× worse**.
+
+Because σ_|H|/|H| is built as floor ÷ |Y|, an inflated floor produces error bars that
+grow like 1/|Y| toward high frequency for reasons that have nothing to do with the
+measurement. End-to-end, the bars were 1.3–1.7× too large at 1–3.5 THz rising to
+2.5–7× above 4 THz (111 scans), and ~9–15× across the whole band for a 29-scan file.
+
+**Window-clipping leakage was tested and rejected** as the cause: pipeline-clipped,
+zero-terminated and fully-contained windows give identical tails to 3 significant
+figures. This is not an apodisation artefact.
+
+**This was already half-known in the repo.** thz-core's own
+`wiki/functions/trusted_band_mask.md` listed "tail floor contaminated by signal
+content (short records / unusual spectra)" as a known failure mode, and already cited
+the paper below. The knowledge existed; nothing connected it to the code that consumed
+the floor as an uncertainty. Worth remembering as the shape of the problem, not just
+this instance of it.
+
+### Why measure the noise from the repeats instead
+Every `.acc` already contains 10–111 individual scans. The spread between them *is*
+the noise, measured directly, at every frequency, with no assumption that any band is
+signal-free.
+
+The objection that stalled this for a while was: individual scans are too noisy to
+FFT, so surely you need the average first. **That is a misconception and it matters.**
+The DFT is *linear*, so FFT-ing each scan and averaging the spectra is bit-for-bit
+identical to averaging the traces and FFT-ing once — verified on real data to 5e-16.
+Two separate things were being conflated:
+
+- **frequency resolution** is δf = 1/T, set purely by record duration. A single noisy
+  scan has *exactly* the same resolution as the average of a thousand;
+- **per-bin SNR** is what averaging buys, and only that: √M in amplitude.
+
+A noisy scan's spectrum is not a degraded spectrum, it is a low-SNR estimate of the
+same spectrum on the same grid. The estimator is also self-calibrating: σ_mean =
+std/√M, so noisier scans give a larger std but the quotient is still right. Its own
+precision depends only on **M** (relative error 1/√(2(M−1)) — ~13% at M=30), not on
+how noisy each scan is.
+
+The real constraint is different, and it is the one that governs the implementation:
+**no non-linear step may run per scan.** Peak-finding, thresholding, per-scan phase
+unwrapping, and per-scan H = Y_s/Y_r all fail to commute with averaging. A noisy scan's
+peak index jumps by a sample and injects a timing spread that is an artefact of the
+analysis rather than a property of the instrument.
+
+### The three-source model, and why the split is worth having
+Following Mohtashemi et al., Opt. Express **29**, 4912 (2021), Eq. 1:
+
+    σ²(t) = σ_α² + [σ_β·μ(t)]² + [σ_τ·μ̇(t)]²
+
+- **σ_α** — additive, detection electronics. Flat; the only term present off-pulse.
+- **σ_β** — multiplicative, laser power. Tracks |μ|, peaks *on* the pulse.
+- **σ_τ** — timing jitter, delay line. Tracks |μ̇|, peaks on the *flanks*.
+
+The terms are separable precisely *because* they occupy different parts of the record
+— which is also what makes the result actionable rather than merely descriptive: it
+says which of detector, laser, or stage to work on. Measured across five CNT
+acquisitions, σ_α is 0.035–0.046% of peak and σ_β is 0.20–0.37%, consistent as they
+should be for one instrument on consecutive days.
+
+That paper also explains the floor problem from first principles: because σ(t) is
+time-*dependent*, its transform enters the spectrum as a **circular convolution**,
+correlating neighbouring bins — so the apparent bin-to-bin scatter of a spectrum
+overstates its true uncertainty. They state outright that "the true uncertainty in
+X(ω) is significantly smaller than the noise floor suggested by S_xx(ω)".
+
+### Drift is fitted out inside the estimator, not out of the data
+Repeats are not noisy copies of one another; amplitude and arrival time drift over an
+acquisition. Taking the raw spread would count that drift as noise — 2.09× inflation
+on the 111-scan file. Each repeat is therefore modelled as ζ(t) = A_l·μ(t − η_l) and
+the per-scan A_l, η_l are fitted and removed **before** the scatter is measured.
+
+Two deliberate choices here, both consistent with the repo's diagnose-don't-correct
+principle:
+
+- the correction lives **inside the estimator**. The averaged waveform the pipeline
+  analyses is never modified. This is a diagnostic decomposition, not a silent fix
+  applied to your data;
+- drift being separated out does **not** make it harmless. It is a real systematic
+  that averaging does not remove, so it is *reported* (`drift_inflation`, the A and η
+  series) rather than discarded. On the 111-scan file that reporting recovered the
+  purge-equilibration signature for free — 5% amplitude climb and 9 fs delay walk
+  saturating over 80 minutes, plus a distinct disturbance near 35 minutes that is
+  invisible once the scans are averaged.
+
+Consequence worth acting on: that file is **drift-limited, not noise-limited** —
+drift/within-scan runs 2.5–12× through 0.4–5 THz, peaking near 1–1.5 THz. More scans
+will not help it; a settled purge or interleaved A-B-A-B will.
+
+### Where the model may be fitted  ★ (this one is easy to get wrong)
+**Fit on RAW scans, before the pipeline touches them.** The model assumes σ_α is
+*constant in time*. The taper and window multiply the trace — and therefore its
+additive noise — by a position-dependent factor, so after those steps σ_α is no longer
+constant and the fit is dragged toward the attenuated samples. Measured:
+
+| stage | σ_α / peak | σ_β | σ_τ |
+|---|---|---|---|
+| raw scans | 0.035–0.046% | 0.22–0.37% | 1.1–1.7 fs |
+| after taper + window | 0.002–0.004% | 0.20–0.45% | 1.2–1.7 fs |
+
+Only σ_α breaks. σ_β and σ_τ scale with the signal, so a linear weighting attenuates
+signal and noise together and they are untouched. Propagation is unaffected either
+way: `spectral_noise_moments` takes σ(t) and the window as *separate* arguments
+precisely so the fit and the weighting stay distinct.
+
+### Propagation into the frequency domain
+For independent time-domain noise σ(t) through a window w(t), the exact second moments
+of a DFT bin reduce, via the double-angle identities, to a **single transform of
+w²σ²**: Var(Re Y_m) = ½[S₀ + Re S_2m], Var(Im Y_m) = ½[S₀ − Re S_2m], Cov = ½ Im S_2m.
+The S₀ part is the flat Parseval term; the S_2m part is the frequency structure a
+flat-floor model discards. These are the **diagonal** moments — a per-bin error bar
+cannot express the bin-to-bin correlation noted above, so treat the bars as marginals:
+correct for any single bin, mildly pessimistic for a feature spanning several.
+
+`block_spectral_scatter` is the companion: batch means over contiguous blocks in
+acquisition order, which unlike the above *does* see slow drift. Comparing the two is
+how you tell a noise-limited measurement from a drift-limited one.
+
+### Rejected alternatives
+- **Keep the tail floor, just widen the band / raise `tail_fraction`.** No band in
+  0–10 THz is a noise plateau for these records; the estimator has no valid domain here.
+- **Depend on `thztools`** (the reference implementation, on PyPI). Own implementation
+  instead, keeping our API, with thztools available as an independent cross-check —
+  same known-answer pattern used for the phoeniks validation.
+- **Correct the drift in the data.** Rejected: it is a systematic worth seeing, and
+  silently reshaping the averaged trace would break the "the pipeline analyses what
+  the instrument recorded" contract.
+- **Form H per scan and take its spread.** H_l = Y_s,l/Y_r,l has heavy tails and
+  undefined variance wherever |Y_r| approaches zero. Average in blocks first, divide
+  after.
+
+### Known limits (stated rather than hidden)
+- The three-way decomposition **does not fit well yet**: profile mismatch 0.33–0.63
+  against 0.07–0.24 expected from estimator noise. Most likely correlation between
+  adjacent time samples from the lock-in time constant, which would also breach the
+  independence assumption in the propagation. The measured σ(t) is unaffected (it is
+  measured, not modelled), so error bars stand; it is the *attribution* between the
+  three sources that carries the caveat.
+- Below ~8 repeats the estimate is unreliable (~40% at M=4).
+- A term with no evidence left in the data is reported as exactly `0.0` — "not
+  detectable" — never a tiny positive number dressed up as a measurement.
+
+### Defects this uncovered, as failure classes
+Four, all now with regression tests, all worth recognising again elsewhere:
+
+1. **A sign error** in the spectral covariance, caught only by a brute-force Monte
+   Carlo. Algebra that "looks right" needs a numerical check.
+2. **An unbounded likelihood.** Samples where every repeat agrees *exactly* (a quiet
+   baseline on a coarse ADC) let a variance term go to zero and the log-likelihood to
+   −∞; an unconstrained fit followed it to σ_α = 1e-150, σ_τ = 279 fs.
+3. **Wrong weighting.** A sample variance has standard error proportional to the
+   variance, so an unweighted fit to σ²(t) is dominated by the few on-pulse points and
+   barely sees the quiet region that determines σ_α — biasing it ~6× high. Correct
+   weight is 1/σ⁴.
+4. **Zero-padding treated as measurement.** Padded samples have no scatter and under
+   inverse-variance weighting read as near-infinitely confident evidence of zero noise.
+   Critically, this **cannot** be detected on the drift-corrected scatter: the
+   sub-sample Fourier shift is circular and leaks ~1.6e-6 into the padding against a
+   real 3e-5 floor. `informative_samples()` therefore tests the *pre-alignment*
+   scatter, where padding is exactly zero and no threshold is needed.
+
+Note that (3) and (4) were both introduced *while fixing* the previous defect, and both
+were caught only by running on real pipeline data. Synthetic known-answer tests proved
+the estimators recover what they are given; only real data showed what they are
+actually given.
+
+### Phase 0 — keeping the scans alive through the pipeline  ★
+None of the above could be wired in, because the per-scan matrix was destroyed by the
+**first** pipeline step. `taper_and_pad_traces_universal` changes the row count (135 →
+179), `_ensure_scan_matrix` detected the mismatch and silently substituted the averaged
+trace as a single "scan" — with no message at all on that path. Anything measuring
+repeat scatter downstream would have measured the scatter of one trace, which is zero.
+
+The original design declined to maintain a parallel representation through every step,
+on the explicit grounds that lockstep is coupling. **That trade is kept.** Instead, a
+step supplies *one decision* and a shared helper applies it to the scans, so the cost
+is one call per step rather than a second implementation of the step:
+
+- `_center_pulse_trace` split into `_plan_center_pad` (decide) and `_apply_center_pad`
+  (apply). The peak search is non-linear so it runs **once**, on the averaged trace
+  where the peak is well determined; the application is **linear in the amplitude**,
+  which is exactly what makes carrying the scans free — mean(transformed scans) equals
+  transformed mean, so the averaged pipeline is bit-for-bit unchanged.
+- `carry_scan_matrix(data_obj, previous_matrix, transform, time_out)` re-applies the
+  step's own transform to every scan. Wired into `taper_and_pad_traces_universal` and
+  `window_single_pulse_fixed_width`.
+- The fallback is now **loud**: `_record_scan_matrix_loss` reports how many scans were
+  dropped and why, `scan_matrix_status()` answers whether real repeats survive, and
+  `discarded_scan_matrix_report()` summarises at end of run. A genuinely single-scan
+  acquisition is not reported as a loss.
+
+Verified: 111 / 29 / 44 scans survive load → pad → baseline → window with mean(scans)
+equal to the averaged trace to 1e-12 at every stage.
+
+**Code:** `thz-core/thz_core/noise.py` (+ `wiki/functions/noise.md` for the API-level
+write-up), `dataset_core/adapters/thz_adapter.py` for Phase 0. **Demos:**
+`explorations/noise_model_walkthrough/` (eight-step teaching walkthrough and report),
+`explorations/noise_model_validation/` (the real-data checks quoted above).
