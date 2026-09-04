@@ -28,6 +28,11 @@ Orientation documents for this repo. **New here? Read in this order:**
   works, the `Quantity` fields, how to add one (`register(...)`), overlays, and who consumes it (viewer,
   CSV export, the `display` plotting adapter)
 
+**Tools with their own README:**
+- `../acquisition_editor/README.md` — lab-user guide to the standalone acquisition editor: walking
+  through scans to judge purge equilibration, patching table-knock spikes (OPTP), excluding the odd
+  noisy scan, cropping, the export format and its limitations
+
 **reports/** — the CNT science narrative (findings log, tutorials, research):
 - `CNT_measurement_lab_notebook.md` — **the never-erased running findings log (`F1`–`F29`)**; current interpretation lives here
 - `reflection_interface_theory_tutorial.md` — impedance / the `r=−1` pole / high-index rescue

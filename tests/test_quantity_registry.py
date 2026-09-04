@@ -135,6 +135,57 @@ class TestExport(unittest.TestCase):
             self.assertTrue(np.all(np.isnan(data[:, 1:])))
 
 
+# ── collaborator handoff: fit summary + README ───────────────────────────────
+
+
+class TestFitSummaryAndReadme(unittest.TestCase):
+    def test_fit_summary_has_scattering_rate_and_uncertainty_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = _make_dataset(tmp)
+            written = results_viewer.export_quantities(dataset, tmp)
+            fit_csv = [p for p in written if p.endswith("fit_summary.csv")]
+            self.assertEqual(len(fit_csv), 1)
+            with open(fit_csv[0]) as f:
+                rows = f.read().strip().splitlines()
+            header = rows[0].split(",")
+            for expected in ["filename", "model", "r_squared", "tau [s]", "tau [s] uncertainty",
+                              "scattering_rate_Hz", "crossover_THz"]:
+                self.assertIn(expected, header)
+            # only the fitted, non-reference sample gets a row
+            self.assertEqual(len(rows), 2)
+            self.assertIn("sample_a.acc", rows[1])
+
+    def test_readme_documents_columns_and_fit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = _make_dataset(tmp)
+            written = results_viewer.export_quantities(dataset, tmp)
+            readme = [p for p in written if p.endswith("README.md")]
+            self.assertEqual(len(readme), 1)
+            text = open(readme[0]).read()
+            # column glossary pulled from the registry (not hand-duplicated)
+            for quantity in registry.export_quantities_list():
+                self.assertIn(quantity.export_header, text)
+            self.assertIn("sample_a.acc", text)
+            self.assertIn("scattering rate", text)
+
+    def test_no_fits_skips_fit_summary_and_says_so_in_readme(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pd = _synthetic_processing_dict(with_fit=False)
+            dataset = _FakeDataset({"sample_a.acc": _FakeObj(pd)}, tmp)
+            written = results_viewer.export_quantities(dataset, tmp)
+            self.assertFalse(any(p.endswith("fit_summary.csv") for p in written))
+            readme = [p for p in written if p.endswith("README.md")][0]
+            self.assertIn("No stored fits", open(readme).read())
+
+    def test_readme_false_skips_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = _make_dataset(tmp)
+            written = results_viewer.export_quantities(dataset, tmp, readme=False)
+            self.assertFalse(any(p.endswith("fit_summary.csv") for p in written))
+            self.assertFalse(any(p.endswith("README.md") for p in written))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "README.md")))
+
+
 # ── new viewer (headless) ────────────────────────────────────────────────────
 
 

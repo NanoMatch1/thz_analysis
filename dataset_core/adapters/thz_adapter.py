@@ -7529,9 +7529,15 @@ def launch_results_viewer(dataset: DataSet, **kwargs):
     return _viewer(dataset, **kwargs)
 
 
-def export_quantities(dataset: DataSet, export_dir: str | None = None):
+def export_quantities(dataset: DataSet, export_dir: str | None = None, **kwargs):
     """Registry-driven CSV export (replacement for :func:`export_results`)."""
     from dataset_core.adapters.results_viewer import export_quantities as _export
+    return _export(dataset, export_dir, **kwargs)
+
+
+def export_fit_summary(dataset: DataSet, export_dir: str | None = None):
+    """One row per fitted sample: model, params +/- uncertainty, R^2, scattering rate, crossover."""
+    from dataset_core.adapters.results_viewer import export_fit_summary as _export
     return _export(dataset, export_dir)
 
 

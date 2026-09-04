@@ -41,6 +41,11 @@ matchbook/thz/
 ├── TODO.md                     — tracked open work
 ├── open_session.py              — reopen a saved .thzbundle via the catalogue; interactive
 │                                  REPL / CLI to browse, replay, fit, export, extract quantities
+├── acq_editor_run_me.py        — launch the standalone acquisition editor on a data folder
+├── acc_file_manager.py         — GUI to join / split .acc files (built on acquisition_editor)
+├── acquisition_editor/         — standalone interactive scan cleaner: step through scans to
+│                                  judge purge settling, exclude noisy scans, patch spikes, crop,
+│                                  export cleaned .acc/.dat  (see acquisition_editor/README.md)
 ├── dataset_core/
 │   ├── adapters/
 │   │   ├── thz_adapter.py      — THE main file: bridges DataSet ↔ thz-core

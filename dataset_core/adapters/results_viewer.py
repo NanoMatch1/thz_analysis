@@ -14,6 +14,7 @@ Works on any dataset — a live pipeline dataset or one restored by ``session_bu
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -38,12 +39,18 @@ def _filesystem_safe(stem: str) -> str:
 # ── registry-driven export ───────────────────────────────────────────────────────
 
 
-def export_quantities(dataset, export_dir: str | None = None) -> list[str]:
+def export_quantities(dataset, export_dir: str | None = None, *, readme: bool = True) -> list[str]:
     """Write one CSV per sample with freq_THz + every registered export column.
 
     Superset-safe: a quantity missing for a given sample is written as a NaN column, so every
     file has the same header. Also writes the raw and pre-FFT time traces (as the legacy
     ``export_results`` did). Returns the list of written paths.
+
+    When ``readme`` (default True), also writes ``fit_summary.csv`` (one row per sample with a
+    stored fit — see :func:`export_fit_summary`) and ``README.md`` (a column glossary pulled
+    straight from the quantity registry, plus each sample's fit readout). Together these make the
+    export directory self-describing for a collaborator with no access to this codebase — pass
+    ``readme=False`` to skip them for a quick/internal export.
     """
     if export_dir is None:
         export_dir = os.path.join(dataset.file_dir, "results")
@@ -97,7 +104,169 @@ def export_quantities(dataset, export_dir: str | None = None) -> list[str]:
 
     print(f"[export_quantities] wrote {len(written)} file(s) to {export_dir} "
           f"({len(columns_spec)} quantity columns).")
+
+    if readme:
+        fit_summary_path = export_fit_summary(dataset, export_dir)
+        if fit_summary_path:
+            written.append(fit_summary_path)
+        readme_path = _write_export_readme(dataset, export_dir, columns_spec, fit_summary_path)
+        written.append(readme_path)
+
     return written
+
+
+# ── fit-context export (collaborator handoff) ────────────────────────────────────
+#
+# A raw CSV of freq/sigma columns tells a collaborator nothing about what they're looking at:
+# what the columns mean, what units they're in, or (for a fitted figure) what the Drude
+# parameters and scattering rate actually were. These two functions make an export directory
+# self-describing without hand-maintaining a second list of quantities anywhere — the column
+# glossary is read straight off the quantity registry, and the fit readout is read straight off
+# the stored ``FitResult`` (whatever model was actually fit).
+
+
+def _fit_report_lines(fit_result) -> list[str]:
+    """Human-readable physical summary of one stored fit, or ``[]`` if there is none / it failed.
+
+    Reuses ``FitResult.summary_lines()`` (model, R^2, chi^2_red, rmse, params +/- uncertainty
+    with units) and appends the scattering-rate / crossover readouts for tau-bearing models
+    (Drude, Drude-Smith) — the numbers someone reading a conductivity figure actually wants.
+    """
+    if fit_result is None or not getattr(fit_result, "success", False):
+        return []
+    lines = list(fit_result.summary_lines())
+    tau = fit_result.all_params().get("tau")
+    if tau:
+        scattering_rate_hz = 1.0 / tau
+        crossover_thz = scattering_rate_hz / (2.0 * np.pi) * _HZ_TO_THZ
+        lines.append(f"  scattering rate (1/tau) = {scattering_rate_hz:.4g} Hz")
+        lines.append(f"  sigma1 = sigma2 crossover = {crossover_thz:.4g} THz")
+    return lines
+
+
+def _fit_summary_rows(dataset) -> list[dict]:
+    """One flat dict per successfully-fitted sample: params +/- uncertainty, R^2, derived readouts."""
+    rows = []
+    for filename, data_obj in _sample_items(dataset):
+        fit_result = data_obj.processing_dict.get("fit_result")
+        if fit_result is None or not getattr(fit_result, "success", False):
+            continue
+        row = {
+            "filename": filename,
+            "model": fit_result.model_name,
+            "r_squared": fit_result.r_squared,
+            "reduced_chi_squared": fit_result.reduced_chi_squared,
+            "rmse": fit_result.rmse,
+        }
+        for name, value in fit_result.all_params().items():
+            unit = fit_result.param_units.get(name, "")
+            column = f"{name} [{unit}]" if unit else name
+            row[column] = value
+            uncertainty = fit_result.param_uncertainties.get(name)
+            if uncertainty is not None:
+                row[f"{column} uncertainty"] = uncertainty
+        tau = fit_result.all_params().get("tau")
+        if tau:
+            row["scattering_rate_Hz"] = 1.0 / tau
+            row["crossover_THz"] = (1.0 / tau) / (2.0 * np.pi) * _HZ_TO_THZ
+        rows.append(row)
+    return rows
+
+
+def _format_cell(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and np.isnan(value):
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.10g}"
+    return str(value)
+
+
+def export_fit_summary(dataset, export_dir: str | None = None) -> str | None:
+    """Write one row per successfully-fitted sample: model, params +/- uncertainty, R^2, and the
+    derived scattering-rate/crossover readouts — a flat table for comparing fits across samples.
+
+    Superset-safe over parameter sets (e.g. a Drude-Smith ``c`` column is blank on plain-Drude
+    rows, rather than every sample being forced onto one model's parameter list). Returns the
+    written path, or ``None`` when no sample carries a successful fit (nothing to write).
+    """
+    rows = _fit_summary_rows(dataset)
+    if not rows:
+        return None
+    if export_dir is None:
+        export_dir = os.path.join(dataset.file_dir, "results")
+    os.makedirs(export_dir, exist_ok=True)
+
+    headers = ["filename", "model", "r_squared", "reduced_chi_squared", "rmse"]
+    for row in rows:
+        for key in row:
+            if key not in headers:
+                headers.append(key)
+
+    lines = [",".join(headers)]
+    for row in rows:
+        lines.append(",".join(_format_cell(row.get(h)) for h in headers))
+
+    path = os.path.join(export_dir, "fit_summary.csv")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"[export_fit_summary] wrote {len(rows)} fitted sample(s) to {path}.")
+    return path
+
+
+def _write_export_readme(dataset, export_dir: str, columns_spec, fit_summary_path: str | None) -> str:
+    """Write a collaborator-facing README: what each file/column is, in plain language.
+
+    Column descriptions come straight from the quantity registry (single source of truth — this
+    can never drift from what the CSVs actually contain), so a newly registered quantity
+    documents itself here automatically, with no second list to maintain.
+    """
+    lines = [
+        f"# THz-TDS results export — {getattr(dataset, 'seriesname', None) or os.path.basename(os.path.normpath(export_dir))}",
+        "",
+        f"Generated: {datetime.now(timezone.utc).isoformat()}",
+        f"Source dataset: {getattr(dataset, 'file_dir', 'unknown')}",
+        "",
+        "## Files",
+        "- `<sample>_results.csv` — one frequency-domain result per sample, one row per frequency bin.",
+        "- `<sample>_time_raw.csv` — the raw time-domain trace (`time_ps, amplitude, stderr`).",
+        "- `<sample>_time_prefft.csv` — the windowed/processed trace just before the FFT (`time_ps, amplitude`).",
+    ]
+    if fit_summary_path:
+        lines.append(
+            "- `fit_summary.csv` — one row per sample with a fitted model: best-fit parameters "
+            "+/- 1-sigma uncertainty, R^2, and derived readouts (scattering rate, crossover "
+            "frequency)."
+        )
+    lines += [
+        "",
+        "## Columns in `<sample>_results.csv`",
+        "- `freq_THz` — frequency, terahertz",
+    ]
+    for quantity in columns_spec:
+        lines.append(f"- `{quantity.export_header}` — {quantity.label} ({quantity.y_label})")
+
+    lines += ["", "## Fitted models"]
+    any_fit = False
+    for filename, data_obj in _sample_items(dataset):
+        report_lines = _fit_report_lines(data_obj.processing_dict.get("fit_result"))
+        if not report_lines:
+            continue
+        any_fit = True
+        lines.append(f"### {filename}")
+        lines.extend(report_lines)
+        lines.append("")
+    if not any_fit:
+        lines.append("_No stored fits on this dataset._")
+        lines.append("")
+
+    path = os.path.join(export_dir, "README.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return path
 
 
 # ── interactive viewer ───────────────────────────────────────────────────────────

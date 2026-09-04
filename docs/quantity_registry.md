@@ -244,7 +244,31 @@ whatever model the `fit_result` names.
   `display_quantities()` grouped by `group`, and draws using the same fields.
 - **`results_viewer.export_quantities`** — the CSV exporter builds its columns from
   `export_quantities_list()`; a sample missing a quantity gets a NaN column, so every CSV has
-  the same shape.
+  the same shape. By default it also writes `fit_summary.csv` and `README.md` (see below) so the
+  export directory is self-describing — pass `readme=False` to skip them.
+- **`results_viewer._write_export_readme`** — writes the export directory's `README.md`. Its
+  column glossary is built from `export_quantities_list()`'s `label`/`y_label`, so a newly
+  registered quantity documents itself with no second list to maintain. Also lists each fitted
+  sample's model, parameters, and derived scattering-rate/crossover readouts (see
+  `results_viewer.export_fit_summary` below).
+
+### Handing an export to a collaborator
+
+`export_quantities` is meant to be handed off, not just consumed by other code in this repo. By
+default (`readme=True`) it writes two extra files alongside the per-sample CSVs:
+
+- **`fit_summary.csv`** — one row per sample that carries a successful `fit_result`: the model
+  name, every parameter with its 1-sigma uncertainty and unit (from `FitResult.param_units`),
+  R^2/reduced chi^2/RMSE, and — for any tau-bearing model (Drude, Drude-Smith) — the derived
+  `scattering_rate_Hz` (`1/tau`) and `crossover_THz` (the sigma_1 = sigma_2 crossover frequency).
+  Superset-safe across models: a Drude-Smith `c` column is simply blank on plain-Drude rows.
+- **`README.md`** — generation timestamp, source dataset path, a plain-English column glossary
+  for `<sample>_results.csv` (read straight off the registry, so it can't drift from what's
+  actually in the CSVs), and each fitted sample's readout (`FitResult.summary_lines()` plus the
+  scattering-rate/crossover lines).
+
+Use `thz.export_fit_summary(dataset, export_dir)` directly if you only want the fit table (e.g.
+to re-export it after adding a fit without re-writing every per-sample CSV).
 
 **Alignment guarantee for `error_key` / `mask_key`:** the pipeline's
 `apply_instrument_resolution` decimates *every* 1-D array in `processing_dict` whose length
