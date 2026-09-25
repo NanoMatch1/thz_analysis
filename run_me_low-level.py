@@ -69,7 +69,7 @@ data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\silicon\p
 data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\p-pol' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
-data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export\mints'
+data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-09-25_CNT-paper-doped_windowed_1\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol_2\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
@@ -84,8 +84,8 @@ PS_TO_S = 1e-12
 config: dict = {
     "general": {
         'show_graph': True,
-        'air_gap_explorer': True,   # open the interactive air-gap de-embed slider after inversion
-        'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
+        'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
+        'preprocess_data': True,        # run the preprocessing steps (baseline, window, FFT) before transfer function
         'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': '',            # free-text notes stored in the bundle
@@ -102,8 +102,8 @@ config: dict = {
         "n_sio2": 1.96,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        'first_reflection': (146.5, 159.5),  # cnt
-        'second_reflection': (170.4, 184.5),  # cnt
+        'first_reflection': (135, 144),  # cnt
+        'second_reflection': (150, 168.5),  # cnt
         # "first_reflection": (145, 157.3),  # silicon
         # "second_reflection": (174, 183),  # silicon
     },

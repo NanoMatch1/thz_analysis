@@ -272,10 +272,14 @@ if __name__ == "__main__":
     bundle_dirs = [n_type, refl, refl_2]
     # fit_all(bundle_dirs, quantity="sigma", model="drude_conductivity", fit_band_thz=(0.35, 1.6), save=True)
 
+    export_dir = r"C:\Users\Samuel\Data\THz\calibration\silicon-data-fitted-2"
+
     n_type = session_bundle.load_session(n_type)
     # si_type = session_bundle.load_session()
     refl_data = session_bundle.load_session(refl)
     refl_2_data = session_bundle.load_session(refl_2)
+
+
 
 
     # for filename, data_obj in n_type.data.items():
@@ -293,3 +297,7 @@ if __name__ == "__main__":
     plt.savefig(r'C:\Users\Samuel\Documents\Professional\Presentations\More-N\figures\conductivity_fit_results_error.png', dpi=600)
     print(report)
     plt.show()
+
+    # thz.export_quantities(n_type, export_dir=export_dir)
+    # thz.export_quantities(refl_data, export_dir=export_dir)
+    # thz.export_quantities(refl_2_data, export_dir=export_dir)
