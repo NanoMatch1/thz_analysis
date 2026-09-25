@@ -141,6 +141,82 @@ def test_taper_smooths_second_reflection_leading_edge():
             assert np.max(edge_steps) < 0.1 * DC_OFFSET, (filename, edge_steps)
 
 
+def test_taper_edges_option_selects_side():
+    amplitude = np.ones(20)
+    support = np.ones(20, dtype=bool)
+    leading_only, _ = thz.taper_measured_block_edges(amplitude, support, 5, edges='leading')
+    trailing_only, _ = thz.taper_measured_block_edges(amplitude, support, 5, edges='trailing')
+    untouched, _ = thz.taper_measured_block_edges(amplitude, support, 5, edges='none')
+    assert leading_only[0] == 0.0 and leading_only[-1] == 1.0
+    assert trailing_only[0] == 1.0 and trailing_only[-1] == 0.0
+    assert np.all(untouched == 1.0)
+    try:
+        thz.taper_measured_block_edges(amplitude, support, 5, edges='middle')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid edges option accepted")
+
+
+def test_per_block_baseline_removes_each_pulse_offset():
+    """Each measured block gets its own baseline; per_block=False shares the first."""
+    amplitude = np.concatenate([np.full(20, 0.3), np.zeros(10), np.full(20, 0.5)])
+    trace = np.column_stack((np.arange(amplitude.size), amplitude))
+    config = {"baseline": {"n_points": 5}}
+    corrected, _, _ = thz._subtract_baseline_on_measured_support({"x": trace}, config)
+    assert np.allclose(corrected["x"][:, 1], 0.0)
+
+    config["baseline"]["per_block"] = False
+    shared, _, _ = thz._subtract_baseline_on_measured_support({"x": trace}, config)
+    assert np.allclose(shared["x"][30:, 1], 0.2)       # second block keeps its 0.2 excess
+    assert np.all(shared["x"][20:30, 1] == 0.0)        # gap still untouched
+
+
+def test_each_segment_centres_on_its_own_pulse():
+    """Both pulses sit on every segment's axis; each segment must centre on the pulse
+    in its OWN region (here the second segment would otherwise pick the larger first
+    pulse)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dataset = _built_dataset(tmpdir)
+        thz.subtract_baseline(dataset)
+        thz.taper_and_pad_traces(dataset)
+        for filename, data_obj in dataset.data.items():
+            for segment_name, expected_peak_ps in (("first_reflection", FIRST_PS),
+                                                   ("second_reflection", SECOND_PS)):
+                holder = getattr(data_obj, segment_name)
+                info = holder.processing_dict['centering_info']
+                peak_ps = holder.data[info['peak_idx_new'], 0] * thz._S_TO_PS
+                assert abs(abs(peak_ps - expected_peak_ps) - 0.3) < 0.1, (filename, segment_name, peak_ps)
+                # peak sits at the array midpoint after centring
+                assert abs(info['peak_idx_new'] - (holder.data.shape[0] - 1) / 2) <= 1
+
+
+def test_scan_matrix_carried_through_taper_and_pad():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dataset = _built_dataset(tmpdir)
+        thz.subtract_baseline(dataset)
+        thz.taper_and_pad_traces(dataset)
+        for filename, data_obj in dataset.data.items():
+            status = thz.scan_matrix_status(data_obj)
+            assert status['intact'] and status['reason'] is None, (filename, status)
+            scan_matrix = thz._ensure_scan_matrix(data_obj)
+            assert np.allclose(scan_matrix[:, 1:].mean(axis=1), data_obj.data[:, 1], atol=1e-12)
+
+
+def test_taper_kwargs_override_config():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dataset = _built_dataset(tmpdir)
+        thz.subtract_baseline(dataset)
+        thz.taper_and_pad_traces(dataset, taper_ps=0.25, taper_edges='leading')
+        for data_obj in dataset.data.values():
+            info = data_obj.second_reflection.processing_dict['centering_info']
+            assert info['edge_taper_samples'] == 5 and info['taper_edges'] == 'leading'
+            amplitude = data_obj.second_reflection.data[:, 1]
+            second_start, second_stop = info['measured_blocks'][1]
+            assert amplitude[second_start] == 0.0
+            assert amplitude[second_stop - 1] != 0.0     # trailing edge left alone
+
+
 def _run_all():
     tests = [value for name, value in globals().items() if name.startswith("test_") and callable(value)]
     failures = 0

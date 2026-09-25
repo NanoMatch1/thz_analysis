@@ -121,6 +121,11 @@ config: dict = {
         "mode": "crop",  # 'crop' or 'pad'
         "peak_mode": "auto", #, 'auto' or 'manual'
         "taper_ps": 1.0,  # half-cosine taper length in ps
+        "taper_edges": "both",  # which edge of each measured-data block: 'both' | 'leading' | 'trailing' | 'none'
+    },
+    "baseline": {
+        "n_points": 10,     # leading samples averaged for the DC baseline
+        "per_block": True,  # True: each pulse region baselined from its own leading samples
     },
     "window": {
         "type": "hann",          # symmetric Hann (also 'tukey' / 'boxcar')
