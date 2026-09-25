@@ -69,7 +69,7 @@ data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\silicon\p
 data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol' # Silicon reference data, silicon pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\p-pol' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
-data_dir = r'C:\Users\Samuel\Data\THz\CNTs\2026-09-25_CNT-paper-doped_windowed_1\export'
+data_dir = r'C:\Users\Samuel\matchbook\data_sync\2026-09-25_CNT-paper_windowed_0'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol_2\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
@@ -102,8 +102,8 @@ config: dict = {
         "n_sio2": 1.96,               # SiO2 window refractive index (reference medium)
     },
     "regions": {
-        'first_reflection': (135, 144),  # cnt
-        'second_reflection': (150, 168.5),  # cnt
+        'first_reflection': (135, 146),  # cnt
+        'second_reflection': (160, 170),  # cnt
         # "first_reflection": (145, 157.3),  # silicon
         # "second_reflection": (174, 183),  # silicon
     },
@@ -225,7 +225,6 @@ dataset.load_all_data()
 dataset.plot_current()
 # display_crop_regions(dataset)
 thz.build_full_trace_reflection(dataset) # defines the reflection dataset - on for refl, off for trans
-thz.taper_and_pad_traces(dataset)
 # dataset.plot_current()
 # thz.center_pulse(dataset, show_graph=True)  # center the pulses in the trace (no crop, no pad)
 # TODO: Define half-width from minimum max array length
@@ -259,6 +258,7 @@ dataset.plot_current()
 
 thz.define_reflection_regions(dataset, config)
 thz.subtract_baseline(dataset)
+thz.taper_and_pad_traces(dataset)
 
 
 # if not already defined in the config, this prompts for region selection on the time trace.
