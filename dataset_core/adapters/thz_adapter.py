@@ -2143,8 +2143,62 @@ def _plot_with_snr_mask(
 # pipeline steps
 # ---------------------------------------------------------------------------
 
+def measured_support_mask(amplitude: np.ndarray, min_zero_run: int = 2) -> np.ndarray:
+    """True where a sample is MEASURED data, False where it is zero-fill.
+
+    Zero-fill (the gap ``build_full_trace_reflection`` zeros between the pulses, or
+    padding added by ``taper_and_pad_traces``) is a run of EXACT 0.0 samples. An
+    averaged lock-in reading is never exactly zero twice in a row, so a run of at
+    least ``min_zero_run`` exact zeros marks "no data here", while an isolated
+    zero-crossing inside a pulse stays measured.
+    """
+    amplitude = np.asarray(amplitude, dtype=float)
+    is_exact_zero = amplitude == 0.0
+    is_zero_fill = np.zeros(amplitude.shape, dtype=bool)
+    run_start = None
+    for index, zero in enumerate(np.append(is_exact_zero, False)):
+        if zero and run_start is None:
+            run_start = index
+        elif not zero and run_start is not None:
+            if index - run_start >= min_zero_run:
+                is_zero_fill[run_start:index] = True
+            run_start = None
+    return ~is_zero_fill
+
+
+def _subtract_baseline_on_measured_support(
+    data_dict: dict, config: dict,
+) -> tuple[dict, dict, dict]:
+    """Baseline-subtract only the measured samples, leaving zero-fill at exactly 0.
+
+    The core estimator (mean of the first ``n_points``) runs on the measured rows
+    alone, so the baseline comes from the first real samples rather than from any
+    leading zero-fill. Subtracting a constant from the zero-filled gap as well would
+    push the gap to -baseline and leave a step at every pulse-region edge (which the
+    Hann window then turns into a spurious curve from 0 to -baseline).
+
+    Returns ``(corrected_dict, metrics, support_masks)``.
+    """
+    support_masks = {name: measured_support_mask(np.asarray(data)[:, 1])
+                     for name, data in data_dict.items()}
+    measured_only = {name: np.asarray(data, dtype=float)[support_masks[name]]
+                     for name, data in data_dict.items()}
+    corrected_measured, metrics = core.subtract_baseline(measured_only, config)
+
+    corrected_dict = {}
+    for name, data in data_dict.items():
+        corrected = np.asarray(data, dtype=float).copy()
+        corrected[support_masks[name], 1] = corrected_measured[name][:, 1]
+        corrected_dict[name] = corrected
+    return corrected_dict, metrics, support_masks
+
+
 def _subtract_baseline_reflection(dataset: DataSet, config: dict | None = None) -> DataSet:
-    """Specific pipeline step to subtract baseline from both reflections in a THzDataReflection."""
+    """Specific pipeline step to subtract baseline from both reflections in a THzDataReflection.
+
+    Only measured samples are shifted; the zero-filled gap between the pulses stays
+    at exactly zero (see ``_subtract_baseline_on_measured_support``).
+    """
     config = config or getattr(dataset, 'config', None) or {}
     n_points = int((config.get('baseline', {}) or {}).get('n_points', 10))
 
@@ -2159,7 +2213,8 @@ def _subtract_baseline_reflection(dataset: DataSet, config: dict | None = None) 
         flattened_data_dict[f"{filename}__first"] = first_holder.data
         flattened_data_dict[f"{filename}__second"] = second_holder.data
 
-    corrected, metrics = core.subtract_baseline(flattened_data_dict, config)
+    corrected, metrics, support_masks = _subtract_baseline_on_measured_support(
+        flattened_data_dict, config)
 
     if show_graph:
         fig, ax = plt.subplots(2, 1, layout='constrained')
@@ -2183,9 +2238,15 @@ def _subtract_baseline_reflection(dataset: DataSet, config: dict | None = None) 
         # Mirror baseline subtraction onto the per-scan matrix so the
         # per-scan working data stays consistent with the averaged trace.
         # (first_reflection is already an averaged trace; no per-scan matrix.)
+        # Same measured-support rule as the averaged trace (one mask, taken from the
+        # average, applied to every scan), so the scans' zero-filled gap stays at 0 too.
         scan_matrix = _ensure_scan_matrix(data_obj)
         scan_columns = scan_matrix[:, 1:]
-        scan_columns -= scan_columns[:n_points, :].mean(axis=0, keepdims=True)
+        measured_rows = support_masks[second_name]
+        if measured_rows.shape[0] != scan_columns.shape[0]:
+            measured_rows = np.ones(scan_columns.shape[0], dtype=bool)
+        scan_baselines = scan_columns[measured_rows][:n_points].mean(axis=0, keepdims=True)
+        scan_columns[measured_rows] -= scan_baselines
 
     return dataset
 
@@ -2759,6 +2820,40 @@ def _apply_center_pad(t: np.ndarray, y: np.ndarray, plan: dict) -> tuple:
     return t_new, y_new
 
 
+def taper_measured_block_edges(
+    amplitude: np.ndarray,
+    support_mask: np.ndarray,
+    taper_samples: int,
+) -> tuple[np.ndarray, list[tuple[int, int]]]:
+    """Half-cosine taper both edges of every contiguous block of measured data.
+
+    A block edge is wherever measured data meets zero-fill or the end of the array
+    (the FFT wraps the array end round to its start, so that is an edge too). Each
+    edge is ramped to zero over ``taper_samples`` samples INSIDE the block, so the
+    trace reaches zero smoothly before the window is applied. The ramp is clamped to
+    half the block length so the rising and falling ramps never overlap.
+
+    Pure and linear in ``amplitude``. Returns ``(tapered, blocks)`` where ``blocks``
+    lists the measured ``(start, stop)`` index ranges (stop exclusive).
+    """
+    tapered = np.asarray(amplitude, dtype=float).copy()
+    support_mask = np.asarray(support_mask, dtype=bool)
+    padded_mask = np.concatenate(([False], support_mask, [False])).astype(int)
+    transitions = np.diff(padded_mask)
+    block_starts = np.nonzero(transitions == 1)[0]
+    block_stops = np.nonzero(transitions == -1)[0]
+
+    blocks = []
+    for block_start, block_stop in zip(block_starts, block_stops):
+        ramp_length = min(int(taper_samples), (block_stop - block_start) // 2)
+        if ramp_length > 0:
+            rising_ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, ramp_length, endpoint=False)))
+            tapered[block_start:block_start + ramp_length] *= rising_ramp
+            tapered[block_stop - ramp_length:block_stop] *= rising_ramp[::-1]
+        blocks.append((int(block_start), int(block_stop)))
+    return tapered, blocks
+
+
 def _center_pulse_trace(
     t: np.ndarray,
     y: np.ndarray,
@@ -2885,8 +2980,12 @@ def taper_and_pad_traces(
 ) -> DataSet:
     """For extending the start or end of a time trace where the array length is asymmetric about the main pulse (normal situation is that the pre-pulse region is deliberately shorter to save time or remove pre-pulse contaminaton. 
     
-    Apply a half-cosine taper and pad with zeros to the start and end of each trace. Operate on the segments specified in the 'segment' argument. 
-    
+    Pads with zeros to centre the peak, then applies a half-cosine taper (``taper_ps``)
+    to BOTH edges of every contiguous block of measured data — including the edges
+    that border the zero-filled gap between the two pulses — so each pulse's data
+    reaches zero smoothly before the window is applied. Operate on the segments
+    specified in the 'segment' argument.
+
     Operates on the dataset in place, using THzDataReflection objects. Call once overall."""
     config = config or getattr(dataset, 'config', None) or {}
     centering_cfg = config.get('centering', {})
@@ -2905,10 +3004,17 @@ def taper_and_pad_traces(
                 if holder is not None:
                     t = holder.data[:, 0]
                     y = holder.data[:, 1]
+                    # Pad only (taper_ps=0): the edge taper below covers the padded
+                    # junction too, so tapering here as well would ramp it twice.
                     t_new, y_new, info = _center_pulse_trace(
-                        t, y, peak_mode=peak_mode, taper_ps=taper_ps,
+                        t, y, peak_mode=peak_mode, taper_ps=0.0,
                         picker_title=f"'{filename}' [{segment_name}] — pick main pulse peak",
                     )
+                    edge_taper_samples = int(round(taper_ps * 1e-12 / info['dt_s']))
+                    y_new, measured_blocks = taper_measured_block_edges(
+                        y_new, measured_support_mask(y_new), edge_taper_samples)
+                    info['taper_samples'] = edge_taper_samples
+                    info['measured_blocks'] = measured_blocks
                     holder.processing_dict['pre_centering'] = np.column_stack((t, y))
                     holder.processing_dict['centering_info'] = info
                     holder.data = np.column_stack((t_new, y_new))

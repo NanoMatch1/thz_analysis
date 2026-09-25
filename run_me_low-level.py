@@ -70,6 +70,7 @@ data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol' # Silic
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization\p-pol' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
 data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export' # CNT paper pressed into SiO2 window, 45 deg incidence, p-pol. 2.08 mm quartz window thickness.
 data_dir = r'C:\Users\Samuel\matchbook\data_sync\2026-09-25_CNT-paper_windowed_0'
+data_dir = os.path.expanduser('~/data/data_sync/2026-09-25_CNT-paper_windowed_0')  # same dataset, Linux box
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\calibration\silicon\silicon_p-pol_2\export'
 # data_dir = r'C:\Users\Samuel\Data\THz\Sam\2026-07-07_MINTS\export'
