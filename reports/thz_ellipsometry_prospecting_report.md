@@ -86,6 +86,11 @@ $$\rho = \frac{r_p\,g}{r_s\,g} = \frac{r_p}{r_s}$$
 
 This is not an approximation or a first-order cancellation. It is why the technique exists.
 
+**One important caveat, developed in §4.3:** this argument covers errors common to *both
+polarizations at the same instant*. If the p and s data are acquired at different times and the
+instrument drifts in between, that differential error does **not** cancel. It is the one
+first-order channel ellipsometry leaves open, and it dictates the acquisition protocol.
+
 What it costs: $\rho$ carries no absolute reflectance. For an opaque bulk sample we do not need
 one. For a thin film on a substrate (three unknowns: $n$, $\kappa$, $d$) we would need a second
 incidence angle.
@@ -176,16 +181,95 @@ peak efficiency. Across a full 90° sweep of THz polarization the signal then va
 
 A complete measurement is a small grid:
 
-- **Emitter polarization** $\alpha$: minimum two settings (s and p); better, 8–12 steps over 180°
-  so the sinusoid is over-determined and the emitter's angle offset and amplitude can be fitted.
+- **Emitter polarization** $\alpha$: **6–12 steps over 180°**, not the two that p and s strictly
+  require. The reason is in §4.3 and it is worth real money.
 - **Detector azimuth** $\varphi$: **two settings** (e.g. 31.72° and 76.72°). This is the
   non-obvious requirement — see §6.
 - **Delay scan** at each combination: the usual time-domain waveform.
+- **Interleaved acquisition order** — cycle through all the settings repeatedly rather than
+  finishing one before starting the next. Also §4.3.
 - **Gold mirror**, same grid, once per session.
 
 Everything else — sample, mirrors, purge, alignment — is untouched throughout.
 
-### 4.3 The calibration, and why it is remarkably forgiving
+### 4.3 Over-determine the polarization series — the one error ellipsometry does *not* kill
+
+Agulto *et al.* (*Sci. Rep.* **11**, 18129, 2021) measured GaN at carrier densities to
+10²⁰ cm⁻³ — our regime — and reported **ten times better precision** in the ellipsometric
+parameters by recording 24 analyser angles and fitting, rather than just measuring p and s
+directly, **at equal total measurement time**. That last clause is the important one: at fixed
+time, extra angles buy essentially nothing by averaging. The gain is entirely a *systematic*
+correction, and it is worth understanding exactly which systematic.
+
+**The physics.** At any fixed point in the waveform, the signal as a function of the rotation
+angle must follow a known low-parameter harmonic — for their rotating analyser,
+$A\cos 2\theta_B + B\sin 2\theta_B + C$; for our rotating emitter, a first harmonic
+$P\cos\alpha + Q\sin\alpha$. Anything that departs from that form is not the sample. They
+attribute the departure to per-waveform timing jitter and time-shift each waveform to remove it.
+
+**Why we should care, given §3.2 said everything cancels.** A timing error *common* to both
+polarizations cancels exactly in $\rho$. A timing error *differential between the acquisitions
+at different polarization settings* does not — it enters $\rho$ directly as
+$e^{i\omega\,\delta t}$. **This is the one first-order error channel that ellipsometry does not
+remove for free**, and it is a real refinement of the argument in §3.2. At 1 THz a 1.5 fs
+differential drift is 0.94% in $\rho$, which on its own is comparable to the entire rest of the
+error budget in §4.5.
+
+We already know we have this: within-run timing walk was measured at ~17 fs/hour.
+
+**But our error model is not theirs, and that changes the right correction.** Their model is
+independent per-waveform jitter. Ours is a slow, ordered drift. Simulating our geometry at 1 THz
+with 0.5% noise and equal total measurement time for every strategy (median index error):
+
+| drift across the run | 2 settings, sequential | 2 settings, interleaved | 12 settings, no correction | 12 settings + per-setting delay (their method) | 12 settings + **one-parameter drift ramp** |
+|---|---|---|---|---|---|
+| 0 fs | 0.186 | 0.191 | 0.173 | 0.282 | **0.178** |
+| 5 fs | 0.378 | 0.195 | 0.189 | 0.280 | **0.177** |
+| 20 fs | 1.308 | 0.193 | 0.390 | 0.277 | **0.177** |
+| 60 fs | 3.259 | 0.243 | 1.141 | 0.272 | **0.173** |
+| 200 fs | 6.689 | 0.599 | 4.226 | 0.279 | **0.170** |
+
+Five things fall out of this, and they are the acquisition protocol:
+
+1. **Never run the polarization settings sequentially.** Measuring all of p and then all of s is
+   the worst option available and degrades by a factor of 7 at only 20 fs of drift. This is the
+   naive protocol.
+2. **Interleaving is nearly free and does most of the work** — it holds ~0.19 out to 60 fs of
+   drift. Same conclusion we reached for the bare/doped comparison previously, for the same
+   reason.
+3. **Over-determination alone does not save you** (12 settings with no correction still degrades
+   to 1.14 at 60 fs). You have to actually use the redundancy.
+4. **Their per-waveform delay fit is genuinely drift-immune but pays a constant penalty** —
+   0.28 regardless of drift, against 0.17 for the best. It spends $N-1$ degrees of freedom where
+   our error model needs one.
+5. **A one-parameter linear drift ramp is the best of everything, in every regime** — 0.17, flat
+   from 0 to 200 fs of drift, with no penalty at zero drift. **This is the improvement on their
+   method, and it is available to us precisely because we know our timing error is a slow drift
+   rather than white jitter.**
+
+**Honest calibration of the "10×".** It is real, but it is a statement about their instrument's
+jitter level, not a universal factor. Reproducing 10× in our simulation requires ~20 fs of
+differential timing error. If drift is under control the multi-angle gain shrinks toward 1×. The
+ramp-fitted version is nevertheless strictly better than every alternative at every drift level,
+so adopt it regardless — it costs one fitted parameter and no measurement time.
+
+**Free diagnostic.** The residual of the harmonic fit is a run-time quality flag that needs no
+reference and no model of the sample: the signal *must* be a pure first harmonic in the emitter
+angle, so whatever is left is instrument error, and we can size it without knowing its cause.
+Fit a per-setting gain alongside the delay and see which the residual prefers, rather than
+assuming — a residual that neither explains is an alarm worth halting on.
+
+**What we should not copy.** Their rotating element is a wire-grid analyser physically turning in
+the THz beam, with its own imperfections rotating with it, and their PCAs sit at −45° behind
+polarizers to work around antenna polarization impurity. We get the same redundancy by turning a
+magnet outside the beam, and our analyser is the EO crystal. Same information, no added optic.
+
+**One structural note.** Their scheme (fixed input, rotating analyser) and ours (rotating input,
+fixed projection) are **duals and carry identical information** — both yield two complex numbers,
+i.e. rank 2 of the 4-element Jones matrix. Their instrument could not measure our anisotropy
+either. The second detection azimuth in §6 is required either way.
+
+### 4.4 The calibration, and why it is remarkably forgiving
 
 Real THz beam paths are not polarization-neutral: a published Jones-matrix characterization of an
 ordinary parabolic-mirror path found a **20% s/p amplitude imbalance** and ~1% cross-talk. Off-axis
@@ -211,7 +295,7 @@ Three practical consequences worth stating plainly:
 - The method is the Eigenvalue Calibration Method, standard in visible Mueller polarimetry since
   1999. I have not found it applied to THz time-domain ellipsometry.
 
-### 4.4 Geometry: bare reflection, no window
+### 4.5 Geometry: bare reflection, no window
 
 Start with the simplest possible arrangement: **paper pressed as flat as possible, measured in
 free space, nothing in the beam.**
@@ -244,7 +328,7 @@ For the diagonal channel, tolerances are comfortable: 0.2° of tilt costs Δ|N| 
 0.81 for a **1.5 fs** timing error in the referenced measurement. We are trading a femtosecond
 problem for a degree problem.
 
-### 4.5 Projected error budget
+### 4.6 Projected error budget
 
 At 75°, with our measured 0.5% instrument floor, 0.05° angle reproducibility, a gold-calibrated
 channel ratio and 0.5° of beam divergence:
@@ -431,7 +515,8 @@ should be re-checked before anything is written up.*
 | THz-TDS ellipsometry as a technique | Established since Nagashima & Hangyo (2001); a full tutorial exists (Chen & Pickwell-MacPherson, *APL Photonics* **7**, 071101, 2022) |
 | Variable-angle THz-TDSE instrumentation and calibration | Neshat & Armitage, *Opt. Express* (2012) — 15–85°, fibre-coupled detector specifically so the angle can change without realignment, gold-mirror calibration, regression calibration |
 | Generalized / Mueller-matrix THz ellipsometry | Schubert group (Nebraska/Lund), mostly frequency-domain, 0.9–20 THz, rotating analyser |
-| Highly conductive samples by THz ellipsometry | Doped Si (ρ = 0.015 Ω·cm); GaN to 10²⁰ cm⁻³ (*Sci. Rep.* **11**, 2021) |
+| Highly conductive samples by THz ellipsometry | Doped Si (ρ = 0.015 Ω·cm); GaN to 10²⁰ cm⁻³ (Agulto *et al.*, *Sci. Rep.* **11**, 18129, 2021) at 70° incidence — and they independently report that tanΨ → 1 and Δ → π as carrier density rises, i.e. our ρ → −1 conditioning problem |
+| Over-determined polarization series to remove timing systematics | Agulto *et al.* (2021), 24 analyser angles, per-waveform jitter correction, 10× precision at equal measurement time |
 | CNT films by ellipsometry | SWCNT thin films on substrates, THz–UV, in-plane vs out-of-plane resistivity (*Carbon*, 2018); vertically aligned MWCNTs in transmission (*APL* **101**, 111107, 2012) |
 | Spintronic emitter polarization control | 360° rotation with a 6.5 mT sweep (arXiv:2111.07118) |
 | Spintronic emitters *in* ellipsometry | Done — complete Jones/Mueller TDSE (IEEE, 2025). The field is one or two papers deep |
@@ -452,6 +537,12 @@ side conventionally; the combination looks open.
 **(b) Eigenvalue calibration at THz.** Twenty-five years old in the visible, and exactly the right
 tool for a band where the beam path demonstrably imposes a 20% s/p imbalance and percent-level
 cross-talk. I found no THz-TDS application. This is a small, clean, checkable methods contribution.
+
+**(b′) A drift-matched nuisance model for the over-determined polarization series.** The published
+correction (§4.3) fits an independent delay per waveform, which is right for white jitter and
+wasteful for a slow drift. Replacing $N-1$ free delays with a one-parameter ramp is strictly
+better in our simulations at every drift level, including zero. Small, but it is a real
+improvement on the state of the art and costs nothing to implement.
 
 **(c) Reflection generalized ellipsometry of free-standing, rough, near-mirror conductors.**
 The conductive-sample ellipsometry literature is polished bulk semiconductors — flat, rigid, clean.
@@ -484,6 +575,7 @@ it requires us to be first at ellipsometry — only first at this *combination*,
 | 70–75° geometry disruptive to build | prototype first at the existing 45°, which needs no rebuild | if a two-arm 140–160° layout cannot fit in the purge enclosure |
 | Purge equilibration | measured at ~3.7 h to 99%; design sample exchange to work from outside the box | — |
 | OAP cross-polarization eats the anisotropy dynamic range | symmetric parabola arrangement; eigenvalue calibration removes the mean term | if residual cross-talk exceeds ~3% it competes with the 7.4% signal |
+| Differential timing drift between polarization settings | interleave; fit a one-parameter drift ramp; log the harmonic residual (§4.3) | if residual drift after correction exceeds ~1.5 fs it is comparable to the whole rest of the budget |
 | Root/branch selection in the inversion | $\rho \to -1$ for conductors; reuse the global-branch-vote fix from the previous campaign | — |
 | Our CNT conductivity may be wrong | four-point probe (below) | if DC and THz disagree by 10×, the inversion — not the technique — is the problem |
 
@@ -499,8 +591,12 @@ it requires us to be first at ellipsometry — only first at this *combination*,
    No mechanical rebuild. This tests the whole measurement and analysis chain, and directly
    answers whether the ~10% systematic is common-mode — the central claim of this report.
    *Expect no conditioning improvement at 45°; that is not what this step tests.*
-3. **Then decide on the 70–75° rebuild**, informed by (2).
-4. In parallel: flat rigid backing for the paper, and a tilt-measurement procedure good to 0.05°.
+3. **Adopt the acquisition protocol from day one** (§4.3), because it costs nothing and the
+   alternative is the worst option available: 6–12 emitter settings rather than 2, interleaved
+   rather than sequential, with a one-parameter drift ramp fitted and the harmonic residual
+   logged as a run-time quality flag.
+4. **Then decide on the 70–75° rebuild**, informed by (2).
+5. In parallel: flat rigid backing for the paper, and a tilt-measurement procedure good to 0.05°.
 
 ---
 
@@ -512,6 +608,7 @@ it requires us to be first at ellipsometry — only first at this *combination*,
 | Anisotropic Jones matrix, cross-polarization vs azimuth, identifiability, scheme comparison | `explorations/thz_ellipsometry/anisotropic_reflection.py` |
 | Drude band / Fisher analysis | `explorations/thz_ellipsometry/drude_band_study.py` |
 | Mount-to-mount penalty | `explorations/thz_ellipsometry/mount_penalty_study.py` |
+| Acquisition protocol: over-determination, drift and ordering | `explorations/thz_ellipsometry/harmonic_overdetermination.py` |
 
 All three modules carry known-answer validation (Fresnel round-trip, common-mode cancellation,
 perfect-conductor limit, isotropic and reciprocity checks on the anisotropic solver) that runs
