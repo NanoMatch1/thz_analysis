@@ -10,8 +10,10 @@
 ## 1. The proposition
 
 We should build a **THz time-domain ellipsometer** out of the bench we already have, and use it
-for conductive samples — starting with CNT buckypaper — in **bare reflection at 70–75°, with no
-window and nothing pressed against the measured surface**.
+for conductive samples — starting with CNT buckypaper — in **bare reflection at ~70°, with no
+window and nothing pressed against the measured surface**, working the **1–3 THz band** and
+illuminating as much flat sample as we can (§4.7 explains why those last two are the same
+constraint).
 
 The argument in one sentence: for the last several months our CNT measurements have been limited
 not by noise but by our inability to reproduce the optical path between a reference and a sample,
@@ -146,7 +148,7 @@ everything in §6.
 | element | role | what moves |
 |---|---|---|
 | Spintronic emitter + magnet | polarization state generator | the **magnet only**, never an optic |
-| Sample, bare reflection, 70–75° | the measurement | nothing, once mounted |
+| Sample, bare reflection, ~70° | the measurement | nothing, once mounted |
 | GaP `<110>` EO crystal | polarization analyser | rotation about the beam axis (no beam deviation) |
 | Gold mirror in the sample slot | calibration | swapped once per session |
 
@@ -328,27 +330,235 @@ For the diagonal channel, tolerances are comfortable: 0.2° of tilt costs Δ|N| 
 0.81 for a **1.5 fs** timing error in the referenced measurement. We are trading a femtosecond
 problem for a degree problem.
 
-### 4.6 Projected error budget
+### 4.6 Alignment without an alignment handle
 
-At 75°, with our measured 0.5% instrument floor, 0.05° angle reproducibility, a gold-calibrated
-channel ratio and 0.5° of beam divergence:
+Our samples do not reflect visible light usefully, so a camera is not an alignment handle, and
+we cannot solve angular misalignment and reflection-plane misalignment simultaneously against an
+external reference. The hope is that approximate placement plus polarization degrees of freedom
+on a never-changing optical path is enough. **It largely is** — better than §4.5 implies — but the
+two geometric errors behave completely differently and need saying separately.
 
-| term | Δ\|N\| |
+**Out-of-plane tilt is self-measuring, model-free.** For an isotropic sample tilted out of plane
+by δ, the lab-frame Jones matrix is $R(\delta)\,\mathrm{diag}(r_p, r_s)\,R(-\delta)$, so
+
+$$\frac{r_{ps}}{r_{pp} - r_{ss}} = \frac{\tan 2\delta}{2}$$
+
+**The material cancels completely.** No model, no reference, no knowledge of $n$ — the tilt reads
+straight off the measured Jones matrix, which the two-detection-azimuth scheme already gives us.
+Simulated at 0.5% noise, recovery is unbiased with a per-frequency scatter of ±0.11° (CNT) to
+±0.18° (Si) for tilts from 0.05° to 3°. The tilt is frequency-independent, so averaging over 20
+frequency bins tightens that by a factor of ~4.5, to **~0.03°** — comfortably inside the 0.2°
+specification of §4.5. *We can measure the tilt we cannot see.*
+
+**The incidence angle is not self-measuring, but it is cheaply pinned.** Counting again: 2
+observables per frequency against $n$, $\kappa$ and $\theta$ — short by one, at every frequency.
+Three ways to close it, in increasing order of preference:
+
+| method | angle uncertainty (0.5% error, 20 frequencies) |
 |---|---|
-| measurement noise | 0.081 |
-| angle / tilt | 0.040 |
-| channel gain | 0.033 |
-| beam divergence | 0.010 |
-| **total (quadrature)** | **0.097 = 0.9% of \|N\|** |
+| gold mirror reference | ±3–5° — **useless**, ρ ≈ −1 whatever the angle |
+| joint fit of θ with a Drude model, from the sample itself | ±0.5–0.8° |
+| **HR-Si wafer in the same mount** | **±0.004–0.05°** |
 
-Against the **~10%** smooth systematic that currently limits us. The dominant term is the channel
-gain, which is why the gold reference matters and why high angle helps (it weakens ~8× from 45°
-to 80°).
+Silicon is an extraordinary angle gauge because $\tan\Psi$ collapses toward zero at its Brewster
+angle of 73.7° and $\Delta$ flips through it, so ρ is violently angle-sensitive right where we
+want to work. Gold is the opposite and is useless for this, though it remains the right reference
+for the channel gain (§4.4).
 
-**Recommended angle: 70–75°, not the 80–85° that the sensitivity curve alone prefers.** The
-limiter is footprint. With a 150 mm focal length and a 30 mm collimated beam, the illuminated patch
-along the plane of incidence is 11 mm at 70°, 15 mm at 75°, but 22 mm at 80° and 44 mm at 85° (all
-at 0.5 THz). Every millimetre of that has to be flat.
+Fitting θ from the sample alone does work — joint Drude + angle recovers 69.92 ± 0.82° and
+74.97 ± 0.54°, with σ_dc still good to ~9% — so the measurement is not *blocked* by not knowing
+the angle. But it costs a factor of 2–3 in material precision and leans entirely on the Drude
+model being right. Pinning θ with silicon is better and nearly free.
+
+**So the alignment requirement is not alignment at all. It is: a reproducible mount, one silicon
+wafer, and the backing flat itself as the angle reference.** A silicon wafer does not need to
+reflect visible light nicely either — it is flat, rigid and of known index, and it defines the
+*mount's* geometry. The paper pressed against the same backing inherits it, and whatever residual
+tilt the paper's own surface has relative to the backing is out-of-plane tilt, which §4.6 just
+showed is self-measuring.
+
+**Pulse timing as a tilt gauge — I was too dismissive of this.** My first answer was that
+timing is blind to angle because a tilt gives no delay at first order. That is true locally but
+misleading in practice. A tilt δ deviates the reflected beam by 2δ, so the path to the collection
+optic a distance $L$ downstream becomes $L/\cos 2\delta$ and the delay is
+
+$$\Delta t = \frac{L\,(\sec 2\delta - 1)}{c} \approx \frac{2L\delta^2}{c}$$
+
+Second order, but with a long lever arm it is large. At $L$ = 300 mm: **6.1 fs for 0.1°, 152 fs
+for 0.5°, 610 fs for 1°** — far above the ~1.5 fs we care about. Two properties follow:
+
+- It is **quadratic**, so it carries no sign information and is blind exactly at the null. That
+  makes it a *null-finding* gauge rather than a reading gauge, which is the useful kind.
+- It is **common-mode between p and s**, so it never corrupts ρ. The information is free.
+
+**Procedure: scan the tilt, record the pulse arrival time, fit $a + bt + ct^2$, go to the vertex.**
+If the goniometer axis misses the beam spot by $h$, tilting also translates the surface and adds a
+term *linear* in the tilt setting — which is why fitting a full parabola rather than just finding
+the minimum matters: the two terms separate. The vertex is displaced from the true null by
+$h\cos\theta/2L$, which for a 300 mm lever is 0.016° per 0.5 mm of axis offset and 0.033° per
+1 mm. Comfortably inside the 0.2° specification.
+
+So the honest picture is three complementary handles, none of which needs visible light: **timing
+finds the tilt null, the cross-polarization term reads the residual out-of-plane tilt, and silicon
+pins the incidence angle.** Timing is still the only one that constrains sample *position*
+(a displacement δz gives a first-order delay $2\delta z\cos\theta/c$).
+
+### 4.7 Diffraction: the frequency-dependent angular blur
+
+This is the term I got badly wrong in the first pass, and it turns out to set the usable band.
+
+A beam of diameter $d$ carries an unavoidable angular half-spread $\theta \approx 2\lambda/\pi d$.
+That is the beam parameter product, not an engineering limitation — no optic removes it. Since
+λ runs from 1 mm at 0.3 THz to 0.1 mm at 3 THz, **the blur is ten times worse at the bottom of the
+band than the top**, which is exactly what the knife-edge measurements show:
+
+| f (THz) | λ (mm) | 1.6 mm spot | 5 mm aperture (Airy) | diameter needed for 1° |
+|---|---|---|---|---|
+| 0.3 | 1.00 | **22.8°** | 14.0° | 36.5 mm |
+| 0.5 | 0.60 | 13.7° | 8.4° | 21.9 mm |
+| 1.0 | 0.30 | 6.8° | 4.2° | 10.9 mm |
+| 2.0 | 0.15 | 3.4° | 2.1° | 5.5 mm |
+| 3.0 | 0.10 | 2.3° | 1.4° | 3.6 mm |
+
+*(The 1.6 mm column is retained because it shows the scaling; our actual unclipped beam is
+16 mm. Read the 1.6 mm row as what happens if a beam is confined to that size by any means.)*
+
+**Which formula applies where.** The Gaussian expression describes a smooth, unclipped beam
+(1/e² radius, 86.5% of the power); the Airy expression describes a hard circular aperture (first
+zero, 83.8% of the power). Those are comparable energy-containment measures, so the comparison is
+fair — and at the **same diameter the hard aperture is 1.92× wider in angle**, plus it has
+sidelobes a Gaussian does not. Clipping is worse before you have propagated a single millimetre.
+
+**And clipping is actively self-defeating, which is the important finding.** An aperture only
+confines a beam over a distance of order its own Fresnel length, $z_c = D^2/4\lambda$:
+
+| aperture | 0.3 THz | 0.5 THz | 1 THz | 2 THz | 3 THz |
+|---|---|---|---|---|---|
+| 5 mm | 6.3 mm | 10.4 mm | 20.8 mm | 41.7 mm | 62.5 mm |
+| 10 mm | 25.0 mm | 41.7 mm | 83.4 mm | 167 mm | 250 mm |
+| 16 mm | 64.0 mm | 107 mm | 214 mm | 427 mm | 640 mm |
+
+**A 5 mm aperture holds the beam for about 6 mm at 0.3 THz and 21 mm at 1 THz. At a 100 mm
+standoff it is not a mask, it is an antenna.** Beam diameter arriving at the sample, 100 mm after
+the aperture:
+
+| f (THz) | 5 mm aperture | 10 mm aperture | 16 mm (unclipped) |
+|---|---|---|---|
+| 0.3 | **49.0 mm** | 26.4 mm | 22.1 mm |
+| 0.5 | **29.7 mm** | 17.7 mm | 18.4 mm |
+| 1.0 | **15.5 mm** | 12.4 mm | 16.6 mm |
+| 2.0 | 8.9 mm | 10.6 mm | 16.2 mm |
+| 3.0 | 7.0 mm | 10.3 mm | 16.1 mm |
+
+Below about 1 THz the 5 mm aperture delivers a **larger** spot than no aperture at all. The
+knife-edge observation that low frequencies fill more of the sample is exactly this, and it is not
+a defect of the beam — it is the aperture doing the opposite of its job.
+
+**The fix is to focus the full beam, not to clip it.** A focused beam has its waist at the sample,
+and the waist shrinks as the *collimated* beam gets bigger. For the full 16 mm beam:
+
+| EFL | blur (all frequencies) | 0.3 THz | 0.5 THz | 1 THz | 2 THz | 3 THz |
+|---|---|---|---|---|---|---|
+| 75 mm | 6.11° | 5.96 | 3.58 | 1.79 | 0.89 | 0.60 |
+| 100 mm | 4.58° | 7.95 | 4.77 | 2.39 | 1.19 | 0.80 |
+| 150 mm | 3.06° | 11.93 | 7.16 | 3.58 | 1.79 | 1.19 |
+| 200 mm | 2.29° | 15.90 | 9.54 | 4.77 | 2.39 | 1.59 |
+
+(spot diameters in mm). Note the blur is now **frequency-independent** — it is the geometric
+convergence $w/f$ — which is the whole advantage of focusing over clipping.
+
+**Lowest usable frequency for a 10 × 10 mm sample at 70°** (which accepts only a 3.42 mm beam,
+because the footprint stretches by $1/\cos 70° = 2.9$):
+
+| configuration | lowest usable frequency |
+|---|---|
+| 5 mm aperture, 100 mm standoff | **never fits, anywhere in band** |
+| full 16 mm beam, EFL 100 mm | 0.70 THz (blur 4.58°) |
+| full 16 mm beam, EFL 150 mm | 1.05 THz (blur 3.06°) |
+
+**What overfilling actually costs — and what it does not.** The truncation is a scalar aperture
+acting equally on p and s, so **it cancels in ρ**: it costs signal-to-noise, not accuracy. A 5 mm
+spot on a 10 mm sample at 70° collects 61% of the power (−2.2 dB); a 10 mm spot collects 21%
+(−6.8 dB); a 15 mm spot 10% (−10.1 dB). Painful but not fatal.
+
+**The one thing that must change: the gold reference must be the same size as the sample, in the
+same mount.** A reference mirror larger than the sample breaks the cancellation and converts a
+harmless common term into a smooth, frequency-dependent amplitude tilt rising toward high
+frequency — which is precisely the artefact signature we have spent months chasing. This is a
+cheap fix and it applies to the existing reflection work too, not just to ellipsometry.
+
+**Two corrections to my earlier numbers, both in the unfavourable direction.** First, the budget
+assumed 0.5–1° of spread; reality is 2–7°. Second, the model was wrong: I averaged ρ over angle,
+but the detector measures each polarization's field coherently, so the average happens on the
+Jones matrix and the measured quantity is $\langle r_p\rangle/\langle r_s\rangle$. Doing it
+correctly gives errors ~1.3–1.4× *larger*, because the correct 2-D average also includes the
+out-of-plane frame rotation leaking $r_s$ into $r_{pp}$, which the 1-D model ignored entirely.
+
+**The governing trade is an invariant.** The footprint along the plane of incidence is
+$d/\cos\theta$ and the blur is $2\lambda/\pi d$, so
+
+$$\text{footprint} \times \text{blur} = \frac{2\lambda}{\pi\cos\theta}$$
+
+independent of $d$. A small footprint and a small angular blur are the same trade, and only a
+shorter wavelength relaxes it. At 70°, in mm·degrees: 107 at 0.3 THz, 64 at 0.5, 32 at 1.0, 16 at
+2.0, 11 at 3.0. **This also means going to higher incidence angle now carries a penalty** it did
+not have in §4.5 — the $1/\cos\theta$ shrinks the beam for a given footprint.
+
+**What it costs, for the sample we can actually make.** Taking 15 mm of genuinely flat paper:
+
+| f (THz) | blur | Δ\|N\| raw | Δ\|N\| modelled |
+|---|---|---|---|
+| 0.3 | 7.10° | 3.60 (18.2%) | 1.44 (7.3%) |
+| 0.5 | 4.26° | 0.92 (6.0%) | 0.23 (1.5%) |
+| 0.8 | 2.66° | 0.27 (2.2%) | 0.06 (0.5%) |
+| 1.0 | 2.13° | 0.15 (1.4%) | 0.03 (0.3%) |
+| 2.0 | 1.07° | 0.02 (0.3%) | 0.005 (0.1%) |
+| 3.0 | 0.71° | 0.008 (0.1%) | 0.002 (0.0%) |
+
+**The usable low-frequency edge is set by sample size** — a limit from a completely different
+direction than conditioning or signal-to-noise, and it lands in the same place they did: the band
+below ~0.8 THz is blur-limited and the band above ~1 THz is clean. That is three independent
+arguments now converging on 1–3 THz.
+
+**The mitigation is analysis, not hardware.** The blur is a deterministic bias, so we can
+forward-model the angular average instead of assuming a plane wave. Knowing the spread to 10%
+suppresses the error 4.6× (0.159 → 0.035 at 1 THz); to 5%, 9.5×. A knife-edge measurement — which
+we already do — is enough. The one caveat: a *badly* wrong correction is worse than none (a 50%
+error in the assumed spread leaves 0.21, worse than the 0.16 uncorrected), so measure the beam,
+do not guess it.
+
+### 4.8 Projected error budget
+
+With the corrected divergence term, 15 mm footprint, 0.5% instrument floor, 0.05° tilt
+reproducibility, gold-calibrated channel ratio at 0.2%, and the angular spread known to 10%:
+
+| f (THz) | θ | noise | tilt | gain | divergence | **total** | rel. \|N\| |
+|---|---|---|---|---|---|---|---|
+| 0.5 | 70° | 0.226 | 0.046 | 0.091 | 0.225 | **0.335** | 2.2% |
+| 0.5 | 75° | 0.162 | 0.057 | 0.065 | 0.849 | **0.869** | 5.7% |
+| 1.0 | 70° | 0.112 | 0.032 | 0.045 | 0.032 | **0.129** | 1.2% |
+| 1.0 | 75° | 0.081 | 0.040 | 0.033 | 0.089 | **0.131** | 1.2% |
+| 2.0 | 70° | 0.054 | 0.022 | 0.022 | 0.005 | **0.063** | 0.9% |
+| 2.0 | 75° | 0.041 | 0.027 | 0.016 | 0.013 | **0.053** | 0.7% |
+
+Against the **~10%** smooth systematic that currently limits us, the headline — around **1% in the
+1–2 THz band** — survives the correction.
+
+**Revised angle recommendation: 65–70°, and the optimum is frequency-dependent.** The sensitivity
+argument of §3.3 wants 80–85°; the diffraction invariant wants lower, because $1/\cos\theta$
+shrinks the beam a given sample can accept. For a **10 × 10 mm** sample, with the blur modelled:
+
+| f (THz) | 45° | 55° | 60° | 65° | 70° | 75° |
+|---|---|---|---|---|---|---|
+| 0.5 | 5.8% | 3.6% | 2.9% | **2.6%** | 3.6% | 7.1% |
+| 1.0 | 4.1% | 2.5% | 2.0% | 1.6% | **1.4%** | 2.1% |
+| 2.0 | 2.8% | 1.7% | 1.4% | 1.1% | 0.9% | **0.8%** |
+
+(total error as a fraction of |N|.) The optimum walks from ~65° at 0.5 THz to ~75° at 2 THz, and
+the curve is flat enough between 60° and 70° that **a single setting near 65–70° is a good
+compromise for the 1–2 THz band**. A larger flat sample moves the whole thing back toward higher
+angle: **sample size, incidence angle and usable band are one coupled decision, not three.**
+
 
 ---
 
@@ -367,6 +577,11 @@ Two distinct claims, which should not be conflated:
 2. **Relative conditioning is roughly flat.** Expressed as a fraction of $|N|$, the error is
    0.73% at 0.3 THz and 0.85% at 3 THz. The sample is less metallic at high frequency, so $|N|$
    falls in step. Going high does not, by itself, make the *fractional* index more accurate.
+
+There is also a third reason, developed in §4.7 and independent of both: **diffraction blur.**
+The angular spread of the beam scales as λ/d, so at a fixed sample size the low band is
+angularly smeared — 7.1° at 0.3 THz for a 15 mm footprint against 1.1° at 2 THz. That alone makes
+everything below ~0.8 THz marginal regardless of signal-to-noise.
 
 So where is the gain? **In the model parameters.** A Fisher analysis of a Drude fit to $\rho$, at
 0.5% error, gives the 1σ uncertainty on the scattering time per octave:
@@ -390,6 +605,10 @@ better conditioned".
 
 (If the real scattering time is longer — 100 fs, knee at 1.6 THz — the high band becomes even more
 dominant, δτ/τ = 0.32% from 1–3 THz.)
+
+**Three independent arguments now converge on 1–3 THz**: the Drude information content (above),
+the diffraction blur set by sample size (§4.7), and the near-mirror conditioning that is worst at
+low frequency (§2). None of them was constructed to agree with the others.
 
 ---
 
@@ -571,8 +790,10 @@ it requires us to be first at ellipsometry — only first at this *combination*,
 
 | risk | mitigation | would stop us |
 |---|---|---|
+| Diffraction blur at low frequency | **focus the full beam, do not clip it**; model the angular average from a knife-edge characterization; work 1–3 THz; larger flat sample | if the flat area cannot reach ~15 mm, the band below ~1 THz is not recoverable by any analysis |
+| No visible alignment handle | HR-Si wafer in the same mount pins θ to ±0.01°; out-of-plane tilt reads off r_ps/(r_pp − r_ss) model-free | if the mount is not reproducible between the silicon and the sample |
 | Paper not flat enough over an 11–15 mm footprint | rigid backing plate, pressed from behind; reduce angle to shrink the footprint | if flatness cannot get under ~0.2° systematic tilt, cross-polarization is contaminated and anisotropy is unreliable (the diagonal channel would still work) |
-| 70–75° geometry disruptive to build | prototype first at the existing 45°, which needs no rebuild | if a two-arm 140–160° layout cannot fit in the purge enclosure |
+| ~70° geometry disruptive to build | prototype first at the existing 45°, which needs no rebuild | if a two-arm 140–160° layout cannot fit in the purge enclosure |
 | Purge equilibration | measured at ~3.7 h to 99%; design sample exchange to work from outside the box | — |
 | OAP cross-polarization eats the anisotropy dynamic range | symmetric parabola arrangement; eigenvalue calibration removes the mean term | if residual cross-talk exceeds ~3% it competes with the 7.4% signal |
 | Differential timing drift between polarization settings | interleave; fit a one-parameter drift ramp; log the harmonic residual (§4.3) | if residual drift after correction exceeds ~1.5 fs it is comparable to the whole rest of the budget |
@@ -595,8 +816,18 @@ it requires us to be first at ellipsometry — only first at this *combination*,
    alternative is the worst option available: 6–12 emitter settings rather than 2, interleaved
    rather than sequential, with a one-parameter drift ramp fitted and the harmonic residual
    logged as a run-time quality flag.
-4. **Then decide on the 70–75° rebuild**, informed by (2).
-5. In parallel: flat rigid backing for the paper, and a tilt-measurement procedure good to 0.05°.
+4. **Then decide on the ~70° rebuild**, informed by (2) — choosing the angle and the flat
+   sample area together (§4.7), not separately.
+5. **Knife-edge the beam as a function of frequency, at the sample plane, with and without the
+   mask** (§4.7). Two things to settle: the angular spread must be known to ~10% for the
+   divergence correction to help rather than hurt, and the prediction that *removing* the 5 mm
+   aperture makes the low-frequency spot **smaller** needs confirming on the bench. If it holds,
+   stop masking and start focusing.
+6. **Match the gold reference to the sample size and mount.** Cheap, and it removes a
+   frequency-dependent amplitude tilt from the existing reflection work as well.
+7. In parallel: flat rigid backing for the paper, a silicon wafer cut to sit in the same mount as
+   the angle reference, and as large a flat area as we can manage — sample size, incidence angle
+   and usable band are one decision, not three.
 
 ---
 
@@ -604,11 +835,12 @@ it requires us to be first at ellipsometry — only first at this *combination*,
 
 | claim | source |
 |---|---|
-| Conditioning vs angle, error channels, detection geometry, eigenvalue calibration, error budget | `explorations/thz_ellipsometry/ellipsometry_conditioning_analysis.py` |
+| Conditioning vs angle, error channels, detection geometry, eigenvalue calibration | `explorations/thz_ellipsometry/ellipsometry_conditioning_analysis.py` (its *divergence* row is superseded by the module below) |
 | Anisotropic Jones matrix, cross-polarization vs azimuth, identifiability, scheme comparison | `explorations/thz_ellipsometry/anisotropic_reflection.py` |
 | Drude band / Fisher analysis | `explorations/thz_ellipsometry/drude_band_study.py` |
 | Mount-to-mount penalty | `explorations/thz_ellipsometry/mount_penalty_study.py` |
 | Acquisition protocol: over-determination, drift and ordering | `explorations/thz_ellipsometry/harmonic_overdetermination.py` |
+| Diffraction blur, footprint invariant, alignment-free geometry recovery | `explorations/thz_ellipsometry/beam_divergence_and_alignment.py` |
 
 All three modules carry known-answer validation (Fresnel round-trip, common-mode cancellation,
 perfect-conductor limit, isotropic and reciprocity checks on the anisotropic solver) that runs

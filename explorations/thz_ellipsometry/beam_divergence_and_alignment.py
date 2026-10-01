@@ -502,6 +502,277 @@ def print_corrected_budget(frequencies_hz=(0.5e12, 1.0e12, 2.0e12), incidence_an
                   f"{gain:>8.3f} {divergence:>8.3f} {total:>8.3f} {total/abs(index):>8.1%}")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Part 4 -- clipping versus focusing: what actually arrives at the sample
+# ---------------------------------------------------------------------------
+
+AIRY_FIRST_ZERO_COEFFICIENT = 1.22          # encloses 83.8% of the power
+GAUSSIAN_ENERGY_RADIUS_COEFFICIENT = 2.0 / np.pi   # 1/e^2 radius, encloses 86.5%
+
+
+def aperture_collimation_distance_m(aperture_diameter_m, wavelength_m):
+    """Distance over which a hard aperture actually confines the beam (Fresnel number = 1).
+
+    z_c = D^2 / (4 * lambda).  Beyond this the aperture has stopped being a mask and has
+    become a diffracting source: the beam is LARGER than if the aperture had not been there.
+    """
+    return aperture_diameter_m**2 / (4.0 * wavelength_m)
+
+
+def clipped_beam_radius_m(aperture_diameter_m, wavelength_m, distance_m):
+    """Beam radius a distance z after a hard aperture.
+
+    Engineering interpolation between the geometric shadow and the far-field Airy cone:
+    w(z) = sqrt((D/2)^2 + (1.22 * lambda * z / D)^2).
+    """
+    geometric = aperture_diameter_m / 2.0
+    diffractive = AIRY_FIRST_ZERO_COEFFICIENT * wavelength_m * distance_m / aperture_diameter_m
+    return np.sqrt(geometric**2 + diffractive**2)
+
+
+def focused_beam_waist_radius_m(collimated_diameter_m, wavelength_m, focal_length_m):
+    """Waist radius of a Gaussian beam focused by an optic of focal length f."""
+    return wavelength_m * focal_length_m / (np.pi * collimated_diameter_m / 2.0)
+
+
+def focused_beam_convergence_half_angle_rad(collimated_diameter_m, focal_length_m):
+    """Geometric convergence half-angle, w_in / f -- frequency INDEPENDENT."""
+    return (collimated_diameter_m / 2.0) / focal_length_m
+
+
+def print_clipping_is_self_defeating(aperture_diameters_mm=(5.0, 10.0, 16.0),
+                                     standoff_mm=100.0,
+                                     frequencies_hz=(0.3e12, 0.5e12, 1.0e12, 2.0e12, 3.0e12),
+                                     sample_size_mm=10.0):
+    print(f"\n[clipping] beam DIAMETER at the sample, {standoff_mm:.0f} mm after a hard aperture "
+          f"(sample is {sample_size_mm:.0f} mm)")
+    header = f"   {'f [THz]':>8}" + "".join(
+        f"{f'{d:g} mm ap [mm]':>17}" for d in aperture_diameters_mm)
+    print(header)
+    for frequency in frequencies_hz:
+        wavelength = SPEED_OF_LIGHT / frequency
+        row = f"   {frequency/1e12:>8.2f}"
+        for diameter_mm in aperture_diameters_mm:
+            diameter = clipped_beam_radius_m(diameter_mm * 1e-3, wavelength,
+                                             standoff_mm * 1e-3) * 2e3
+            flag = " " if diameter <= sample_size_mm else "*"
+            row += f"{diameter:>16.1f}{flag}"
+        print(row)
+    print("   * = overfills the sample.  Note the 5 mm aperture is WORSE than no aperture at all")
+    print("     below ~1 THz: clipping converts a mask into a diffracting source.")
+    print(f"\n   collimation distance of each aperture (Fresnel number = 1), i.e. how far it")
+    print(f"   actually confines the beam before it starts to spread:")
+    print(f"   {'f [THz]':>8}" + "".join(f"{f'{d:g} mm ap [mm]':>17}" for d in aperture_diameters_mm))
+    for frequency in frequencies_hz:
+        wavelength = SPEED_OF_LIGHT / frequency
+        row = f"   {frequency/1e12:>8.2f}"
+        for diameter_mm in aperture_diameters_mm:
+            row += f"{aperture_collimation_distance_m(diameter_mm*1e-3, wavelength)*1e3:>17.1f}"
+        print(row)
+    print("   -> a 5 mm aperture holds the beam for ~6 mm at 0.3 THz and ~21 mm at 1 THz.")
+    print("      At a 100 mm standoff it is not a mask, it is an antenna.")
+
+
+def print_focus_instead(collimated_diameter_mm=16.0, focal_lengths_mm=(75.0, 100.0, 150.0, 200.0),
+                        frequencies_hz=(0.3e12, 0.5e12, 1.0e12, 2.0e12, 3.0e12),
+                        sample_size_mm=10.0, incidence_angle_deg=70.0):
+    allowed_beam_mm = sample_size_mm * np.cos(np.deg2rad(incidence_angle_deg))
+    print(f"\n[focusing] spot DIAMETER at the sample for the full {collimated_diameter_mm:g} mm beam, "
+          f"and the price in blur")
+    print(f"   sample {sample_size_mm:g} mm at {incidence_angle_deg:.0f} deg allows a beam of "
+          f"{allowed_beam_mm:.2f} mm")
+    print(f"   {'EFL [mm]':>9} {'blur [deg]':>11}" +
+          "".join(f"{f'{f/1e12:g} THz':>11}" for f in frequencies_hz))
+    for focal_mm in focal_lengths_mm:
+        blur = focused_beam_convergence_half_angle_rad(collimated_diameter_mm * 1e-3,
+                                                       focal_mm * 1e-3)
+        row = f"   {focal_mm:>9.0f} {np.rad2deg(blur):>11.2f}"
+        for frequency in frequencies_hz:
+            wavelength = SPEED_OF_LIGHT / frequency
+            diameter = focused_beam_waist_radius_m(collimated_diameter_mm * 1e-3, wavelength,
+                                                   focal_mm * 1e-3) * 2e3
+            flag = " " if diameter <= allowed_beam_mm else "*"
+            row += f"{diameter:>10.2f}{flag}"
+        print(row)
+    print("   * = beam wider than the sample allows.  The blur column is frequency-INDEPENDENT")
+    print("     (geometric w/f), which is the whole advantage of focusing over clipping.")
+
+
+def spot_fits_crossover_frequency_hz(spot_diameter_function, sample_size_mm,
+                                     incidence_angle_deg=70.0):
+    """Lowest frequency whose spot still fits the sample, by bisection."""
+    allowed = sample_size_mm * 1e-3 * np.cos(np.deg2rad(incidence_angle_deg))
+    low, high = 0.05e12, 10e12
+    for _ in range(80):
+        middle = 0.5 * (low + high)
+        if spot_diameter_function(SPEED_OF_LIGHT / middle) > allowed:
+            low = middle
+        else:
+            high = middle
+    return 0.5 * (low + high)
+
+
+def print_crossover_comparison(sample_size_mm=10.0, incidence_angle_deg=70.0,
+                               aperture_diameter_mm=5.0, standoff_mm=100.0,
+                               collimated_diameter_mm=16.0, focal_lengths_mm=(100.0, 150.0)):
+    print(f"\n[crossover] lowest usable frequency for a {sample_size_mm:g} mm sample at "
+          f"{incidence_angle_deg:.0f} deg")
+    clipped = spot_fits_crossover_frequency_hz(
+        lambda wavelength: 2 * clipped_beam_radius_m(aperture_diameter_mm * 1e-3, wavelength,
+                                                     standoff_mm * 1e-3),
+        sample_size_mm, incidence_angle_deg)
+    print(f"   {aperture_diameter_mm:g} mm aperture, {standoff_mm:.0f} mm standoff: "
+          f"{clipped/1e12:.2f} THz")
+    for focal_mm in focal_lengths_mm:
+        focused = spot_fits_crossover_frequency_hz(
+            lambda wavelength: 2 * focused_beam_waist_radius_m(collimated_diameter_mm * 1e-3,
+                                                               wavelength, focal_mm * 1e-3),
+            sample_size_mm, incidence_angle_deg)
+        blur = focused_beam_convergence_half_angle_rad(collimated_diameter_mm * 1e-3,
+                                                       focal_mm * 1e-3)
+        print(f"   full {collimated_diameter_mm:g} mm beam focused at EFL {focal_mm:.0f} mm:      "
+              f"{focused/1e12:.2f} THz   (blur {np.rad2deg(blur):.2f} deg, all frequencies)")
+    print("   -> focusing the whole beam beats clipping it by a large factor in usable bandwidth.")
+
+
+def print_blur_budget_vs_angle(sample_size_mm=10.0, angles_deg=(45.0, 55.0, 60.0, 65.0, 70.0, 75.0),
+                               frequencies_hz=(0.5e12, 1.0e12, 2.0e12)):
+    """With the sample size fixed, where is the angle optimum now?"""
+    print(f"\n[angle optimum] {sample_size_mm:g} mm sample: blur is set by footprint, so the "
+          f"diffraction term now FAVOURS lower angles")
+    print(f"   {'f [THz]':>8} {'theta':>7} {'blur [deg]':>11} {'|dN| blur':>11} "
+          f"{'|dN| noise':>11} {'|dN| total':>11} {'rel |N|':>9}")
+    for frequency in frequencies_hz:
+        index = sample_index(frequency)
+        wavelength = SPEED_OF_LIGHT / frequency
+        for angle_deg in angles_deg:
+            angle = np.deg2rad(angle_deg)
+            spread = footprint_spread_invariant(wavelength, angle) / (sample_size_mm * 1e-3)
+            raw, _ = index_error_from_divergence(index, angle, spread)
+            noise = index_error_amplification(
+                observable_builders(1.0, angle)["rho = r_p/r_s"], index) * 0.005
+            tilt = index_error_from_tilt(index, 1.0, angle, np.deg2rad(0.05))
+            gain = index_error_from_channel_gain(index, 1.0, angle, 0.002)
+            modelled = raw * 0.22       # 10%-accurate forward model, from the suppression study
+            total = np.sqrt(noise**2 + tilt**2 + gain**2 + modelled**2)
+            print(f"   {frequency/1e12:>8.2f} {angle_deg:>7.0f} {np.rad2deg(spread):>11.2f} "
+                  f"{modelled:>11.3f} {noise:>11.3f} {total:>11.3f} {total/abs(index):>8.1%}")
+
+
+# ---------------------------------------------------------------------------
+# Part 5 -- tilt DOES create delay, at second order with a long lever arm
+# ---------------------------------------------------------------------------
+
+def tilt_induced_delay_s(tilt_rad, lever_arm_m):
+    """Extra optical delay from a sample tilt, via the lengthened path to the EO focus.
+
+    A tilt of delta deviates the reflected beam by 2*delta, so to reach a collection optic a
+    distance L along the design axis the ray travels L/cos(2*delta) instead of L:
+
+        extra path = L*(sec(2*delta) - 1) ~ 2*L*delta^2
+        delay      = extra path / c
+
+    Second order in delta, so it carries no sign information and vanishes at the null -- but
+    with a long lever arm it is far from negligible, which is Samuel's point.
+    """
+    return lever_arm_m * (1.0 / np.cos(2.0 * np.asarray(tilt_rad)) - 1.0) / SPEED_OF_LIGHT
+
+
+def tilt_resolution_from_timing_rad(timing_resolution_s, tilt_rad, lever_arm_m):
+    """Smallest tilt change detectable from arrival time, at a given working tilt."""
+    derivative = (4.0 * lever_arm_m * np.tan(2 * tilt_rad)
+                  / (np.cos(2 * tilt_rad) * SPEED_OF_LIGHT))
+    derivative = np.where(np.abs(derivative) < 1e-30, 1e-30, derivative)
+    return timing_resolution_s / np.abs(derivative)
+
+
+def print_tilt_delay(lever_arms_mm=(100.0, 300.0), tilts_deg=(0.05, 0.1, 0.5, 1.0, 2.0),
+                     timing_resolution_fs=1.5):
+    print(f"\n[tilt -> delay] Samuel is right: tilt lengthens the path to the EO focus")
+    print(f"   {'tilt [deg]':>11}" + "".join(
+        f"{f'delay @{L:g}mm [fs]':>20}" for L in lever_arms_mm) +
+        "".join(f"{f'd(tilt) res @{L:g}mm':>22}" for L in lever_arms_mm))
+    for tilt_deg in tilts_deg:
+        tilt = np.deg2rad(tilt_deg)
+        row = f"   {tilt_deg:>11.2f}"
+        for lever_mm in lever_arms_mm:
+            row += f"{tilt_induced_delay_s(tilt, lever_mm*1e-3)*1e15:>20.1f}"
+        for lever_mm in lever_arms_mm:
+            resolution = tilt_resolution_from_timing_rad(timing_resolution_fs*1e-15, tilt,
+                                                         lever_mm*1e-3)
+            row += f"{np.rad2deg(resolution):>21.3f} "
+        print(row)
+    print(f"   resolution columns: tilt change detectable with {timing_resolution_fs} fs timing.")
+    print("   The dependence is QUADRATIC -> no sign information, and blind exactly at the null,")
+    print("   which makes it a null-FINDING gauge: scan tilt, minimise arrival time, fit a parabola.")
+    print("   It is also common-mode between s and p, so it never corrupts rho -- it is free.")
+
+
+def print_energy_containment():
+    print("\n[aperture vs smooth beam] why a hard edge is worse at the same diameter")
+    print(f"   Airy first zero      1.22  * lambda / D   encloses 83.8% of the power")
+    print(f"   Gaussian 1/e^2       0.637 * lambda / d   encloses 86.5% of the power")
+    print(f"   ratio {AIRY_FIRST_ZERO_COEFFICIENT/GAUSSIAN_ENERGY_RADIUS_COEFFICIENT:.2f}x wider "
+          "for the hard aperture at comparable energy containment,")
+    print("   plus Airy sidelobes that a Gaussian does not have. Apodise the edge if you must clip.")
+
+
+
+
+def tilt_null_bias_from_axis_offset_rad(axis_offset_m, lever_arm_m, incidence_angle_rad):
+    """How far the arrival-time minimum sits from the true tilt null.
+
+    If the goniometer axis misses the beam spot by h, tilting also TRANSLATES the surface, so
+    the delay picks up a term linear in the tilt setting on top of the quadratic one:
+
+        delay(t) = (2 cos(theta)/c) * h * (t - t0)  +  (2 L / c) * (t - t0)^2
+
+    The vertex of that parabola is displaced from the true null t0 by h*cos(theta)/(2L).  The
+    linear and quadratic terms are separable in a fit, which is why scanning the tilt and
+    fitting a parabola is robust rather than merely approximate.
+    """
+    return axis_offset_m * np.cos(incidence_angle_rad) / (2.0 * lever_arm_m)
+
+
+def print_tilt_null_procedure(axis_offsets_mm=(0.5, 1.0, 2.0, 5.0),
+                              lever_arms_mm=(100.0, 300.0), incidence_angle_deg=70.0):
+    angle = np.deg2rad(incidence_angle_deg)
+    print(f"\n[tilt null procedure] bias of the arrival-time minimum from the true tilt null")
+    print(f"   {'axis offset [mm]':>18}" + "".join(
+        f"{f'bias @{L:g}mm [deg]':>20}" for L in lever_arms_mm))
+    for offset_mm in axis_offsets_mm:
+        row = f"   {offset_mm:>18.1f}"
+        for lever_mm in lever_arms_mm:
+            bias = tilt_null_bias_from_axis_offset_rad(offset_mm * 1e-3, lever_mm * 1e-3, angle)
+            row += f"{np.rad2deg(bias):>20.3f}"
+        print(row)
+    print("   Procedure: scan the tilt, record pulse arrival time, fit a + b*t + c*t^2, go to the")
+    print("   vertex. Model-free, needs no visible light, works on the sample itself. With the")
+    print("   rotation axis within ~1 mm of the beam spot and a 300 mm lever it lands inside the")
+    print("   0.2 deg specification; the Si ellipsometric reading then refines it further.")
+
+
+def print_truncation_consequences(sample_size_mm=10.0, incidence_angle_deg=70.0,
+                                  spot_diameters_mm=(3.0, 5.0, 10.0, 15.0)):
+    """What overfilling the sample actually costs -- and what it does NOT cost."""
+    allowed = sample_size_mm * np.cos(np.deg2rad(incidence_angle_deg))
+    print(f"\n[truncation] overfilling a {sample_size_mm:g} mm sample at "
+          f"{incidence_angle_deg:.0f} deg (accepts a {allowed:.2f} mm beam)")
+    print(f"   {'spot [mm]':>11} {'power collected':>17} {'loss [dB]':>11}")
+    for spot_mm in spot_diameters_mm:
+        # Gaussian power inside a circular stop of radius a for 1/e^2 radius w:
+        fraction = 1.0 - np.exp(-2.0 * (allowed / spot_mm) ** 2)
+        print(f"   {spot_mm:>11.1f} {fraction:>16.1%} "
+              f"{-10*np.log10(max(fraction,1e-12)):>11.1f}")
+    print("   The loss is a SCALAR aperture acting equally on p and s, so it cancels in rho and")
+    print("   costs SNR rather than accuracy -- PROVIDED the reference is truncated identically.")
+    print("   => make the gold reference the SAME SIZE as the sample, in the same mount.")
+    print("   A reference mirror larger than the sample turns a cancelling term into a smooth,")
+    print("   frequency-dependent amplitude tilt -- exactly the artefact signature we chase.")
+
+
 def main():
     validate()
     print_divergence_invariant()
@@ -511,6 +782,14 @@ def main():
     print_divergence_knowledge_requirement()
     print_fixed_footprint_budget()
     print_corrected_budget()
+    print_energy_containment()
+    print_clipping_is_self_defeating()
+    print_focus_instead()
+    print_crossover_comparison()
+    print_blur_budget_vs_angle()
+    print_tilt_delay()
+    print_tilt_null_procedure()
+    print_truncation_consequences()
     print_angle_from_reference()
     print_joint_angle_fit()
     print_tilt_self_measurement()

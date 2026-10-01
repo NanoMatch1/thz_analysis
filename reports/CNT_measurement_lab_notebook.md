@@ -722,6 +722,331 @@ than discarded.
 
 ---
 
+### F33 — Full ellipsometry (ρ = r_p/r_s) evaluated as the route out of the reference problem: verdict GO, at 70–75° in free space with no window *(2026-09-30, Samuel's proposal + evaluation)*
+**Status: CURRENT.** Samuel's framing: for conductive samples there must be *zero* change to the
+optical path between reference and sample, because the poor conditioning makes the inversion
+intolerant of misalignment — and for visible-scattering/THz-reflecting samples we cannot align
+optically at all. Full evaluation and literature map in
+`reports/thz_ellipsometry_methodology_evaluation.md`; numbers from
+`explorations/thz_ellipsometry/ellipsometry_conditioning_analysis.py`.
+
+- **The structural result: every dominant term in our error budget is common-mode and cancels
+  exactly in ρ.** Sample height (the F8/F19/F27 gap), reference timing drift, the F32 purge
+  transient, lock-in gain, laser power — all multiply r_p and r_s identically. On the CNT
+  surrogate (Drude tuned to our measured σ₁, |N| = 10.7 at 1 THz), referenced reflectometry
+  loses Δ|N| = 0.81 to a **1.5 fs** timing error at 45° and 23 to 19 fs (the F19 4 µm gap);
+  ellipsometry loses **zero** to both. The replacement error is sample tilt: 0.2° costs
+  Δ|N| = 0.11–0.16, so ~1° of tilt ≡ 1.5 fs of timing. **A femtosecond problem becomes a degree
+  problem.**
+- **The scalar roughness (Debye–Waller / Kirchhoff) factor is polarization-independent and
+  cancels too** — Δ|N| ~1e-14 in ρ vs 0.82 in r_s for σ_rms = 5 µm at 70°. Directly answers the
+  rough-sample case. And the cosθ in the exponent means grazing incidence makes roughness matter
+  *less*.
+- **But the conditioning win is a HIGH-ANGLE effect only.** ρ has tan²θ the sensitivity of r_s:
+  gain 1.0× at 45° (i.e. none), 7.5× at 70°, 13.6× at 75°, 29.8× at 80°. **At 45° ellipsometry
+  buys error-immunity and nothing else** — worth doing, but do not expect the pole-neighbourhood
+  amplification to improve. Corrects any expectation carried over from F21.
+- **Eigenvalue calibration makes "never realign" a formal guarantee.** With 2 magnet settings and
+  2 GaP azimuths, YG⁻¹ (G = gold reference) is *similar* to J_s J_gold⁻¹, and eigenvalues are
+  similarity-invariant → ρ is recovered without knowing the emitter optics, OAP cross-talk,
+  detection vector or magnet-angle accuracy. Verified to 1e-16 through random 25% instrument
+  matrices; naive diagonal ratioing is wrong by 2–6%. **Consequence: the magnet angle needs to be
+  repeatable, not accurate**, and swapping in the gold reference is safe because what we take
+  from it is itself placement-immune. (Compain/Drevillon ECM, Appl. Opt. 38, 3490 (1999); not
+  previously applied to THz-TDS ellipsometry as far as I can find.)
+- **Samuel's "mid-angle GaP" instinct is exactly right, and the angle is φ = 31.72°** between the
+  probe polarization and the GaP [001] axis (tan2φ = 2). Detection vector d = (0.894, 0.894):
+  equal sensitivity to both components, 45% of peak efficiency, and over a full 90° THz rotation
+  the signal only varies 71–100% of maximum — never nulls. **The EO crystal is an analyser with
+  infinite extinction ratio, real-valued and frequency-independent (cubic crystal)** — it deletes
+  the wire-grid ER calibration that the literature calls the accuracy limiter of THz ellipsometry.
+- **Rank result (constrains the anisotropy work):** emitter rotation with ONE detection azimuth
+  gives a pure sinusoid in α → exactly 2 complex numbers however finely sampled. Design-matrix
+  rank 2/4. **Complete for isotropic samples, structurally rank-deficient for anisotropic ones**;
+  a second GaP azimuth restores rank 4/4. Randomly-oriented buckypaper is uniaxial with the optic
+  axis along the normal → no cross-polarization → standard ellipsometry, and ρ separates in-plane
+  from out-of-plane. Aligned fibre needs the second azimuth (and then *returns* the F24 azimuth
+  as a fitted quantity).
+- **The flatness fix we already had and missed:** the paper is opaque (penetration 2.9 µm at
+  1 THz; a 30 µm paper attenuates a double pass by 3.7e-5). **Press it flat from BEHIND against a
+  rigid flat, with nothing in the beam.** We were putting a window in the optical path to solve a
+  mechanical problem that has a mechanical solution once a front-surface reference is no longer
+  needed.
+- **Projected budget:** dominated not by noise or tilt but by the **p/s channel gain**. At 75°
+  with 0.5% noise (F28 floor), 0.05° angle, 0.2% gold-calibrated gain and 0.5° divergence:
+  Δ|N| = 0.097 = **0.9% of |N|**, versus the **~10% smooth mount-coupling systematic that F28
+  identified as our binding limit**. Recommended angle **70–75°, not the 80–85° the sensitivity
+  plot prefers** — the limiter is footprint (22 mm of flat sample at 80°/0.5 THz for EFL 150 mm,
+  11 mm at 70°).
+- **Cross-check that must happen first (open):** literature SWCNT in-plane conductivity is
+  452 S/cm undoped to 1938 S/cm doped (Zhang et al., Carbon 2018) — **7–30× our measured
+  52–62 S/cm**. Buckypaper porosity plausibly explains a big dilution factor, but a four-point
+  probe on the actual paper settles it in an afternoon and gives the inversion a known answer.
+- **Suggested sequence:** (1) four-point probe; (2) prototype in the EXISTING 45° geometry — two
+  magnet settings, two GaP azimuths, gold mirror, validate eigenvalue calibration on HR-Si (must
+  return 3.418 flat); this needs no mechanical rebuild and directly tests whether the F28 10%
+  systematic is common-mode; (3) only then decide on the 70–75° arm rebuild.
+- **Honest limits:** ρ gives exactly two real numbers, so a supported thin film (n, κ, d) needs a
+  second angle — relevant to the F13/F16 HR-Si deposited route. 70–80° means arms at 140–160°
+  inside the purge box, and F32 says opening it costs ~3.7 h. OAP cross-polarization is ~1.5% net
+  at the detector (−8.5 dB locally) — eigenvalue-removable but it eats anisotropy dynamic range,
+  so arrange the parabolas symmetrically. Expect the F25/F29/F30 root-picking hazards again.
+
+**One-line framing:** since F8 we have been trying to *measure* a µm gap phase to femtosecond
+accuracy; ellipsometry arranges for the answer not to depend on it.
+
+### F34 — Anisotropy under ellipsometry: rotate the DETECTION, not the sample; mount the fibre at 45 deg; and the high-frequency band carries almost all the Drude information *(2026-09-30, Samuel's questions + analysis)*
+**Status: CURRENT.** Follows F33. Group-facing write-up in
+`reports/thz_ellipsometry_prospecting_report.md`; numbers from
+`explorations/thz_ellipsometry/anisotropic_reflection.py` (full anisotropic reflection solver,
+5 known-answer checks), `drude_band_study.py` and `mount_penalty_study.py`.
+
+- **Built a Berreman-class anisotropic reflection solver.** For the physical case (surface normal
+  a principal axis of the tensor) the quartic in the normal wavevector factorises into a
+  **quadratic in q^2** - closed form, no root-finding. Validated against scalar Fresnel to 1e-8
+  for four indices x four angles, plus: zero cross-pol for isotropic, zero for uniaxial-along-
+  normal, zero for an in-plane axis along s/p, and reciprocity |r_ps| = |r_sp|.
+- **Samuel's question answered: a polarization series does NOT substitute for rotating the
+  sample - but rotating the sample is not the fix either.** With one detection azimuth the signal
+  is a pure sinusoid in the emitter angle, so a 360 deg series yields exactly 2 complex numbers
+  however finely sampled (rank 2/4). **A second GaP azimuth restores rank 4/4 and gives the full
+  normalised Jones matrix from one mount with the sample never touched.** The second rotation
+  needed is of the DETECTION.
+- **Mount the fibre axis at ~45 deg to the plane of incidence - mandatory, not a preference.**
+  |r_ps/r_ss| for our CNT model at 1 THz/70 deg: 0 at azimuth 0, 0.056 at 22.5, **0.074 at 45**,
+  0.061 at 60, 0 at 90. At 0/90 the anisotropy is INVISIBLE from a single mount. 0.074 sits
+  comfortably above the ~1.5% instrumental cross-talk and the 0.003 from 0.1 deg tilt.
+- **Counting result:** one incidence angle gives 4 real observables per frequency (r_pp/r_ss and
+  r_ps/r_ss; r_sp is NOT independent - reciprocity) against 7 unknowns (3 complex principal eps +
+  azimuth). **Point-by-point model-free inversion of the full tensor is impossible** - close it
+  with a parametric model across frequency, transverse isotropy, or a second angle.
+- **Shared-Drude fit, single 45 deg mount, 0.5% noise, 0.6-3 THz, 24 trials:** sigma_along
+  65.3+/-1.7 (2.7%), sigma_across 16.3+/-0.2 (1.2%), **sigma_out-of-plane 6.6+/-0.2 (2.8%)**,
+  tau 29.8+/-0.4, azimuth 45.07+/-0.58 deg. All unbiased. **CORRECTION to my own first pass:** I
+  initially reported the out-of-plane component as unconstrained (70%); that was an artefact of
+  running only 12 trials with some non-converged fits. It IS recoverable - 3.6x worse conditioned
+  than in-plane (Jacobian ratio 0.28) but usable. Caveat stands that it is the parameter most
+  exposed to model error, so do not quote it from one angle alone.
+- **Two mounts vs one, honestly:** idealised (mounts otherwise identical), rotating the sample to
+  0/90 and doing two STANDARD ellipsometry runs beats the single-mount generalised route by ~100x
+  on the anisotropy ratio - each mount isolates a principal axis cleanly. **But with an unmodelled
+  per-mount nuisance (0.5 deg tilt, 2% coupling) that collapses to <3x on sigma_along and ~20% on
+  the ratio** (one mount 4.11+/-0.33 vs two mounts 4.10+/-0.27; 8 trials, spreads uncertain). The
+  penalty is SMALLER without a window (no contact gap to change), so removing the window helps both
+  routes. **Verdict: single-mount generalised as primary, 90 deg rotation as a cross-check** - if
+  they agree the mount systematic is controlled, if not we have measured it.
+- **Samuel's high-frequency argument CONFIRMED, with a corrected mechanism.** Fisher analysis of a
+  Drude fit to rho at 0.5% error, per octave: d(tau)/tau = **6.4% (0.25-0.5 THz) -> 0.44%
+  (2-4 THz)**, 15x. And **the 1.0-3.0 THz band ALONE gives 0.52% vs 0.60% for the full 0.3-3.0 THz
+  band - discarding the badly conditioned low frequencies costs essentially nothing.** BUT the
+  mechanism is not what it looks like: the RELATIVE index error is roughly flat with frequency
+  (0.73% at 0.3 THz, 0.85% at 3 THz) because |N| falls in step; only the ABSOLUTE error improves
+  (3x). The real gain is that tau enters via omega*tau, and at 0.3 THz with tau ~ 30 fs we sit deep
+  in the flat part of the Drude curve where tau is nearly invisible.
+- **Surface non-planarity - Samuel's distinction is exactly right and worth recording.** A wavy
+  surface (a) steers the beam, changing mode coupling - a SCALAR, cancels in rho, the EO crystal
+  genuinely does not care; and (b) tilts the local facet, which does not cancel. In-plane facet
+  tilt = incidence-angle spread (bias, same maths as divergence); **out-of-plane facet tilt rotates
+  the local s/p frame and CONVERTS POLARISATION**, faking anisotropy. Spec: systematic out-of-plane
+  tilt **below ~0.2 deg** keeps the artefact under 10% of the 0.074 signal. Random symmetric
+  waviness averages toward zero in the off-diagonal and appears as depolarisation instead.
+  **Diagnostic: the tilt artefact is spectrally flat, real Drude anisotropy is not.**
+
+### F35 — The over-determined polarization series (from the GaN rotating-analyser paper) plugs the ONE error channel ellipsometry does not kill; and a one-parameter drift ramp beats their per-waveform fit *(2026-09-30, Samuel supplied the paper)*
+**Status: CURRENT.** Samuel found Agulto et al., Sci. Rep. 11, 18129 (2021) -- THz TD ellipsometry
+of GaN to 1e20 cm^-3 -- claiming **10x precision from measuring 24 analyser angles instead of just
+p and s, at EQUAL total measurement time**. Analysis in
+`explorations/thz_ellipsometry/harmonic_overdetermination.py` (5 known-answer checks).
+
+- **What they actually compare.** (i) analyser at 0 and 90 only, vs (ii) 24 angles at 15 deg steps,
+  fit E_C = A cos(2 theta_B) + B sin(2 theta_B) + C at each TIME POINT, attribute the departure
+  from that form to per-waveform timing jitter, time-shift each waveform, then reconstruct
+  E_p = A+C and E_s = -A+C. Their polarizers are ER ~1e-5, which is what justifies attributing the
+  residual to phase rather than amplitude. Reported std of ellipsometric parameters < 0.0025.
+- **The 10x cannot be averaging.** At fixed total time, spreading the same budget over 24 angles
+  and fitting 3 parameters gives parameter variance ~3/T against ~2/T for the 2-point method --
+  no gain. The 10x is entirely the systematic correction.
+- **WHY WE SHOULD CARE, and it is a correction to my own F33 argument.** A delay COMMON to both
+  polarizations cancels exactly in rho (F33). A delay DIFFERENTIAL between the acquisitions at
+  different polarization settings does NOT -- it enters rho as exp(i*omega*dt). **This is the one
+  first-order error channel ellipsometry does not remove for free.** At 1 THz, 1.5 fs differential
+  = 0.94% in rho, comparable to the entire rest of the F33 budget. And F31 measured our within-run
+  timing walk at ~17 fs/hour, so we have it.
+- **Their scheme and ours are DUALS.** Fixed input + rotating analyser (theirs) and rotating input
+  + fixed projection (ours) both yield exactly 2 complex numbers = rank 2/4. **Their instrument
+  could not measure our anisotropy either** -- the second detection azimuth of F34 is needed
+  regardless. We get their redundancy by turning a magnet OUTSIDE the beam instead of a wire grid
+  inside it.
+- **Simulated at 1 THz, 70 deg, 0.5% noise, EQUAL total time, median |dN| vs drift across the run:**
+
+  | drift | 2 settings seq | 2 settings interleaved | 12 settings no corr | 12 + per-setting delay (theirs) | 12 + **1-param ramp** |
+  |---|---|---|---|---|---|
+  | 0 fs | 0.186 | 0.191 | 0.173 | 0.282 | **0.178** |
+  | 20 fs | 1.308 | 0.193 | 0.390 | 0.277 | **0.177** |
+  | 60 fs | 3.259 | 0.243 | 1.141 | 0.272 | **0.173** |
+  | 200 fs | 6.689 | 0.599 | 4.226 | 0.279 | **0.170** |
+
+- **Protocol conclusions (adopt all of these):** (1) **NEVER run the polarization settings
+  sequentially** -- all-p-then-all-s is the worst option available, 7x worse at only 20 fs of
+  drift. (2) **Interleaving is nearly free and does most of the work** (holds 0.19 out to 60 fs) --
+  same conclusion as F31 for bare|doped, same reason. (3) **Over-determination ALONE does not save
+  you** (12 settings uncorrected still degrades to 1.14 at 60 fs); the redundancy has to be used.
+  (4) **Their per-waveform delay fit is drift-immune but pays a constant penalty** (0.28 flat vs
+  0.17) -- it spends N-1 dof where our error model needs one. (5) **A ONE-PARAMETER LINEAR DRIFT
+  RAMP is best in every regime**: 0.17 flat from 0 to 200 fs, with no penalty at zero drift. That
+  is our improvement on their method, available because F31/F32 established that our timing error
+  is a slow drift not white jitter.
+- **Honest calibration of the "10x": it is a statement about their jitter level, not a universal
+  factor.** Reproducing 10x in our simulation needs ~20 fs of differential timing error; with drift
+  controlled the multi-angle gain shrinks toward 1x. Adopt the ramp fit anyway -- strictly better
+  everywhere, costs one parameter and zero measurement time.
+- **Free run-time diagnostic (fits the active-diagnostics philosophy):** the signal MUST be a pure
+  first harmonic in emitter angle, so the harmonic residual sizes instrument error with no
+  reference and no sample model. Fit a per-setting GAIN alongside the delay and see which the
+  residual prefers rather than assuming (they assume phase, justified by their ER; ours is better
+  justified still since the EO projection is exact). A residual neither explains is an alarm.
+- **Corroboration from their data:** they note tan(Psi) -> 1 and Delta -> pi as carrier density
+  rises, i.e. independently confirming the rho -> -1 conditioning problem of F1/F2/F33, and they
+  chose **70 deg incidence** -- matching the F33 recommendation of 70-75.
+- **Do NOT copy:** their rotating wire-grid analyser in the beam, and their PCAs-at-minus-45-behind-
+  polarizers workaround for antenna polarization impurity. We need neither.
+
+
+
+### F36 — Alignment can be FITTED not aligned (tilt is self-measuring, Si pins the angle); but diffraction blur is far worse than I first budgeted and it sets the usable low-frequency edge *(2026-09-30, Samuel's two concerns)*
+**Status: CURRENT.** Analysis in `explorations/thz_ellipsometry/beam_divergence_and_alignment.py`
+(4 known-answer checks). Samuel raised: (1) our samples give no visible alignment handle, so can
+polarisation degrees of freedom on a fixed optical path recover the geometry? (2) low frequencies
+diverge much more than high ones -- what does that do with a 1.6 mm beam / 5 mm aperture?
+
+**(1) ALIGNMENT -- Samuel's hope is largely RIGHT, and better than F33/F34 implied.**
+- **Out-of-plane tilt is SELF-MEASURING, model-free.** For an isotropic sample tilted by delta,
+  J = R(delta) diag(r_p,r_s) R(-delta), so **r_ps/(r_pp - r_ss) = tan(2 delta)/2**. The material
+  cancels entirely -- no model, no reference, no knowledge of n. Recovery at 0.5% noise is
+  unbiased with per-frequency scatter +/-0.11 deg (CNT) / +/-0.18 deg (Si) for tilts 0.05-3 deg.
+  Tilt is frequency-flat, so averaging 20 bins gives **~0.03 deg** -- inside the 0.2 deg F34 spec.
+  **We can measure the tilt we cannot see.**
+- **Incidence angle is NOT self-measuring** (2 observables vs n, kappa, theta at every frequency).
+  Three closures, 1-sigma at 0.5% error over 20 frequencies: **gold mirror +/-3-5 deg (USELESS --
+  rho ~ -1 whatever the angle); joint Drude+theta fit from the sample itself +/-0.5-0.8 deg;
+  HR-Si wafer in the same mount +/-0.004-0.05 deg.** Si is a violent angle gauge because tanPsi
+  collapses and Delta flips at its 73.7 deg Brewster angle, right where we want to work.
+- Joint fit DOES work (69.92+/-0.82 and 74.97+/-0.54 deg recovered, sigma_dc still ~9%), so the
+  measurement is not blocked by an unknown angle -- it costs 2-3x in material precision and leans
+  on the Drude model. **Pin it with Si instead: nearly free.**
+- **The requirement is not alignment. It is a reproducible mount + one Si wafer + the backing flat
+  as the angle reference.** Si needs no visible reflectivity either. Residual paper-vs-backing
+  tilt is out-of-plane tilt, which is self-measuring.
+- **Pulse timing constrains POSITION, not angle.** A normal displacement dz gives a clean delay
+  2*dz*cos(theta)/c; a tilt about an axis through the beam centre gives ZERO delay at first order
+  (it tilts the wavefront, not the arrival). That is why its accuracy felt un-pin-downable.
+
+**(2) DIFFRACTION BLUR -- Samuel is right and I was badly over-optimistic in F33.**
+- **theta_blur ~ 2*lambda/(pi*d)**, the beam parameter product, not an engineering limit. For a
+  1.6 mm spot: **22.8 deg at 0.3 THz**, 13.7 at 0.5, 6.8 at 1, 3.4 at 2, 2.3 at 3 THz. A 5 mm hard
+  aperture (Airy 1.22 lambda/D): 14.0 / 8.4 / 4.2 / 2.1 / 1.4 deg. **A 1.6 mm spot is not a usable
+  ellipsometry geometry below ~2 THz.** A hard aperture is WORSE than a Gaussian of equal diameter
+  (sharp edges throw power into wide-angle sidelobes) -- apodize, or lengthen the focal length
+  rather than clip.
+- **TWO CORRECTIONS TO F33, both unfavourable.** (a) The budget assumed 0.5-1 deg spread; reality
+  is 2-7 deg. (b) **The model was wrong**: I averaged rho over angle, but the detector measures
+  each polarisation's field coherently, so the average is on the JONES MATRIX and the measured
+  quantity is <r_p>/<r_s>. Correct 2D averaging gives errors **1.3-1.4x LARGER**, because it also
+  includes the out-of-plane frame rotation leaking r_s into r_pp, which the 1D model ignored.
+- **The governing invariant: footprint x blur = 2*lambda/(pi*cos(theta)), independent of d.**
+  At 70 deg, in mm.deg: 107 (0.3 THz), 64 (0.5), 32 (1.0), 16 (2.0), 11 (3.0). Small footprint and
+  small blur are the SAME trade. **Consequence: higher incidence angle now carries a penalty**
+  (1/cos shrinks the beam for a given footprint) -- it did not in F33.
+- **For 15 mm of flat paper at 70 deg:** blur 7.10 deg / |dN| 3.60 (18.2%) at 0.3 THz; 4.26 deg /
+  0.92 (6.0%) at 0.5; 2.66 deg / 0.27 (2.2%) at 0.8; **2.13 deg / 0.15 (1.4%) at 1.0**; 1.07 deg /
+  0.02 at 2.0. **The usable low-frequency edge is set by SAMPLE SIZE** -- a limit from a different
+  direction than conditioning or SNR, landing in the same place. **Three independent arguments now
+  converge on 1-3 THz** (F34 Drude information, this blur limit, F33 conditioning).
+- **Mitigation is ANALYSIS not hardware:** the blur is a deterministic bias, so forward-model the
+  angular average. Knowing the spread to 10% suppresses the error 4.6x (0.159 -> 0.035 at 1 THz);
+  to 5%, 9.5x. **But a badly wrong correction is worse than none** (50% error leaves 0.21 vs 0.16
+  uncorrected) -- measure the beam with a knife edge, do not guess it.
+- **Good news for anisotropy: cross-polarisation from a SYMMETRIC divergent beam cancels by
+  parity** (odd in the out-of-plane angle; verified to 1e-18). It only survives if the beam is
+  clipped asymmetrically or is astigmatic -- so keep the mask centred and circular.
+- **CORRECTED BUDGET** (15 mm footprint, 0.5% noise, 0.05 deg tilt, 0.2% gain, blur modelled to
+  10%): 1 THz/70 deg **0.129 = 1.2% of |N|**; 1 THz/75 deg 0.131; 2 THz/70 deg 0.063 (0.9%);
+  2 THz/75 deg 0.053 (0.7%); 0.5 THz/70 deg 0.335 (2.2%) but 0.5 THz/75 deg **0.869 (5.7%)**.
+  **Revised angle: ~70 deg, and the optimum is frequency-dependent** -- 75 deg only pays above
+  ~2 THz. The F33 headline (~1% against the F28 ~10%) survives the correction.
+
+
+### F37 — Clipping the THz beam is self-defeating: a 5 mm aperture at 100 mm standoff is an antenna, not a mask. Focus the full 16 mm beam instead. And tilt DOES create delay (second order, long lever arm) *(2026-10-01, Samuel's bench numbers + correction)*
+**Status: CURRENT.** Supersedes the 1.6 mm figure in F36 (Samuel's typo -- the unclipped beam is
+**16 mm**, propagating ~300 mm to the sample). Analysis extended in
+`explorations/thz_ellipsometry/beam_divergence_and_alignment.py`.
+
+- **Samuel's interpretation confirmed, with a refinement.** The Gaussian half-angle
+  (0.637*lambda/d, 1/e^2, 86.5% of power) is the smooth unclipped beam; the Airy half-angle
+  (1.22*lambda/D, first zero, 83.8% of power) is the hard-clipped aperture. Comparable energy
+  measures, so the comparison is fair -- and **at the same diameter the hard aperture is 1.92x
+  wider in angle**, plus Airy sidelobes a Gaussian does not have. Clipping is worse before any
+  propagation at all.
+- **His arithmetic checks out.** 5 mm aperture, 1 THz, Airy 4.2 deg, 100 mm standoff -> 7.34 mm
+  radius growth. Linear addition gives ~19.7 mm diameter; quadrature (the better interpolation,
+  w = sqrt((D/2)^2 + (1.22*lambda*z/D)^2)) gives 15.5 mm. **Either way it is far outside a 10 mm
+  sample, and his conclusion stands.**
+- **THE KEY FINDING -- an aperture only confines a beam over its own Fresnel length
+  z_c = D^2/(4*lambda).** For 5 mm: **6.3 mm at 0.3 THz**, 10.4 at 0.5, 20.8 at 1, 41.7 at 2,
+  62.5 at 3 THz. **At a 100 mm standoff a 5 mm aperture is not a mask, it is an antenna.**
+  Beam diameter at the sample, 100 mm after the aperture:
+
+  | f [THz] | 5 mm ap | 10 mm ap | 16 mm unclipped |
+  |---|---|---|---|
+  | 0.3 | **49.0 mm** | 26.4 | 22.1 |
+  | 0.5 | **29.7** | 17.7 | 18.4 |
+  | 1.0 | **15.5** | 12.4 | 16.6 |
+  | 2.0 | 8.9 | 10.6 | 16.2 |
+  | 3.0 | 7.0 | 10.3 | 16.1 |
+
+  **Below ~1 THz the 5 mm aperture delivers a LARGER spot than no aperture at all.** The
+  knife-edge observation that low frequencies fill more of the sample is exactly this -- the
+  aperture doing the opposite of its job. Samuel's "contradiction" is real and now quantified.
+- **THE FIX: focus the full beam, do not clip it.** Focused-spot diameter shrinks as the
+  COLLIMATED beam grows (w0 = lambda*f/(pi*w_in)), and the blur becomes the geometric w/f, which
+  is **frequency-INDEPENDENT** -- that is the whole advantage. Full 16 mm beam, spot diameters:
+  EFL 75 mm (blur 6.11 deg): 5.96/3.58/1.79/0.89/0.60 mm at 0.3/0.5/1/2/3 THz;
+  EFL 150 mm (blur 3.06 deg): 11.93/7.16/3.58/1.79/1.19 mm.
+- **Lowest usable frequency, 10x10 mm sample at 70 deg (accepts only a 3.42 mm beam because the
+  footprint stretches 1/cos70 = 2.9x):** 5 mm aperture at 100 mm standoff = **never fits anywhere
+  in band**; full 16 mm beam at EFL 100 = **0.70 THz**; at EFL 150 = 1.05 THz. Focusing beats
+  clipping by a large factor in usable bandwidth.
+- **What overfilling costs, and what it does NOT.** The truncation is a SCALAR aperture acting
+  equally on p and s, so **it cancels in rho: it costs SNR, not accuracy.** 5 mm spot on a 10 mm
+  sample at 70 deg collects 61% (-2.2 dB); 10 mm spot 21% (-6.8 dB); 15 mm spot 10% (-10.1 dB).
+- **ACTIONABLE AND CHEAP, applies to the EXISTING reflection work too: make the gold reference the
+  SAME SIZE as the sample, in the same mount.** A reference larger than the sample breaks the
+  cancellation and converts a harmless common term into a smooth frequency-dependent amplitude
+  tilt rising toward high frequency -- precisely the artefact signature of F28/F31. Answers
+  Samuel's "our reference is a mirror bigger than the sample" worry directly.
+- **REVISED ANGLE for a 10x10 mm sample** (total error as % of |N|, blur modelled): 0.5 THz best at
+  **65 deg** (2.6%; 70 deg 3.6%, 75 deg 7.1%); 1.0 THz best at **70 deg** (1.4%); 2.0 THz best at
+  **75 deg** (0.8%). Flat between 60 and 70 -> **a single setting near 65-70 deg for the 1-2 THz
+  band.** Sample size, incidence angle and usable band are ONE coupled decision, not three.
+  (F36 said ~70 assuming 15 mm; with 10 mm it is 65-70.)
+- **TILT DOES CREATE DELAY -- Samuel is right and my F36 statement was too dismissive.** A tilt
+  delta deviates the beam by 2*delta, so the path to the collection optic a distance L downstream
+  becomes L/cos(2*delta): **delay ~ 2*L*delta^2/c.** Second order, but with a long lever arm it is
+  large. At L = 300 mm: **6.1 fs at 0.1 deg, 152 fs at 0.5 deg, 610 fs at 1 deg** -- far above the
+  ~1.5 fs that matters. Two properties: it is QUADRATIC (no sign information, blind exactly at the
+  null) and it is COMMON-MODE between s and p (never corrupts rho). So it is a free null-FINDING
+  gauge.
+- **PROCEDURE: scan tilt, record arrival time, fit a + b*t + c*t^2, go to the vertex.** Fitting the
+  full parabola (not just finding the minimum) matters because a goniometer axis that misses the
+  beam spot by h adds a term LINEAR in the tilt setting; the two separate in the fit. Vertex bias
+  from the true null = h*cos(theta)/(2L): at L = 300 mm, **0.016 deg per 0.5 mm of axis offset,
+  0.033 deg per 1 mm** -- inside the 0.2 deg spec.
+- **So there are now THREE alignment handles, none needing visible light:** timing finds the tilt
+  null (parabola vertex), the cross-polarisation term r_ps/(r_pp - r_ss) reads residual
+  out-of-plane tilt (F36), and HR-Si pins the incidence angle to +/-0.01 deg (F36). Timing remains
+  the only handle on sample POSITION (first-order, 2*dz*cos(theta)/c).
+
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
@@ -738,6 +1063,23 @@ than discarded.
 - **`min_one_plus_r`** floor in `invert_nk_reflection` — masks the r=−1 blow-up; warns on |H|>1 [F6].
 - **`detrend_transfer_phase`** — experimental linear-phase removal, to *see* the F5 spikes vanish.
 - **Air-gap de-embed** slider + `deembed_air_gap_reflection` pipeline step [F11].
+- **`explorations/thz_ellipsometry/beam_divergence_and_alignment.py`** - diffraction invariant,
+  correct 2D <r_p>/<r_s> angular averaging, footprint-vs-blur trade, model-free out-of-plane
+  tilt estimator, angle identifiability from Si/gold/sample, corrected budget. 4 checks [F36].
+- **`explorations/thz_ellipsometry/harmonic_overdetermination.py`** - over-determined
+  polarisation series: harmonic residual as a quality flag, per-setting delay vs one-parameter
+  drift ramp, acquisition ordering (sequential vs interleaved). 5 known-answer checks [F35].
+- **`explorations/thz_ellipsometry/anisotropic_reflection.py`** - anisotropic (Berreman-class)
+  reflection Jones matrix, cross-pol vs sample azimuth, identifiability counting, measurement-
+  scheme comparison. 5 known-answer checks [F34].
+- **`explorations/thz_ellipsometry/drude_band_study.py`** - Fisher analysis of which frequency
+  band constrains sigma_dc and tau [F34].
+- **`explorations/thz_ellipsometry/mount_penalty_study.py`** - one mount vs two with an
+  unmodelled per-mount nuisance [F34].
+- **`explorations/thz_ellipsometry/ellipsometry_conditioning_analysis.py`** — ellipsometry vs
+  referenced reflectometry: sensitivity/conditioning vs angle, error-channel immunity, EO
+  detection geometry, rank of the polarisation-mixing problem, eigenvalue calibration demo,
+  combined error budget. 3 known-answer checks [F33].
 - Tutorials: `lineshape_and_inversion_tutorial.md`, `misalignment_lineshape_report.md`,
   `reflection_interface_theory_tutorial.md`; model `explorations/reflection_theory/drude_interface_model.py`.
 
@@ -746,3 +1088,23 @@ than discarded.
 - `OQ2` — Quantify how much residual gap collapses the F7 conditioning advantage (Si-incidence + μm gap model).
 - `OQ3` — Process Denis's reflection dataset properly to settle its doping [F12].
 - `OQ4` — Min-phase de-embed as the production gap estimator on the latest good-contact data [F11].
+- `OQ5` — Four-point-probe DC conductivity of the actual CNT paper: is 52–62 S/cm real, or is
+  the inversion biased low against the 452–1938 S/cm of literature SWCNT films? [F33]
+- `OQ6` — Ellipsometry prototype in the EXISTING 45° geometry (2 magnet settings × 2 GaP
+  azimuths + gold), eigenvalue-calibrated, validated on HR-Si. Does the F28 ~10% systematic
+  vanish as common mode? [F33]
+- `OQ7` — Is a free-standing CNT paper, pressed flat from behind, flat enough over the 11–15 mm
+  footprint that 70–75° incidence requires? This replaces the air gap as the binding
+  mechanical constraint. [F33]
+- `OQ8` - Can we hold systematic out-of-plane sample tilt below 0.2 deg? That is the spec that
+  decides whether the anisotropy (cross-polarisation) channel is trustworthy. [F34]
+- `OQ9` - Measure our actual DIFFERENTIAL timing drift between polarisation settings. It sets
+  whether the multi-angle correction buys 1x or 10x, and it is the only first-order error
+  channel ellipsometry leaves open. [F35]
+- `OQ10` - Knife-edge the beam vs FREQUENCY. The angular spread must be known to ~10% for the
+  divergence correction to help rather than hurt, and it settles what the 5 mm mask costs. [F36]
+- `OQ11` - How large a genuinely flat CNT area can we make? Sample size and incidence angle are
+  ONE decision (footprint x blur is a diffraction invariant), and it sets the low-f edge. [F36]
+- `OQ12` - BENCH TEST: does removing the 5 mm aperture make the low-frequency spot SMALLER, as
+  F37 predicts? If yes, stop masking and start focusing. Knife-edge at the sample plane, with
+  and without the mask, vs frequency. [F37]
