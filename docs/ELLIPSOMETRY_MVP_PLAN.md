@@ -331,6 +331,30 @@ Target: the existing suite stays at 370 passed, plus roughly 35–45 new tests.
 
 ## 8. Build order
 
+> **Status 2026-10-01: steps 0, 1 and 2 are DONE.** `ellipsometry/` is implemented and
+> `run_me_ellipsometry.py` runs the whole chain against synthetic `.acc` files on disk.
+> **79 new tests (449 total, up from 370).** Gates V1-V5 pass. Step 3 needs the bench.
+>
+> One design correction made during the build, worth recording because an earlier draft of this
+> plan got it wrong: **a constant emitter-angle offset is NOT absorbed by the gold calibration.**
+> If the emitter's angular zero is offset from the plane of incidence by δ, the measured channel
+> ratio is a Möbius transform of ρ, not a scaled copy:
+>
+> $$m = \frac{C\rho + t}{1 - C t \rho}, \qquad C = d_p/d_s,\; t = \tan\delta$$
+>
+> because the commanded "p" setting then contains sin δ of s. Gold alone cannot separate C from
+> t — its ρ is essentially −1 at every frequency, so it gives one complex constraint for three
+> real unknowns. Consequences, all now implemented:
+> - **Specification:** leaving the offset uncorrected costs |ΔN| ≈ 0.009 per 0.1° at 70°
+>   incidence and 0.002 per 0.1° at 45°, essentially independent of the sample. **Keep the
+>   emitter zero within ~0.2° of the plane of incidence** and it stays inside the 0.02 tolerance.
+> - **If it is known**, pass `geometry.emitter_offset_deg` and it is removed exactly.
+> - **If it is not**, `fit_instrument_from_references` fits (C, t) jointly from two references
+>   whose ρ differ — but that consumes both as calibrators.
+> - **Best:** measure it once during setup. A wire grid aligned to the plane of incidence gives
+>   a sharp, sign-sensitive null in coherent detection, and it never has to be in the beam again.
+
+
 | Step | Deliverable | Depends on data? |
 |---|---|---|
 | 0 | Package skeleton, `model.py`, `materials.py`, unit tests | no |
