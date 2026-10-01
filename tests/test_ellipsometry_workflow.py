@@ -20,8 +20,10 @@ from ellipsometry.stages import ELLIPSOMETRY_STAGES, run_ellipsometry, stage_nam
 import run_me_ellipsometry
 
 
-EMITTER_ANGLES_DEG = np.linspace(0.0, 180.0, 12, endpoint=False)
-INCIDENCE_ANGLE_DEG = 70.0
+EMITTER_ANGLES_DEG = np.linspace(0.0, 180.0, 4, endpoint=False)
+# Follow the driver's own geometry rather than duplicating it, so a change to the specced
+# incidence angle does not silently desynchronise the synthesized data from the analysis.
+INCIDENCE_ANGLE_DEG = run_me_ellipsometry.config["geometry"]["incidence_angle_deg"]
 
 
 def _base_config(directory, expect="hr_silicon"):
@@ -149,10 +151,11 @@ def test_workflow_recovers_the_injected_drift(tmp_path):
 
 
 def test_workflow_cross_checks_a_deliberately_wrong_incidence_angle(tmp_path):
-    """Set the stage at 72 deg, tell the analysis 70, and the cross-check must notice."""
-    _write_dataset(tmp_path, "hr_silicon", incidence_angle_deg=72.0, relative_noise=0.0)
+    """Mount the sample 2 deg off what the analysis is told, and the cross-check must notice."""
+    actual = INCIDENCE_ANGLE_DEG + 2.0
+    _write_dataset(tmp_path, "hr_silicon", incidence_angle_deg=actual, relative_noise=0.0)
     outcome = run_ellipsometry(_base_config(str(tmp_path)))
-    assert outcome.result.incidence_angle_fit.angle_deg == pytest.approx(72.0, abs=0.1)
+    assert outcome.result.incidence_angle_fit.angle_deg == pytest.approx(actual, abs=0.1)
     assert not outcome.report.passed
     failing = [check.name for check in outcome.report.checks if not check.passed]
     assert any("incidence angle" in name for name in failing)

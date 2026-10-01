@@ -45,9 +45,15 @@ config: dict = {
         "directory": os.path.join(DATA_ROOT, "ellipsometry/2026-10-XX_silicon/hr_silicon"),
     },
     "geometry": {
+        # 45 deg: specced by Samuel because the instrument is multi-user and a 140-160 deg
+        # two-arm layout does not fit right now. Validated -- the pipeline recovers silicon at
+        # 45 deg. What 45 costs is sensitivity to k (the floor is ~1.8x worse than at 70) and
+        # conditioning on near-mirror samples, neither of which this validation needs.
+        # What 45 BUYS is a much easier geometric budget: the shared-tilt tolerance is 3.0 deg
+        # and the emitter-offset tolerance 0.78 deg, versus 0.23 deg each at 70.
         # Set mechanically, with a visible laser off the polished wafer. Silicon reflects
         # visible light, so the no-alignment-handle problem of the CNT work does not apply.
-        "incidence_angle_deg": 70.0,
+        "incidence_angle_deg": 45.0,
         # The emitter's angular zero relative to the PLANE OF INCIDENCE. Not absorbed by the
         # gold calibration -- it mixes the two channels rather than scaling them. Leaving it
         # uncorrected costs about 0.009 in |N| per 0.1 deg at 70 deg incidence, so keep it

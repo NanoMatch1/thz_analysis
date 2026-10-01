@@ -421,6 +421,36 @@ session rather than a debugging marathon.
 is 10 Ω·cm or higher, k will sit below the measurement floor and that half of the validation will
 be inconclusive.
 
+## 9b. Geometry decision: 45 degrees (Samuel, 2026-10-01)
+
+**The build is specced at 45 deg incidence**, because the instrument is multi-user and a two-arm
+140-160 deg layout cannot be fitted right now. It can be revisited if the measurements demand it.
+
+Validated: the pipeline recovers silicon at 45 deg (n = 3.424 against 3.4175, angle cross-check
+44.98 deg, at 0.2% noise with 30 fs drift and four emitter angles).
+
+**What 45 deg costs.** Sensitivity to k: the floor is 0.057 against 0.032 at 70 deg, about 1.8x
+worse. For a 1 Ω·cm doped wafer (k = 0.102 at 1 THz) that is an SNR on k of 1.8 rather than 3.2 —
+*marginal* rather than comfortable. **This sharpens the sample request: get the most heavily doped
+wafer available.** At 0.1 Ω·cm (k = 1.47) k is easy at any angle. It also gives up the
+near-mirror conditioning advantage, which this validation does not need and the CNT work does.
+
+**What 45 deg buys, and it is substantial.** The geometric budget becomes far easier. Largest
+misalignment keeping the index error inside 0.02:
+
+| term | 45° | 70° |
+|---|---|---|
+| shared out-of-plane tilt | **2.995°** | 0.230° |
+| emitter angular offset | **0.775°** | 0.225° |
+| differential out-of-plane tilt | 0.035° | 0.140° |
+
+At 45 deg two of the three terms are trivially satisfied, and **the entire geometric requirement
+collapses to one number: sample and reference must present the same out-of-plane tilt to within
+~0.035 deg (2.1 arcmin).** That is a mounting-repeatability specification, not an alignment one,
+and visible autocollimation covers it with room to spare: at a 1 m lever arm, 0.035 deg of tilt
+deflects the return beam by 1.2 mm. Both silicon and gold reflect visible light, so this is
+directly measurable — use one kinematic mount and swap the surface, not the holder.
+
 ## 10. Deliberate non-goals for Phase 1
 
 - No anisotropy, no cross-polarization, no Mueller formalism.
