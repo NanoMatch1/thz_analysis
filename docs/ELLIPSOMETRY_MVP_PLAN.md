@@ -135,24 +135,86 @@ all cancel when $P$ and $Q$ are divided.
  n(omega), k(omega), sigma(omega)   -> report.py, session bundle
 ```
 
-### The three calibration steps, and why they are not circular
+### The calibration chain
 
-1. **Gold → channel ratio.** $\rho_{\text{gold}} = -1 + (2/N_{\text{gold}})\sin^2\theta/\cos\theta$
-   is known from Fresnel to ~0.1% because $|N_{\text{gold}}| \sim 900$ at 1 THz. One complex,
-   frequency-flat number comes out. *Its measured frequency-flatness is itself a diagnostic* —
-   structure in it means something else is wrong.
-2. **HR-Si → incidence angle.** Hold $n = 3.4175$, $k = 0$ fixed and fit the single parameter θ.
-   Expected precision ±0.01° (F36).
-3. **Doped Si → the actual test.** Full inversion with the channel ratio and θ both fixed from
-   (1) and (2). Compare σ_dc against a four-point probe or the supplier specification.
+*(Revised 2026-10-01 after Samuel pointed out the flaw in the first version: both silicon wafers
+are polished and reflect visible light perfectly well, so the "no visible alignment handle"
+problem is a CNT-paper problem, not a silicon problem. The incidence angle can therefore be set
+mechanically for this test, and HR-Si is freed to be what it should be — a validation sample.)*
 
-Step (2) consumes HR-Si as a calibrator, so "HR-Si returns 3.418" is **not** an independent
-result. Two genuine tests survive it: the *residual* of the one-parameter θ fit across the whole
-band (does a single angle explain every frequency?), and the recovered $k_{\text{Si}}$, which was
-never fitted and must come out at zero. The independent validation is step (3).
+1. **Gold → channel ratio $d_p/d_s$.** The one thing mechanical alignment cannot give us.
+   $\rho_{\text{gold}}$ is known from Fresnel to ~0.1% because $|N_{\text{gold}}| \sim 900$ at
+   1 THz, so one complex, frequency-flat number comes out. Swapping the gold in is **safe**,
+   because what we extract from it is a polarization *ratio*, which is itself immune to the
+   placement error that poisons an amplitude reference. Its measured frequency-flatness is a
+   diagnostic in its own right.
+2. **Incidence angle θ → mechanical**, aligned with a visible laser off the polished wafer and
+   confirmed by the timing-null procedure (F37). 0.1° is enough (it costs Δn ≈ 0.02 on silicon),
+   and visible autocollimation does far better than that.
+3. **HR-Si → validation.** Expect $n = 3.4175$ flat, and $k$ consistent with zero.
+4. **Doped Si → validation.** Against **transmission on the same wafer**, which is the house
+   standard and better than any datasheet.
 
-A config switch supports the alternative: set θ mechanically, use HR-Si purely as a validation
-sample, and accept worse angle knowledge.
+**Cross-check, not calibration:** also fit θ from the HR-Si measurement as a free parameter and
+compare it to the mechanical value. Agreement validates both; disagreement localises the problem
+to the geometry rather than the analysis. This is strictly better than consuming HR-Si as a
+calibrator, which is what the first draft of this plan proposed.
+
+### Why HR-Si *and* doped Si — the k question
+
+Samuel's reason for wanting both: we have previously had poor sensitivity to $k$ in silicon and
+it was unclear whether that was physical, instrumental or analytical. The pair settles it,
+because one wafer has essentially no absorption and the other has plenty.
+Computed in `explorations/thz_ellipsometry/silicon_k_sensitivity.py`:
+
+**What k actually is at 1 THz:**
+
+| sample | k |
+|---|---|
+| HR float-zone Si (α = 0.05 /cm) | 0.00012 |
+| HR Si, pessimistic (α = 0.3 /cm) | 0.00072 |
+| doped 10 Ω·cm | 0.0098 |
+| doped 1 Ω·cm | 0.102 |
+| doped 0.1 Ω·cm | 1.47 |
+
+**What we can measure**, with a 0.5% additive field-noise floor (noise enters on the two
+*fields*, not on ρ — modelling it as a relative error on ρ is wrong near Brewster, where
+$r_p \to 0$):
+
+| θ | δk, HR-Si | δk, doped 1 Ω·cm |
+|---|---|---|
+| 45° | 0.057 | 0.053 |
+| 65° | 0.034 | 0.032 |
+| 70° | 0.032 | 0.031 |
+| 73.7° (Brewster) | 0.031 | 0.030 |
+| 80° | 0.034 | 0.033 |
+
+**Three results, and the third is the useful one:**
+
+- **δk is essentially flat with angle** — a factor of 1.8 from 45° to 73°, and no Brewster
+  miracle. At Brewster the p channel vanishes and the fixed field noise dominates completely, so
+  the sensitivity gain and the signal collapse cancel. The angle should be chosen for the other
+  reasons (blur, conditioning on n), not for k.
+- **δk ≈ δn ≈ 0.03** at every angle, to within 1%. The measurement has roughly *isotropic*
+  precision in the complex index plane. **So k is not intrinsically harder to measure than n —
+  it is simply a smaller number.** For n = 3.4 that floor is 1% relative; for k = 0.1 it is 30%.
+- **Therefore: for HR-Si the poor k sensitivity is PHYSICAL.** k = 1.2 × 10⁻⁴ sits ~250× below
+  the floor. No reflection measurement at any angle with any realistic noise will see it, and
+  recovering "k = 0 ± 0.03" on HR-Si is the *correct* answer, not a failure.
+
+**Consequence for sample choice — worth acting on before the session.** The floor scales linearly
+with field noise, so the verdict depends entirely on the doping:
+
+| sample | k | SNR on k | verdict |
+|---|---|---|---|
+| HR-Si | 0.00012 | 0.00 | invisible |
+| doped 10 Ω·cm | 0.0098 | 0.31 | invisible |
+| doped 1 Ω·cm | 0.102 | 3.4 | measurable |
+| doped 0.1 Ω·cm | 1.47 | 74 | easy |
+
+**Use the most heavily doped wafer available, ideally ≤ 1 Ω·cm.** A 10 Ω·cm wafer would leave the
+k half of the test inconclusive — n and the transmission comparison would still work, but the
+question Samuel actually wants answered would not get an answer.
 
 ---
 
@@ -233,11 +295,11 @@ Run in this order; each gate must pass before the next is meaningful.
 | V3 | Channel-ratio calibration on synthetic gold | recovers the planted $d_p/d_s$ to < 0.5% |
 | V4 | Angle fit on synthetic HR-Si | recovers planted θ to < 0.05° |
 | V5 | Full synthetic chain, realistic noise/drift/blur | $\|n - 3.4175\| < 0.02$, $\|k\| < 0.05$ over 1–2 THz |
-| V6 | **Real HR-Si**: one-parameter θ fit residual, and $k$ | residual flat across band; $\|k\| < 0.05$ |
-| V7 | **Real doped Si**: σ_dc against four-point probe | within 15%, and the Drude lineshape fits with rms < 0.03 |
+| V6 | **Real HR-Si**: n against transmission on the same wafer | $\|n - 3.4175\| < 0.02$; $k$ consistent with 0 within the ~0.03 floor; fitted θ agrees with the mechanical setting to 0.1° |
+| V7 | **Real doped Si**: n and k against **transmission on the same wafer** | n within 0.02, k within 0.03 (absolute, not relative), Drude σ_dc within 15% |
 | V8 | Repeatability: remount and remeasure | ρ reproducible to < 1% |
 
-V7 is the result that decides whether the method works on our bench. V8 is the one that decides
+**Transmission on the same wafers, measured in the same session, is the truth standard** — better than any datasheet, and it uses a pipeline we already trust. V7 is the result that decides whether the method works on our bench. V8 is the one that decides
 whether it solves the problem we actually have, since remount reproducibility is what defeated
 the CNT campaign.
 
@@ -284,24 +346,23 @@ session rather than a debugging marathon.
 
 ---
 
-## 9. Open questions for the bench
+## 9. Bench questions — answered 2026-10-01
 
-None of these block steps 0–2; all are needed for step 3.
+1. **Polarization token** — defaulting to the `pol=15` `key=value` form, which the existing
+   filename grammar already extracts regardless of position. Untested in anger, so `loader.py`
+   reports clearly what it found and what it expected.
+2. **Data** — step 3 is a fresh session, so the protocol in §6 applies from the first scan.
+3. **Truth standard** — **transmission on the same wafers**, not datasheet values.
+4. **GaP azimuth** — currently at one of the two *degenerate* orientations (parallel or
+   perpendicular to the gate polarization), where one channel is blind and ρ cannot be measured
+   at all. **Moving it to ~31.7° is a prerequisite, not an optimisation.** Worth recording which
+   degenerate orientation it starts from, since that fixes the sign convention for the rotation.
+5. **Angular spread** — unmeasured; the blur correction stays disabled (`blur.enabled = False`)
+   until there is a knife-edge number. A wrong correction is worse than none.
 
-1. **How will the acquisition software record the polarization angle?** The plan assumes a
-   `key=value` token (`pol=15`) in the filename, which the existing grammar already extracts.
-   If it will be something else, `loader.py` needs one more adapter and it is better to know now.
-2. **Do we already have HR-Si and doped-Si acquisitions at several polarization angles**, or does
-   step 3 need a fresh session? If fresh, it should follow the protocol in §6 from the start.
-3. **Is there a four-point probe number for the doped wafer**, or a supplier resistivity? V7 needs
-   an independent truth.
-4. **What is the GaP crystal's current azimuth relative to the probe polarization?** Phase 1 works
-   at any azimuth except the two degenerate ones, but near the balanced 31.72° the two channels
-   have equal sensitivity and the conditioning is best.
-5. **Measured angular spread at the sample plane** (OQ10/OQ12), if the blur correction is to be
-   enabled at all.
-
----
+**Open and worth settling before the session:** what is the resistivity of the doped wafer? If it
+is 10 Ω·cm or higher, k will sit below the measurement floor and that half of the validation will
+be inconclusive.
 
 ## 10. Deliberate non-goals for Phase 1
 
