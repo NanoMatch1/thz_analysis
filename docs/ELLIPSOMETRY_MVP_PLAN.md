@@ -303,9 +303,42 @@ Run in this order; each gate must pass before the next is meaningful.
 whether it solves the problem we actually have, since remount reproducibility is what defeated
 the CNT campaign.
 
+> **How many emitter angles? Four. (Revised 2026-10-01 - an earlier draft said 6-12.)**
+>
+> Two angles *do* measure rho correctly: P and Q are two complex unknowns per frequency and
+> alpha = 0, 90 gives two complex equations with a perfectly conditioned design matrix. The
+> problem is not the measurement, it is that two angles can neither correct nor even detect a
+> drift between them, and the drift nuisance needs at least three angles to be identifiable.
+>
+> Index error at 1 THz / 70 deg, **48 acquisitions however they are split** (equal total
+> measurement time), with sample and reference drifting independently:
+>
+> | drift rms between settings | 2 angles | 4 angles + drift ramp |
+> |---|---|---|
+> | 0 fs | 0.040 | 0.042 |
+> | 15 fs | 0.084 | 0.042 |
+> | 30 fs | 0.145 | 0.041 |
+> | 60 fs | 0.278 | 0.041 |
+>
+> Four angles are **flat** against drift and cost nothing at zero drift. Going past four does
+> not help (6, 8 and 12 all land at 0.047-0.051, slightly worse, because at fixed total time
+> each angle gets fewer scans). **Four is the smallest number that makes the drift nuisance
+> identifiable and still leaves a residual degree of freedom for the quality flag.**
+>
+> The first-order lever is not the angle count, it is total integration:
+>
+> | total acquisitions per sample | scans per angle | index error |
+> |---|---|---|
+> | 16 | 4 | 0.071 |
+> | 48 | 12 | 0.042 |
+> | 96 | 24 | 0.030 |
+> | 192 | 48 | 0.021 |
+>
+> (single frequency at 1 THz; the validation uses the band median, which does better.)
+
 **Operating protocol baked into the driver** (F35, F37):
 - interleave the polarization settings, never run them sequentially;
-- 6–12 emitter angles over 180°, not 2;
+- **4 emitter angles** (0, 45, 90, 135) over 180 degrees, not 2 - see the box below;
 - gold reference the **same size as the sample, in the same mount**;
 - focus the full beam rather than clipping it;
 - find the tilt null by minimising pulse arrival time (fit $a + bt + ct^2$, take the vertex).

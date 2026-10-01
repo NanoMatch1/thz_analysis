@@ -183,8 +183,11 @@ peak efficiency. Across a full 90° sweep of THz polarization the signal then va
 
 A complete measurement is a small grid:
 
-- **Emitter polarization** $\alpha$: **6–12 steps over 180°**, not the two that p and s strictly
-  require. The reason is in §4.3 and it is worth real money.
+- **Emitter polarization** $\alpha$: **4 steps over 180°** (0, 45, 90, 135), not the two that p
+  and s strictly require. Two *do* measure ρ, but they cannot correct or even detect a drift
+  between the settings, and the drift nuisance needs at least three angles to be identifiable.
+  Four is flat against drift and costs nothing at equal total measurement time; more than four
+  does not help. §4.3.
 - **Detector azimuth** $\varphi$: **two settings** (e.g. 31.72° and 76.72°). This is the
   non-obvious requirement — see §6.
 - **Delay scan** at each combination: the usual time-domain waveform.
@@ -813,7 +816,7 @@ it requires us to be first at ellipsometry — only first at this *combination*,
    answers whether the ~10% systematic is common-mode — the central claim of this report.
    *Expect no conditioning improvement at 45°; that is not what this step tests.*
 3. **Adopt the acquisition protocol from day one** (§4.3), because it costs nothing and the
-   alternative is the worst option available: 6–12 emitter settings rather than 2, interleaved
+   alternative is the worst option available: 4 emitter settings rather than 2, interleaved
    rather than sequential, with a one-parameter drift ramp fitted and the harmonic residual
    logged as a run-time quality flag.
 4. **Then decide on the ~70° rebuild**, informed by (2) — choosing the angle and the flat

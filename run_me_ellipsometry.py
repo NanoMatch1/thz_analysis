@@ -62,8 +62,11 @@ config: dict = {
         # channels. 0 and 45 deg are DEGENERATE -- one channel is blind and rho cannot be
         # measured at all, which is where the crystal currently sits.
         "probe_azimuth_deg": 31.72,
-        # 'linear_ramp' matches our measured error, a slow ordered drift (F35). Interleave the
-        # acquisition order so the drift is common-mode between neighbouring settings.
+        # 'linear_ramp' matches our measured error, a slow ordered drift (F35), and needs at
+        # least THREE emitter angles to be identifiable. Four (0/45/90/135) is the sweet spot:
+        # drift-immune, one spare degree of freedom for the residual quality flag, and no worse
+        # than two angles at equal total measurement time. Interleave the acquisition order so
+        # the drift is common-mode between neighbouring settings.
         "drift_model": "linear_ramp",
     },
     "reference": {
@@ -149,7 +152,7 @@ def main(argv=None):
         build_simulated_dataset(
             temporary, arguments.simulate,
             incidence_angle_deg=config["geometry"]["incidence_angle_deg"],
-            emitter_angles_deg=np.linspace(0.0, 180.0, 12, endpoint=False))
+            emitter_angles_deg=np.linspace(0.0, 180.0, 4, endpoint=False))
         config["data"]["directory"] = temporary
         config["validation"]["expect"] = (
             arguments.simulate if arguments.simulate in ("hr_silicon",) else None)
