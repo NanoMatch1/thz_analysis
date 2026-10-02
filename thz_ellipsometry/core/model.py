@@ -24,8 +24,6 @@ import numpy as np
 import thz_core.thz_core as core
 
 __all__ = [
-    "BALANCED_PROBE_AZIMUTH_RAD",
-    "electro_optic_detection_vector",
     "ellipsometric_ratio",
     "index_from_ellipsometric_ratio",
     "measured_amplitude",
@@ -83,55 +81,6 @@ def psi_delta_from_ratio(ratio):
 
 def ratio_from_psi_delta(tan_psi, delta_rad):
     return np.asarray(tan_psi) * np.exp(1j * np.asarray(delta_rad))
-
-
-# ---------------------------------------------------------------------------
-# Detection: what a <110> electro-optic crystal projects
-# ---------------------------------------------------------------------------
-
-#: Probe azimuth from the crystal [001] axis giving equal sensitivity to both THz components,
-#: i.e. tan(2*phi) = 2.  At this azimuth the detected signal never nulls as the emitter
-#: polarisation sweeps a full 90 degrees.
-BALANCED_PROBE_AZIMUTH_RAD = 0.5 * np.arctan(2.0)
-
-
-def electro_optic_detection_vector(probe_azimuth_rad):
-    """Sensitivity of a <110> zincblende crystal to the two THz field components.
-
-    Planken et al., JOSA B 18, 313 (2001): the sampled signal is
-
-        S ~ E_[001] * sin(2 phi) + 2 * E_perp * cos(2 phi)
-
-    with phi the probe polarisation angle from the crystal [001] axis.  The returned vector is
-    REAL and FREQUENCY-INDEPENDENT -- the crystal is cubic, so both THz components see the same
-    index, absorption and phase matching.  The detection channel ratio is therefore one number,
-    not a spectrum, and the crystal behaves as an analyser with infinite extinction ratio.
-
-    Returns ``(sensitivity_along_001, sensitivity_perpendicular)``.
-
-    At probe_azimuth = 0 or 45 degrees one entry vanishes: those are the DEGENERATE
-    orientations, where one polarisation channel is blind and rho cannot be measured at all.
-    """
-    azimuth = np.asarray(probe_azimuth_rad, dtype=float)
-    return np.stack([np.sin(2.0 * azimuth), 2.0 * np.cos(2.0 * azimuth)], axis=-1)
-
-
-def detection_channel_ratio(probe_azimuth_rad):
-    """d_p / d_s implied by the crystal azimuth alone, = tan(2 phi) / 2.
-
-    Useful as a sanity bound on the gold-derived calibration, not as a replacement for it:
-    0.1 degrees of azimuth error is already ~0.9% in this ratio.
-    """
-    vector = electro_optic_detection_vector(probe_azimuth_rad)
-    return vector[..., 0] / vector[..., 1]
-
-
-def is_degenerate_azimuth(probe_azimuth_rad, tolerance_deg=2.0):
-    """True when the crystal is near an orientation that blinds one channel."""
-    azimuth_deg = np.rad2deg(np.asarray(probe_azimuth_rad)) % 90.0
-    return bool(np.any((azimuth_deg < tolerance_deg)
-                       | (np.abs(azimuth_deg - 45.0) < tolerance_deg)
-                       | (azimuth_deg > 90.0 - tolerance_deg)))
 
 
 # ---------------------------------------------------------------------------

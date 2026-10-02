@@ -1047,6 +1047,44 @@ diverge much more than high ones -- what does that do with a 1.6 mm beam / 5 mm 
   the only handle on sample POSITION (first-order, 2*dz*cos(theta)/c).
 
 
+### F38 — Building the magnet-switched isotropic mode: a Hann window quietly breaks the drift model, and the three-term noise fit under-reports the noise at our repeat counts *(2026-10-02, found while building Phase 1 of `thz_ellipsometry`)*
+
+Two findings from the synthetic end-to-end runs of `thz_ellipsometry_run_me.py`. Both matter
+for real data, not only for the simulator.
+
+1. **Under a tapered window a timing drift is NOT a pure phase ramp.** The drift model
+   (F35) assumes each acquisition is the same spectrum times `exp(i w tau)`. That holds only
+   where the window is flat. A Hann window is flat only at its exact centre, so any pulse
+   sitting off-centre — the s pulse delayed against p, a non-magnetic background, a
+   pre-pulse — also changes AMPLITUDE as it drifts, by `(d ln w/dt) x tau`. With a 3 ps
+   half-width, a pulse 0.4 ps off-centre and 30 fs of drift that is ~0.7%, against a 0.2%
+   noise floor. Measured: reduced chi-square of the harmonic fit 9.1 (Hann) vs 1.11 (flat-top
+   Tukey, central half flat), with a strong background; 1.27 vs 1.11 even with a weak one. The
+   index itself survived (the error is mostly common to p and s), but the fit's own consistency
+   test failed, which is exactly what it should do. **Default is now a flat-top Tukey window.**
+   The same mechanism applies to any drift-corrected analysis in this repo that windows with a
+   Hann — worth checking where pulses sit relative to the window centre.
+
+2. **`thz_core.noise.fit_noise_parameters` returns sigma_alpha biased LOW at small repeat
+   counts** — on pure additive noise, 0.30x the truth at 4 repeats, 0.65x at 8, 0.94x at 32
+   (`converged=False`, `variance-profile` method, every time). Error bars built on it would have
+   been 1.5-3x too small. The non-parametric `drift_corrected_scatter` (which the module's own
+   docstring names as the estimator that should feed error bars) is unbiased: variance ratio
+   0.98-1.00 for 3-8 repeats. The ellipsometry noise adapter uses that. **Existing error bars
+   are NOT affected:** `compute_measured_uncertainty` in `thz_adapter.py` already builds its
+   bars on `drift_corrected_scatter` and stores the three-term fit "for reporting only". What IS
+   affected is that reported sigma_alpha / sigma_beta / sigma_tau breakdown, which reads low at
+   our repeat counts. Not fixed in thz-core (separate repo, not asked) — see OQ13.
+
+With both in place the propagated error bars on n and k match the Monte Carlo scatter
+(std/bar = 0.99 for n and for k, 40 trials), and are equal for n and k, as F-sensitivity
+predicted (isotropic precision in the complex index plane).
+
+Also confirmed, as expected from F34: in isotropic mode an UNFITTED out-of-plane tilt (1 deg:
+|dN| = 0.45) and an UNKNOWN magnet offset (7 deg: |dN| = 0.26) pass every diagnostic. They are
+rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a dispersive sample
+(1.003 +/- 0.002 deg, resistivity 1.02 vs 1.0 ohm.cm); the offset needs the wire-grid null.
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
@@ -1108,3 +1146,7 @@ diverge much more than high ones -- what does that do with a 1.6 mm beam / 5 mm 
 - `OQ12` - BENCH TEST: does removing the 5 mm aperture make the low-frequency spot SMALLER, as
   F37 predicts? If yes, stop masking and start focusing. Knife-edge at the sample plane, with
   and without the mask, vs frequency. [F37]
+- `OQ13` - thz-core: `fit_noise_parameters` under-estimates sigma_alpha at 4-8 repeats
+  (0.30-0.65x on clean additive noise). Bars are safe (they use `drift_corrected_scatter`);
+  the reported three-source breakdown is not. Fix the fit or flag it as unreliable below ~30
+  repeats, in thz-core. [F38]

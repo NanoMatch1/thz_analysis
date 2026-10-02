@@ -14,14 +14,16 @@ import numpy as np
 import pytest
 
 from thz_ellipsometry.adapters import loader, synthetic_files
-from thz_ellipsometry.core import materials, simulate
+from thz_ellipsometry.core import materials, preprocess, simulate
 from thz_ellipsometry.adapters.report import format_run_report, plot_run
 from thz_ellipsometry.adapters.stages import ELLIPSOMETRY_STAGES, run_ellipsometry, stage_names
 
 import thz_ellipsometry_run_me
 
 
-EMITTER_ANGLES_DEG = np.linspace(0.0, 180.0, 4, endpoint=False)
+#: The plan's magnet states (sec. 4.2), cycled CYCLES times.
+EMITTER_ANGLES_DEG = np.array([0.0, 90.0, 180.0, 270.0])
+CYCLES = 3
 # Follow the driver's own geometry rather than duplicating it, so a change to the specced
 # incidence angle does not silently desynchronise the synthesized data from the analysis.
 INCIDENCE_ANGLE_DEG = thz_ellipsometry_run_me.config["geometry"]["incidence_angle_deg"]
@@ -36,12 +38,15 @@ def _base_config(directory, expect="hr_silicon"):
     return config
 
 
-def _write_dataset(directory, sample_name, *, relative_noise=0.002, drift_span_fs=30.0,
-                   incidence_angle_deg=INCIDENCE_ANGLE_DEG, out_of_plane_tilt_deg=0.0):
+def _write_dataset(directory, sample_name, *, incidence_angle_deg=INCIDENCE_ANGLE_DEG,
+                   **options):
     return thz_ellipsometry_run_me.build_simulated_dataset(
         str(directory), sample_name, incidence_angle_deg=incidence_angle_deg,
-        emitter_angles_deg=EMITTER_ANGLES_DEG, relative_noise=relative_noise,
-        drift_span_fs=drift_span_fs)
+        emitter_angles_deg=EMITTER_ANGLES_DEG, cycles=CYCLES, **options)
+
+
+def _primary_probe():
+    return thz_ellipsometry_run_me.config["detection"]["probe_azimuth_deg"]
 
 
 # ---------------------------------------------------------------------------
@@ -72,10 +77,11 @@ def test_accumulation_file_round_trips_through_the_writer_and_reader(tmp_path):
 
 def test_loader_splits_sample_from_reference(tmp_path):
     _write_dataset(tmp_path, "hr_silicon")
-    sample, reference = loader.load_polarisation_series(str(tmp_path))
-    assert len(sample) == len(EMITTER_ANGLES_DEG)
-    assert len(reference) == len(EMITTER_ANGLES_DEG)
-    assert np.allclose(np.sort(sample.angles_deg), np.sort(EMITTER_ANGLES_DEG))
+    series = loader.load_measurement(str(tmp_path), default_probe_azimuth_deg=_primary_probe())
+    sample = series[("sample", _primary_probe())]
+    reference = series[("channel_reference", _primary_probe())]
+    assert len(sample) == len(reference) == len(EMITTER_ANGLES_DEG) * CYCLES
+    assert np.allclose(np.unique(sample.angles_deg), EMITTER_ANGLES_DEG)
 
 
 def test_loader_explains_a_missing_polarisation_token(tmp_path):
@@ -97,8 +103,9 @@ def test_loader_reports_a_missing_directory_and_an_empty_one(tmp_path):
 def test_spectra_use_a_common_window_centre_so_relative_timing_survives(tmp_path):
     """Windowing each angle at its own peak would erase the drift the model must measure."""
     _write_dataset(tmp_path, "hr_silicon", relative_noise=0.0, drift_span_fs=200.0)
-    sample, _ = loader.load_polarisation_series(str(tmp_path))
-    frequencies, spectra = loader.spectra_from_traces(
+    sample = loader.load_measurement(
+        str(tmp_path), default_probe_azimuth_deg=_primary_probe())[("sample", _primary_probe())]
+    frequencies, spectra = preprocess.spectra_from_traces(
         sample.time_ps, sample.traces, window_half_width_ps=3.0)
     band = (frequencies > 0.8e12) & (frequencies < 2.0e12)
     phase_first = np.unwrap(np.angle(spectra[0][band]))
@@ -141,14 +148,23 @@ def test_workflow_recovers_doped_silicon_and_sees_its_absorption(tmp_path):
     recovered = outcome.result.inversion
     assert np.median(np.abs(recovered.refractive_index - truth.real)) < 0.03
     assert np.median(np.abs(recovered.extinction - (-truth.imag))) < 0.03
-    assert np.median(recovered.extinction) > 0.02, "doped silicon must show real absorption"
-    assert np.all(recovered.conductivity_real_si > 0)
+    low_band = recovered.frequencies_hz < 1.2e12
+    assert np.median(recovered.extinction[low_band]) > 0.05, \
+        "doped silicon must show real absorption where it has it (k ~ 0.1 below 1.2 THz)"
+    # Passive within the noise everywhere; positive conductivity wherever k is resolved. Near
+    # 3 THz the true k (~0.006) is below the noise bar, so a bin there may fall below zero.
+    bar = outcome.result.index_standard_error
+    assert np.all(recovered.extinction > -3.0 * bar)
+    resolved = -truth.imag > 3.0 * bar
+    assert np.all(recovered.conductivity_real_si[resolved] > 0)
 
 
 def test_workflow_recovers_the_injected_drift(tmp_path):
     _write_dataset(tmp_path, "hr_silicon", relative_noise=0.0, drift_span_fs=60.0)
     outcome = run_ellipsometry(_base_config(str(tmp_path)))
-    assert np.ptp(outcome.result.sample_fit.delays_s) * 1e15 == pytest.approx(60.0, abs=5.0)
+    assert outcome.result.sample_fit.fitted_drift_fs == pytest.approx(60.0, abs=5.0)
+    # Noise-free repeats carry no measured noise: the fit must fall back, not divide by zero.
+    assert outcome.noise[("sample", _primary_probe())].spectral_variance is None
 
 
 def test_workflow_cross_checks_a_deliberately_wrong_incidence_angle(tmp_path):
@@ -162,20 +178,37 @@ def test_workflow_cross_checks_a_deliberately_wrong_incidence_angle(tmp_path):
     assert any("incidence angle" in name for name in failing)
 
 
-def test_workflow_warns_about_a_degenerate_crystal_azimuth(tmp_path):
-    _write_dataset(tmp_path, "hr_silicon")
+def test_a_degenerate_primary_probe_stops_the_run_and_says_why(tmp_path):
+    _write_dataset(tmp_path, "hr_silicon", probe_azimuth_deg=0.0)
     config = _base_config(str(tmp_path))
-    config["polarization"]["probe_azimuth_deg"] = 0.0
-    outcome = run_ellipsometry(config)
-    assert any("DEGENERATE" in warning for warning in outcome.warnings)
+    config["detection"]["probe_azimuth_deg"] = 0.0
+    with pytest.raises(ValueError, match="DEGENERATE"):
+        run_ellipsometry(config)
+
+
+def test_a_degenerate_secondary_probe_is_flagged_by_its_diagnostic(tmp_path):
+    _write_dataset(tmp_path, "hr_silicon", second_probe_azimuth_deg=45.0)
+    outcome = run_ellipsometry(_base_config(str(tmp_path)))
+    flagged = [finding for finding in outcome.findings if finding.diagnostic == "probe_degeneracy"]
+    assert flagged and "45" in flagged[0].message
 
 
 def test_workflow_warns_when_too_few_angles_were_measured(tmp_path):
     thz_ellipsometry_run_me.build_simulated_dataset(
         str(tmp_path), "hr_silicon", incidence_angle_deg=INCIDENCE_ANGLE_DEG,
-        emitter_angles_deg=np.array([0.0, 60.0, 120.0]))
-    outcome = run_ellipsometry(_base_config(str(tmp_path)))
-    assert any("emitter angles" in warning for warning in outcome.warnings)
+        emitter_angles_deg=np.array([0.0, 90.0]), cycles=3)
+    config = _base_config(str(tmp_path))
+    config["acquisition"]["background_term"] = False
+    outcome = run_ellipsometry(config)
+    assert any("distinct polarisation angles" in warning for warning in outcome.warnings)
+
+
+def test_two_angles_cannot_carry_a_background_term_and_the_error_says_so(tmp_path):
+    thz_ellipsometry_run_me.build_simulated_dataset(
+        str(tmp_path), "hr_silicon", incidence_angle_deg=INCIDENCE_ANGLE_DEG,
+        emitter_angles_deg=np.array([0.0, 90.0]), cycles=3)
+    with pytest.raises(ValueError, match="background"):
+        run_ellipsometry(_base_config(str(tmp_path)))
 
 
 def test_run_report_and_figure_render_headlessly(tmp_path):

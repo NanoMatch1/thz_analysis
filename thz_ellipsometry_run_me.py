@@ -1,9 +1,12 @@
-"""THz ellipsometry -- Phase 1 driver (isotropic samples, emitter polarisation only).
+"""THz ellipsometry driver -- self-referenced reflection by switching the emitter magnet.
 
-Rotate the THz polarisation at the emitter; leave the GaP crystal where it is. That is rank 2
-of the Jones matrix, which is COMPLETE for an isotropic sample such as silicon and
-rank-deficient only for an anisotropic one. Anisotropy needs a second detection azimuth and is
-Phase 2.
+Isotropic mode (plan sec. 6): rotate the spintronic emitter's magnet through 0/90/180/270 deg,
+cycling the states, at one fixed probe setting; leave every THz optic and the GaP crystal where
+they are. The ratio of the p and s channels is self-referenced -- everything that multiplies both
+(sample height, gain, roughness loss) cancels -- and one instrument constant, from gold or from
+probe rotation, turns it into rho = r_p/r_s and then n, k. That is rank 2 of the Jones matrix:
+COMPLETE for an isotropic sample, rank-deficient for an anisotropic one, which needs the
+generalised (two probe settings) mode still to come.
 
 Run it against real data:
 
@@ -14,8 +17,11 @@ Or against a synthetic dataset, with no bench and no files, to check the chain e
     .venv/bin/python thz_ellipsometry_run_me.py --simulate hr_silicon
     .venv/bin/python thz_ellipsometry_run_me.py --simulate doped_silicon
 
+Measurement plan (authoritative):     explorations/thz_ellipsometry/
+                                      thz_tds_ellipsometry_self_referencing_plan.md
+Implementation plan:                  docs/THZ_ELLIPSOMETRY_IMPLEMENTATION_PLAN.md
 Design rationale and the error budget: reports/thz_ellipsometry_prospecting_report.md
-Build spec and validation gates:      docs/ELLIPSOMETRY_MVP_PLAN.md
+Silicon validation gates:             docs/ELLIPSOMETRY_MVP_PLAN.md
 Findings:                             reports/CNT_measurement_lab_notebook.md, F33-F37
 """
 
@@ -32,55 +38,92 @@ from thz_ellipsometry.adapters.report import format_run_report, plot_run
 from thz_ellipsometry.adapters.stages import run_ellipsometry
 from thz_ellipsometry.adapters.synthetic_files import write_accumulation_files
 from thz_ellipsometry.core import materials
+from thz_ellipsometry.core.simulate import interleaved_schedule
 
 DATA_ROOT = os.environ.get("THZ_DATA_ROOT", "/home/match/data")
 
 
 # ── Configuration ───────────────────────────────────────────────────────────
 config: dict = {
+    # Registered acquisition mode (thz_ellipsometry.adapters.stages.ACQUISITION_MODES).
+    # 'isotropic': magnet states at one fixed probe setting -> rho -> n, k (plan sec. 6).
+    "mode": "isotropic",
     "data": {
-        # One directory per sample, holding its polarisation series plus the gold reference
-        # measured in the SAME mount and at the SAME size as the sample (see the report, 4.7:
-        # a reference larger than the sample breaks the truncation cancellation).
+        # One directory per sample: its magnet-state files plus the gold reference measured in
+        # the SAME mount and at the SAME size as the sample (a reference larger than the sample
+        # breaks the truncation cancellation, F37).
         "directory": os.path.join(DATA_ROOT, "ellipsometry/2026-10-XX_silicon/hr_silicon"),
     },
     "geometry": {
         # 45 deg: specced by Samuel because the instrument is multi-user and a 140-160 deg
-        # two-arm layout does not fit right now. Validated -- the pipeline recovers silicon at
-        # 45 deg. What 45 costs is sensitivity to k (the floor is ~1.8x worse than at 70) and
-        # conditioning on near-mirror samples, neither of which this validation needs.
-        # What 45 BUYS is a much easier geometric budget: the shared-tilt tolerance is 3.0 deg
-        # and the emitter-offset tolerance 0.78 deg, versus 0.23 deg each at 70.
-        # Set mechanically, with a visible laser off the polished wafer. Silicon reflects
-        # visible light, so the no-alignment-handle problem of the CNT work does not apply.
+        # two-arm layout does not fit right now. What 45 costs is sensitivity to k (~1.8x
+        # worse than at 70) and conditioning on near-mirror samples; what it buys is a much
+        # easier geometric budget (shared-tilt tolerance 3.0 deg vs 0.23 at 70).
         "incidence_angle_deg": 45.0,
-        # The emitter's angular zero relative to the PLANE OF INCIDENCE. Not absorbed by the
-        # gold calibration -- it mixes the two channels rather than scaling them. Leaving it
-        # uncorrected costs about 0.009 in |N| per 0.1 deg at 70 deg incidence, so keep it
-        # inside ~0.2 deg or measure it once during setup with a wire grid.
-        "emitter_offset_deg": 0.0,
+        # Stated mechanical uncertainty. NOT folded into the noise bars: an angle error is a
+        # systematic (eps' = A eps + B, plan sec. 8.1), reported separately as the shift it
+        # would cause. Near 45 deg it is ~5% in n per degree.
+        "incidence_angle_uncertainty_deg": 0.1,
+        # The MAGNET reading at which the emission is p-polarised, from the wire-grid null
+        # (plan sec. 4.4). Subtracted from every filename angle, which removes a known offset
+        # exactly; an offset left in mixes the channels (a Moebius map of rho, not a scale
+        # factor) and is NOT absorbed by the gold calibration.
+        "magnet_angle_for_p_deg": 0.0,
         "index_incident": 1.0,
     },
-    "polarization": {
-        "angle_token": "pol",          # filename grammar: hr-silicon_pol=15.acc
+    "acquisition": {
+        "angle_token": "mag",           # filename grammar: doped-si_mag=090_cyc=03.acc
+        "probe_token": "probe",         # optional; files without it use detection.probe_azimuth_deg
         "filename_delimiter": "_",
-        # The GaP [001] axis versus the probe polarisation. 31.72 deg balances the two
-        # channels. 0 and 45 deg are DEGENERATE -- one channel is blind and rho cannot be
-        # measured at all, which is where the crystal currently sits.
-        "probe_azimuth_deg": 31.72,
-        # 'linear_ramp' matches our measured error, a slow ordered drift (F35), and needs at
-        # least THREE emitter angles to be identifiable. Four (0/45/90/135) is the sweet spot:
-        # drift-immune, one spare degree of freedom for the residual quality flag, and no worse
-        # than two angles at equal total measurement time. Interleave the acquisition order so
-        # the drift is common-mode between neighbouring settings.
+        # role -> filename words; a file matching none is the sample. The angle reference is
+        # opt-in by an explicit word because silicon is ALSO a legitimate sample.
+        "roles": {
+            "angle_reference": ["angleref", "angle-ref", "angle_ref"],
+            "channel_reference": ["gold", "mirror"],
+        },
+        # Fit a polarisation-independent background: equivalent to the plan's +/-M
+        # differencing for 0/90/180/270, and valid for unpaired angle sets too.
+        "background_term": True,
+        # 'linear_ramp' over the REAL elapsed time from the file timestamps (F35). Interleave
+        # the acquisition: cycle 0/90/180/270 repeatedly rather than one block per state.
         "drift_model": "linear_ramp",
     },
-    "reference": {
-        "vocabulary": ["gold", "mirror"],
-        "index": "gold",
-        "channel_ratio": None,          # set only to replay a stored calibration
+    "detection": {
+        # Probe polarisation from the GaP [001] axis. 31.72 deg balances the two channels;
+        # 0 and 45 deg are DEGENERATE (one channel blind). This is the fixed isotropic-mode
+        # setting, and the primary setting when the sample is also measured at others.
+        "probe_azimuth_deg": 31.72,
+        # Crystal mounting: [001] measured from p. The plan mounts [001] along s (90 deg).
+        # Only the probe_rotation calibration uses it (as the starting guess for the fit).
+        "crystal_001_from_p_deg": 90.0,
+        "fit_probe_offset": False,      # needs >= 3 probe settings
+    },
+    "calibration": {
+        # Registered source (thz_ellipsometry.core.calibration_sources):
+        #   'gold_reference'  gold swapped into the focus (plan sec. 5.1)
+        #   'probe_rotation'  the sample itself at two probe settings; nothing in the THz path
+        #                     moves (commit c4817b6). Needs probe=... files.
+        #   'stored'          replay stored_channel_ratio
+        "channel": "gold_reference",
+        "reference_material": "gold",
+        "stored_channel_ratio": None,
+        # 'mechanical' (the angle above is used) or 'fit_from_reference' (fitted on the
+        # angle-reference files, plan sec. 5.2). For the silicon VALIDATION keep it mechanical:
+        # fitting it on HR-Si consumes HR-Si as a calibrator, so it can no longer validate.
+        "incidence_angle": "mechanical",
+        "angle_reference_material": "hr_silicon",
+    },
+    "noise": {
+        # Repeat-scan noise model per acquisition -> fit weights and error bars on n, k.
+        "enabled": True,
+        "minimum_scans": 3,
     },
     "preprocess": {
+        # Flat-top Tukey, not Hann: under a sloped window a drifting pulse also changes
+        # amplitude, which breaks the drift model for any pulse off the exact window centre
+        # (Hann + a strong background gave reduced chi-square 9 at 30 fs drift; Tukey 1.1).
+        "window_shape": "tukey",
+        "taper_fraction": 0.5,          # central half flat
         "window_half_width_ps": 3.0,
         "baseline_fraction": 0.1,
         "pad_factor": 4,
@@ -91,15 +134,22 @@ config: dict = {
         # diffraction blur set by sample size, and near-mirror conditioning.
         "frequency_min_thz": 0.8,
         "frequency_max_thz": 3.0,
-        # Drop bins whose amplitude has fallen below this fraction of the series
-        # peak; dead bins otherwise reach the calibration as pure noise.
         "minimum_relative_amplitude": 0.02,
+        # Both channels must clear this against the measured noise (plan sec. 6.2).
+        "minimum_signal_to_noise": 10.0,
     },
-    "blur": {
-        # Needs a knife-edge number. A 50%-wrong correction is worse than none, so this stays
-        # off until the angular spread has been measured (OQ10/OQ12).
-        "enabled": False,
-        "angular_spread_deg": None,
+    "inversion": {
+        # Out-of-plane tilt does NOT cancel against gold (it rotates the p/s frame). For a
+        # DISPERSIVE sample it is fittable from the sample's own data (commit 582b43e); for a
+        # flat one (HR-Si) it is degenerate with the channel ratio, so leave this off there.
+        "fit_out_of_plane_tilt": False,
+        "tilt_model": "drude",          # registered in thz_ellipsometry.core.tilt
+        "tilt_fixed_parameters": {},    # e.g. {"eps_inf": 11.7} for doped silicon
+        "blur": {
+            # Needs a knife-edge number. A 50%-wrong correction is worse than none.
+            "enabled": False,
+            "angular_spread_deg": None,
+        },
     },
     "validation": {
         "expect": "hr_silicon",         # or None to skip; 'gold' also available
@@ -122,22 +172,58 @@ SIMULATED_SAMPLES = {
     "doped_silicon": lambda frequencies: materials.doped_silicon_index(frequencies, 1.0),
 }
 
+#: Magnet states of the plan's acquisition (sec. 4.2), cycled rather than blocked.
+SIMULATED_MAGNET_ANGLES_DEG = (0.0, 90.0, 180.0, 270.0)
+
 
 def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
-                            emitter_angles_deg, relative_noise=0.002, drift_span_fs=30.0):
-    """Write a synthetic sample + gold reference series, in the real .acc format.
+                            emitter_angles_deg=SIMULATED_MAGNET_ANGLES_DEG, cycles=3,
+                            scans_per_acquisition=4, seconds_per_scan=10.0,
+                            relative_noise=0.002, drift_span_fs=30.0,
+                            background_relative=0.05, out_of_plane_tilt_deg=0.0,
+                            magnet_angle_for_p_deg=0.0, probe_azimuth_deg=None,
+                            second_probe_azimuth_deg=None, crystal_001_from_p_deg=90.0,
+                            angle_reference=False):
+    """Write a synthetic sample + gold reference measurement, in the real .acc format.
 
     This is how the whole driver gets exercised without beam time: the files go through the
-    real loader, the real preprocessing and the real analysis.
+    real loader, the real noise model, the real preprocessing and the real analysis. The sample
+    and the gold are each an interleaved schedule of magnet states with repeat scans, a drift
+    over their own elapsed time, and a non-magnetic background. With
+    ``second_probe_azimuth_deg`` the sample is also written at a second probe setting (for the
+    probe-rotation calibration); with ``angle_reference`` an HR-Si angle reference is added.
     """
-    angles_rad = np.deg2rad(emitter_angles_deg)
-    shared = dict(emitter_angles_rad=angles_rad,
+    probe_deg = (config["detection"]["probe_azimuth_deg"] if probe_azimuth_deg is None
+                 else probe_azimuth_deg)
+    schedule = interleaved_schedule(
+        emitter_angles_deg, cycles=cycles,
+        seconds_per_acquisition=scans_per_acquisition * seconds_per_scan)
+    block_seconds = float(schedule.elapsed_seconds[-1]) + scans_per_acquisition * seconds_per_scan
+    shared = dict(schedule=schedule, scans_per_angle=scans_per_acquisition,
+                  seconds_per_scan=seconds_per_scan, angle_token="mag",
+                  magnet_angle_for_p_deg=magnet_angle_for_p_deg,
                   incidence_angle_rad=np.deg2rad(incidence_angle_deg),
-                  relative_noise=relative_noise, drift_span_s=drift_span_fs * 1e-15)
+                  crystal_orientation_rad=np.deg2rad(crystal_001_from_p_deg),
+                  relative_noise=relative_noise, drift_span_s=drift_span_fs * 1e-15,
+                  background_relative=background_relative)
     write_accumulation_files(directory, index_sample_function=SIMULATED_SAMPLES[sample_name],
-                             sample_name=sample_name, **shared)
+                             sample_name=sample_name, probe_azimuth_deg=probe_deg,
+                             out_of_plane_tilt_rad=np.deg2rad(out_of_plane_tilt_deg), seed=0,
+                             **shared)
     write_accumulation_files(directory, index_sample_function=materials.gold_index,
-                             sample_name="ref-gold", seed=1, **shared)
+                             sample_name="ref-gold", probe_azimuth_deg=probe_deg, seed=1,
+                             time_offset_seconds=block_seconds, **shared)
+    if second_probe_azimuth_deg is not None:
+        write_accumulation_files(directory, index_sample_function=SIMULATED_SAMPLES[sample_name],
+                                 sample_name=sample_name, probe_token="probe",
+                                 probe_azimuth_deg=second_probe_azimuth_deg,
+                                 out_of_plane_tilt_rad=np.deg2rad(out_of_plane_tilt_deg),
+                                 seed=2, time_offset_seconds=2 * block_seconds, **shared)
+    if angle_reference:
+        write_accumulation_files(directory,
+                                 index_sample_function=SIMULATED_SAMPLES["hr_silicon"],
+                                 sample_name="angleref-hr-silicon", probe_azimuth_deg=probe_deg,
+                                 seed=3, time_offset_seconds=3 * block_seconds, **shared)
     return directory
 
 
@@ -158,7 +244,7 @@ def main(argv=None):
         build_simulated_dataset(
             temporary, arguments.simulate,
             incidence_angle_deg=config["geometry"]["incidence_angle_deg"],
-            emitter_angles_deg=np.linspace(0.0, 180.0, 4, endpoint=False))
+            crystal_001_from_p_deg=config["detection"]["crystal_001_from_p_deg"])
         config["data"]["directory"] = temporary
         config["validation"]["expect"] = (
             arguments.simulate if arguments.simulate in ("hr_silicon",) else None)

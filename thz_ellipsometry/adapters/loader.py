@@ -1,12 +1,23 @@
-"""Load a polarisation series from disk and turn it into spectra.
+"""Load polarisation series from disk: one per (role, probe setting).
 
-This is one of the two modules that know the repository and the bench exist. It reads ``.acc``
-accumulation files, groups them by the emitter polarisation angle recorded in the filename, and
-preprocesses each to a complex spectrum.
+This module knows the repository and the bench exist. It reads ``.acc`` accumulation files and
+groups them by what each file is for (its ROLE: the sample, the channel reference, the angle
+reference) and by the probe setting it was taken at.
 
 Filename grammar follows the repo convention: ``<type>[_<token>]*.acc``, where a token of the
-form ``key=value`` is extracted regardless of its position. The emitter angle is expected as
-``pol=15`` by default, so ``hr-silicon_pol=15.acc`` and ``ref-gold_pol=15.acc`` both parse.
+form ``key=value`` is extracted regardless of its position:
+
+    doped-si_mag=090_cyc=03.acc          sample, magnet at 90 deg, third cycle
+    gold_mag=000_probe=31.72.acc         channel reference, magnet 0, probe at 31.72 deg
+
+``mag`` is the magnet angle as commanded. THz polarisation is perpendicular to M, so the magnet
+reading at which the emission is p is an instrument value (from the wire-grid null, plan
+sec. 4.4) supplied as ``magnet_angle_for_p_deg`` and subtracted here; everything downstream works
+in polarisation angle from p. A leading ``m`` stands in for a minus sign (``mag=m30``). Files
+without a probe token were taken at the configured fixed probe setting. The role comes from a
+vocabulary per role matched against the filename; whatever matches no vocabulary is the sample.
+Per-scan timestamps from the file headers give each acquisition its elapsed time, which the
+drift model needs.
 
 Why this module does not go through ``DataSet``: that machinery is built around sample/reference
 pairing of single acquisitions, whereas a polarisation series is a different shape -- one sample,
@@ -25,15 +36,25 @@ from acquisition_editor import load_file as load_acc_file
 
 __all__ = [
     "AccumulationFile",
+    "DEFAULT_ROLE_VOCABULARY",
     "PolarisationSeries",
+    "classify_role",
+    "load_measurement",
     "load_polarisation_series",
     "parse_key_value_tokens",
     "polarisation_angle_deg_from_filename",
     "read_accumulation_file",
-    "spectra_from_traces",
 ]
 
 DEFAULT_REFERENCE_VOCABULARY = ("gold", "mirror", "ref", "reference")
+SAMPLE_ROLE = "sample"
+#: role -> filename words. Checked in order; the first role whose vocabulary matches wins, and a
+#: file matching none is the sample. The angle reference is opt-in by an explicit word, because a
+#: silicon wafer is ALSO a legitimate sample (the validation run measures one as the sample).
+DEFAULT_ROLE_VOCABULARY = {
+    "angle_reference": ("angleref", "angle-ref", "angle_ref"),
+    "channel_reference": ("gold", "mirror"),
+}
 
 
 @dataclass(frozen=True)
@@ -49,16 +70,32 @@ class AccumulationFile:
         return self.scans.mean(axis=0)
 
 
+    @property
+    def mean_timestamp(self):
+        """The mid-point of the file's scans, or None if any scan lacks a timestamp."""
+        if not self.scan_timestamps or any(stamp is None for stamp in self.scan_timestamps):
+            return None
+        first = self.scan_timestamps[0]
+        offsets = [(stamp - first).total_seconds() for stamp in self.scan_timestamps]
+        return first + datetime.timedelta(seconds=float(np.mean(offsets)))
+
+
 @dataclass(frozen=True)
 class PolarisationSeries:
-    """One sample measured at several emitter polarisation angles."""
+    """One object measured at several emitter polarisation angles: one row per acquisition."""
 
     label: str
-    angles_deg: np.ndarray
+    angles_deg: np.ndarray         #: (n_acquisitions,) THz polarisation from p
     time_ps: np.ndarray
-    traces: np.ndarray             #: (n_angles, n_samples), repeat-averaged
+    traces: np.ndarray             #: (n_acquisitions, n_samples), repeat-averaged
     scan_counts: np.ndarray
     paths: list
+    role: str = SAMPLE_ROLE
+    probe_azimuth_deg: float | None = None
+    #: (n_acquisitions,) seconds since the earliest acquisition in the directory, or None when
+    #: any file lacks timestamps (the drift ramp then runs over acquisition order).
+    elapsed_seconds: np.ndarray | None = None
+    files: tuple = ()              #: the AccumulationFile behind each row, for the noise model
 
     @property
     def angles_rad(self):
@@ -146,13 +183,28 @@ def _is_reference(filename, vocabulary):
     return any(word in lowered for word in vocabulary)
 
 
-def load_polarisation_series(directory, *, angle_token="pol", delimiter="_",
-                             reference_vocabulary=DEFAULT_REFERENCE_VOCABULARY,
-                             extension=".acc"):
-    """Load every ``.acc`` in a directory and split it into sample and reference series.
+def classify_role(filename, role_vocabulary=None):
+    """The role of a file: the first role whose vocabulary matches, else the sample."""
+    vocabulary = DEFAULT_ROLE_VOCABULARY if role_vocabulary is None else role_vocabulary
+    for role, words in vocabulary.items():
+        if _is_reference(filename, words):
+            return role
+    return SAMPLE_ROLE
 
-    Returns ``(sample_series, reference_series)``; the reference is ``None`` when no file
-    matches the reference vocabulary.
+
+def _float_token(filename, token, delimiter):
+    if token is None:
+        return None
+    return polarisation_angle_deg_from_filename(filename, token, delimiter)
+
+
+def load_measurement(directory, *, angle_token="mag", probe_token="probe", delimiter="_",
+                     role_vocabulary=None, magnet_angle_for_p_deg=0.0,
+                     default_probe_azimuth_deg=None, extension=".acc"):
+    """Load every ``.acc`` in a directory into series keyed by ``(role, probe_azimuth_deg)``.
+
+    Rows within a series are in acquisition order when every file has timestamps, else by angle.
+    Elapsed times share one origin across the whole directory, so series are comparable.
 
     Errors are explicit about what was found versus what was expected, because the filename
     convention is the one part of this pipeline that depends on the acquisition software and
@@ -165,89 +217,71 @@ def load_polarisation_series(directory, *, angle_token="pol", delimiter="_",
     if not candidates:
         raise FileNotFoundError(f"no {extension} files in {directory}")
 
-    grouped = {"sample": [], "reference": []}
+    grouped = {}
     missing_token = []
     for name in candidates:
         angle = polarisation_angle_deg_from_filename(name, angle_token, delimiter)
         if angle is None:
             missing_token.append(name)
             continue
-        key = "reference" if _is_reference(name, reference_vocabulary) else "sample"
-        grouped[key].append((angle, os.path.join(directory, name)))
+        probe = _float_token(name, probe_token, delimiter)
+        probe = default_probe_azimuth_deg if probe is None else probe
+        key = (classify_role(name, role_vocabulary), probe)
+        grouped.setdefault(key, []).append((angle - magnet_angle_for_p_deg,
+                                            os.path.join(directory, name)))
 
-    if missing_token and not grouped["sample"]:
+    if not grouped:
         raise ValueError(
             f"none of the {len(candidates)} files in {directory} carry a "
             f"'{angle_token}=<degrees>' token. Found filenames like {missing_token[0]!r}. "
-            f"Set polarization.angle_token to whatever the acquisition software writes.")
-    if not grouped["sample"]:
+            f"Set acquisition.angle_token to whatever the acquisition software writes.")
+    if not any(role == SAMPLE_ROLE for role, _ in grouped):
         raise ValueError(
-            f"every file in {directory} matched the reference vocabulary "
-            f"{list(reference_vocabulary)}; nothing is left to treat as the sample")
+            f"every file in {directory} matched a reference vocabulary "
+            f"{dict(role_vocabulary or DEFAULT_ROLE_VOCABULARY)}; nothing is left to treat as "
+            "the sample")
 
-    def build(entries, label):
-        if not entries:
-            return None
-        entries = sorted(entries)
-        files = [read_accumulation_file(path) for _, path in entries]
-        lengths = {file.time_ps.size for file in files}
+    loaded = {key: [(angle, read_accumulation_file(path)) for angle, path in entries]
+              for key, entries in grouped.items()}
+    stamps = [file.mean_timestamp for entries in loaded.values() for _, file in entries]
+    origin = None if any(stamp is None for stamp in stamps) else min(stamps)
+
+    series = {}
+    for (role, probe), entries in loaded.items():
+        label = role if probe is None else f"{role} @ probe {probe:g} deg"
+        lengths = {file.time_ps.size for _, file in entries}
         if len(lengths) != 1:
-            raise ValueError(
-                f"{label}: traces have different lengths {sorted(lengths)}; "
-                "a polarisation series must share one time axis")
-        return PolarisationSeries(
+            raise ValueError(f"{label}: traces have different lengths {sorted(lengths)}; "
+                             "a polarisation series must share one time axis")
+        if origin is not None:
+            entries = sorted(entries, key=lambda entry: entry[1].mean_timestamp)
+            elapsed = np.array([(file.mean_timestamp - origin).total_seconds()
+                                for _, file in entries])
+        else:
+            entries = sorted(entries, key=lambda entry: (entry[0], entry[1].path))
+            elapsed = None
+        files = tuple(file for _, file in entries)
+        series[(role, probe)] = PolarisationSeries(
             label=label,
             angles_deg=np.array([angle for angle, _ in entries], dtype=float),
             time_ps=files[0].time_ps,
             traces=np.vstack([file.averaged for file in files]),
             scan_counts=np.array([file.scans.shape[0] for file in files], dtype=int),
-            paths=[path for _, path in entries],
-        )
+            paths=[file.path for file in files],
+            role=role, probe_azimuth_deg=probe, elapsed_seconds=elapsed, files=files)
+    return series
 
-    return build(grouped["sample"], "sample"), build(grouped["reference"], "reference")
 
+def load_polarisation_series(directory, *, angle_token="pol", delimiter="_",
+                             reference_vocabulary=DEFAULT_REFERENCE_VOCABULARY,
+                             extension=".acc"):
+    """``(sample_series, reference_series)`` for a directory with one probe setting.
 
-# ---------------------------------------------------------------------------
-# Preprocessing: baseline, fixed-width window, zero pad, FFT
-# ---------------------------------------------------------------------------
-
-def spectra_from_traces(time_ps, traces, *, window_half_width_ps=None,
-                        baseline_fraction=0.1, pad_factor=4, window_centre_ps=None):
-    """Baseline-subtract, window and transform a set of traces to complex spectra.
-
-    The window is a fixed-width Hann applied at a COMMON centre for every angle, found from the
-    mean absolute trace. Using one centre for the whole series matters: windowing each trace at
-    its own peak would silently remove the very timing differences between polarisation
-    settings that the drift model exists to measure.
+    The two-role view of :func:`load_measurement`; the reference is ``None`` when no file
+    matches the reference vocabulary.
     """
-    time_ps = np.asarray(time_ps, dtype=float)
-    traces = np.atleast_2d(np.asarray(traces, dtype=float))
-    sample_count = time_ps.size
-    if traces.shape[1] != sample_count:
-        raise ValueError(f"traces have {traces.shape[1]} samples but the time axis has "
-                         f"{sample_count}")
-
-    baseline_count = max(int(baseline_fraction * sample_count), 1)
-    corrected = traces - traces[:, :baseline_count].mean(axis=1, keepdims=True)
-
-    if window_centre_ps is None:
-        centre_index = int(np.argmax(np.abs(corrected).mean(axis=0)))
-    else:
-        centre_index = int(np.argmin(np.abs(time_ps - window_centre_ps)))
-
-    if window_half_width_ps is None:
-        windowed = corrected
-    else:
-        time_step_ps = float(np.mean(np.diff(time_ps)))
-        half_width = max(int(round(window_half_width_ps / time_step_ps)), 2)
-        window = np.zeros(sample_count)
-        start = max(centre_index - half_width, 0)
-        stop = min(centre_index + half_width + 1, sample_count)
-        window[start:stop] = np.hanning(stop - start)
-        windowed = corrected * window[None, :]
-
-    padded_length = int(sample_count * max(pad_factor, 1))
-    time_step_s = float(np.mean(np.diff(time_ps))) * 1e-12
-    spectra = np.fft.rfft(windowed, n=padded_length, axis=1)
-    frequencies_hz = np.fft.rfftfreq(padded_length, d=time_step_s)
-    return frequencies_hz, spectra
+    series = load_measurement(directory, angle_token=angle_token, probe_token=None,
+                              delimiter=delimiter,
+                              role_vocabulary={"reference": tuple(reference_vocabulary)},
+                              extension=extension)
+    return series.get((SAMPLE_ROLE, None)), series.get(("reference", None))

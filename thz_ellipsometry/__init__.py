@@ -44,43 +44,77 @@ from .core.materials import (
     high_resistivity_silicon_index,
     reference_index,
 )
-from .core.model import (
+from .core.calibration_sources import (
+    CALIBRATION_SOURCES,
+    CalibrationInputs,
+    compute_channel_calibration,
+)
+from .core.detection import (
     BALANCED_PROBE_AZIMUTH_RAD,
+    channel_ratio_for_probe,
+    detection_vector_in_sample_frame,
     electro_optic_detection_vector,
-    ellipsometric_ratio,
-    index_from_ellipsometric_ratio,
     is_degenerate_azimuth,
 )
-from .core.pipeline import EllipsometryResult, analyse_polarisation_series, band_mask
-from .core.simulate import SyntheticMeasurement, synthesize_spectra
+from .core.model import ellipsometric_ratio, index_from_ellipsometric_ratio
+from .core.pipeline import (
+    EllipsometryResult,
+    analyse_calibrated_series,
+    analyse_polarisation_series,
+    band_mask,
+)
+from .core.preprocess import TransformedSeries, spectra_from_traces, transform_traces
+from .core.sensitivity import angle_error_affine_coefficients
+from .core.tilt import DISPERSION_MODELS, TiltFit, fit_tilt_with_dispersion_model
+from .core.simulate import (
+    SyntheticMeasurement,
+    interleaved_schedule,
+    synthesize_acquisitions,
+    synthesize_spectra,
+)
 from .core.validation import ValidationReport, validate_index_against_reference
 
 __all__ = [
     "BALANCED_PROBE_AZIMUTH_RAD",
+    "CALIBRATION_SOURCES",
+    "CalibrationInputs",
     "ChannelCalibration",
+    "DISPERSION_MODELS",
     "EllipsometryResult",
     "HarmonicFit",
     "IncidenceAngleFit",
     "InversionResult",
     "SILICON_HIGH_RESISTIVITY_INDEX",
     "SyntheticMeasurement",
+    "TiltFit",
+    "TransformedSeries",
     "ValidationReport",
+    "analyse_calibrated_series",
     "analyse_polarisation_series",
+    "angle_error_affine_coefficients",
     "band_mask",
+    "channel_ratio_for_probe",
     "channel_ratio_from_reference",
+    "compute_channel_calibration",
     "conductivity_from_index",
+    "detection_vector_in_sample_frame",
     "doped_silicon_index",
     "electro_optic_detection_vector",
     "ellipsometric_ratio",
     "fit_emitter_harmonic",
     "fit_incidence_angle",
+    "fit_tilt_with_dispersion_model",
     "gold_index",
     "harmonic_residual_norm",
     "high_resistivity_silicon_index",
     "index_from_ellipsometric_ratio",
+    "interleaved_schedule",
     "invert_ratio",
     "is_degenerate_azimuth",
     "reference_index",
+    "spectra_from_traces",
+    "synthesize_acquisitions",
     "synthesize_spectra",
+    "transform_traces",
     "validate_index_against_reference",
 ]

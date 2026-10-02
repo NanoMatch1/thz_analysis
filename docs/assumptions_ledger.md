@@ -64,3 +64,75 @@ The TILT is what identifies water specifically: a laser power drift scales the w
 - **Check:** `spectra_are_oversampled` (severity when broken: **info**)
 - **Why it matters:** Zero-padding to a large n_fft makes the BIN SPACING far finer than the RESOLUTION, which is fixed at 1/T by the windowed record length. The extra points are sinc interpolation, not measurement, and reading structure from them reads structure from the padding.
 - **If it fails:** markers are placed on the independent grid automatically; set config['resolution']['limit_to_instrument_resolution'] to decimate the stored arrays too
+
+## Stage: `ellipsometry.acquisition`
+
+### the probe polarisation is not at a degenerate azimuth of the EO crystal
+
+- **Check:** `probe_degeneracy` (severity when broken: **FAIL**)
+- **Why it matters:** At 0 or 45 deg from [001] one THz component produces no signal at all, so P/Q is a ratio with a zero in it and rho cannot be measured, however long you average.
+- **If it fails:** Rotate the probe (or the crystal, once) to about 31.7 deg from [001], where both channels are equally sensitive.
+
+### every acquisition is a pure first harmonic in polarisation angle plus a constant background, up to the fitted drift
+
+- **Check:** `harmonic_model_holds` (severity when broken: **warn**)
+- **Why it matters:** Anything outside that form -- a magnet that does not saturate, a drift the ramp cannot describe, a misread filename -- is not cancelled by the ratio and goes straight into rho.
+- **If it fails:** Inspect the per-frequency harmonic residual in the run figure; check magnet saturation and the acquisition order; try drift_model='per_acquisition' if the drift is not monotonic.
+
+### the non-magnetic background is small compared with the magnetic signal
+
+- **Check:** `background_is_small` (severity when broken: **warn**)
+- **Why it matters:** The background term removes it exactly only if it is truly independent of the magnet state. A large background makes any magnet-dependent part of it (stray field reaching the sample, a substrate signal that depends on M) a first-order error.
+- **If it fails:** Find the source: optical rectification in the emitter substrate, pump leakage onto the detector, or electronic pickup. Block the pump to separate the last two.
+
+### the fitted timing drift is well inside the range the drift model searches
+
+- **Check:** `drift_within_range` (severity when broken: **warn**)
+- **Why it matters:** A drift that reaches the search bound has been clipped, and the part that was not fitted remains as a phase error in rho (1.5 fs is ~0.9% at 1 THz).
+- **If it fails:** Shorten the acquisition or cycle the states faster; check the lab temperature and the purge; raise maximum_drift_fs only if the drift is real.
+
+### each acquisition has enough repeat scans for the noise model
+
+- **Check:** `noise_model_available` (severity when broken: **info**)
+- **Why it matters:** Without the noise model the fit is unweighted and its error bars come from the residual scatter, which is fine for the values but makes the bars themselves rough and loses the chi-square test of the harmonic model.
+- **If it fails:** Record at least three scans per acquisition (config['noise']['minimum_scans']).
+
+## Stage: `ellipsometry.calibration`
+
+### the channel ratio C = d_p/d_s is frequency-flat
+
+- **Check:** `channel_ratio_is_flat` (severity when broken: **warn**)
+- **Why it matters:** By crystal symmetry the detection vector is real and frequency-independent, so structure in C means something else polarisation-dependent is in the beam: probe walk, astigmatism, a reference smaller or larger than the beam, polarising optics.
+- **If it fails:** Look at the channel-ratio panel of the run figure. A slope suggests clipping or a reference/sample size mismatch; ripple suggests an echo inside the window.
+
+### two independent calibration sources agree on the channel ratio when both can run
+
+- **Check:** `calibration_sources_agree` (severity when broken: **warn**)
+- **Why it matters:** Gold and probe rotation reach C by physically different routes -- one swaps an object into the focus, the other moves nothing in the THz path. Agreement validates both; disagreement localises an error to the geometry (gold) or the probe optics (rotation).
+- **If it fails:** If they disagree, check the gold's tilt and size against the sample's, and the half-wave plate for wedge (plan sec. 7.8).
+
+## Stage: `ellipsometry.inversion`
+
+### the recovered index is passive (k >= 0) within its error bars
+
+- **Check:** `index_is_passive` (severity when broken: **FAIL**)
+- **Why it matters:** Under the package convention N = n - ik an absorbing sample has k >= 0. A k that is significantly negative is not physics: it is a sign-convention or calibration error, not a branch problem, because N follows linearly from (1 - rho)/(1 + rho).
+- **If it fails:** Check the calibration source and its sign, and the emitter rotation sense; then the incidence angle.
+
+### the sign convention is consistent end to end (no rho -> -rho flip)
+
+- **Check:** `sign_convention_consistent` (severity when broken: **FAIL**)
+- **Why it matters:** Mixing the Fresnel sign convention between the calibration and the inversion replaces rho with -rho. On silicon at 45 deg that returns eps ~ 0.52 instead of 11.7 (plan sec. 6.5) -- a number that looks like a material, not like an error.
+- **If it fails:** Every model in the package uses thz_core's Fresnel coefficients; check any externally supplied (stored) channel ratio for its sign.
+
+### the inversion is well conditioned across the band
+
+- **Check:** `inversion_well_conditioned` (severity when broken: **info**)
+- **Why it matters:** d eps/d rho grows as (1 + rho)^-3; for good conductors rho -> -1 and small errors in rho become large errors in eps (plan sec. 8.2). Bins there are noisy by physics, not by a fault, and should be read with their error bars.
+- **If it fails:** Expected for metallic samples at 45 deg. A higher incidence angle improves it.
+
+### the fitted out-of-plane tilt is small and determined
+
+- **Check:** `tilt_is_plausible` (severity when broken: **warn**)
+- **Why it matters:** A tilt of more than about a degree means the mount is far off; a tilt with an error bar as large as itself means the sample is too flat in frequency to separate tilt from the channel ratio, and the fit should not be trusted (HR-Si is the textbook case).
+- **If it fails:** Re-seat the sample against the THz peak (plan sec. 4.5), or turn the tilt fit off for dispersionless samples.

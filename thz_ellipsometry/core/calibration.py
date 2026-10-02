@@ -50,6 +50,8 @@ __all__ = [
     "ellipsometric_ratio_from_channels",
     "fit_incidence_angle",
     "fit_instrument_from_references",
+    "ratio_derivative_wrt_measured",
+    "remove_emitter_offset",
 ]
 
 
@@ -62,9 +64,21 @@ def apply_instrument_to_ratio(ratio, channel_ratio, emitter_offset_rad=0.0):
 
 def _recover_ratio(measured, channel_ratio, emitter_offset_rad=0.0):
     """Inverse of apply_instrument_to_ratio."""
+    return remove_emitter_offset(measured, emitter_offset_rad) / channel_ratio
+
+
+def remove_emitter_offset(measured, emitter_offset_rad=0.0):
+    """Undo the Moebius mixing of a known emitter offset, leaving C * rho."""
     tangent = np.tan(emitter_offset_rad)
     measured = np.asarray(measured, dtype=complex)
-    return (measured - tangent) / (channel_ratio * (1.0 + measured * tangent))
+    return (measured - tangent) / (1.0 + measured * tangent)
+
+
+def ratio_derivative_wrt_measured(measured, channel_ratio, emitter_offset_rad=0.0):
+    """d rho / d(P/Q): how noise on the measured channel ratio reaches rho."""
+    tangent = np.tan(emitter_offset_rad)
+    measured = np.asarray(measured, dtype=complex)
+    return (1.0 + tangent**2) / ((1.0 + measured * tangent) ** 2 * channel_ratio)
 
 
 @dataclass(frozen=True)
@@ -77,6 +91,10 @@ class ChannelCalibration:
     phase_scatter_rad: float          #: std of arg across frequency
     reference_name: str
     emitter_offset_rad: float = 0.0   #: emitter angular zero vs the plane of incidence
+    #: |standard error| of the applied ratio. It is ONE number for the whole run, so its error
+    #: is fully correlated across frequency: a systematic of the run, reported as a flag and
+    #: deliberately not folded into the per-frequency noise bars.
+    standard_error: float = 0.0
 
     @property
     def emitter_offset_deg(self):
@@ -134,6 +152,7 @@ def channel_ratio_from_reference(reference_channel_ratio, reference_index,
         phase_scatter_rad=phase_scatter,
         reference_name=reference_name,
         emitter_offset_rad=float(emitter_offset_rad),
+        standard_error=float(np.std(selected) / np.sqrt(selected.size)),
     )
 
 

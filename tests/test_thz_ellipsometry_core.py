@@ -11,7 +11,8 @@ import pytest
 
 import thz_ellipsometry as ell
 from thz_ellipsometry.core import (
-    calibration, harmonic, inversion, materials, model, pipeline, simulate, validation)
+    calibration, detection, harmonic, inversion, materials, model, pipeline, simulate,
+    validation)
 
 
 FREQUENCIES = np.linspace(0.8e12, 3.0e12, 40)
@@ -53,7 +54,7 @@ def test_brewster_minimum_is_at_arctan_n():
 
 
 def test_detection_vector_is_balanced_at_the_documented_azimuth():
-    vector = model.electro_optic_detection_vector(model.BALANCED_PROBE_AZIMUTH_RAD)
+    vector = detection.electro_optic_detection_vector(detection.BALANCED_PROBE_AZIMUTH_RAD)
     assert vector[0] == pytest.approx(vector[1], rel=1e-12)
     assert vector[0] == pytest.approx(2.0 / np.sqrt(5.0), rel=1e-12)
 
@@ -61,7 +62,7 @@ def test_detection_vector_is_balanced_at_the_documented_azimuth():
 @pytest.mark.parametrize("azimuth_deg,expected", [(0.0, True), (45.0, True), (90.0, True),
                                                   (31.72, False), (20.0, False)])
 def test_degenerate_azimuths_are_flagged(azimuth_deg, expected):
-    assert model.is_degenerate_azimuth(np.deg2rad(azimuth_deg)) is expected
+    assert detection.is_degenerate_azimuth(np.deg2rad(azimuth_deg)) is expected
 
 
 def test_nearest_branch_avoids_the_sign_flip_for_a_lossless_sample():

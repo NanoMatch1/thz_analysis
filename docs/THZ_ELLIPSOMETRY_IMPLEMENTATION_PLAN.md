@@ -353,3 +353,30 @@ Per the house rule, every phase has both:
    quartz or sapphire a-cut plate) before CNT?
 6. Rename confirmation: `thz_ellipsometry/` + `thz_ellipsometry_run_me.py` (recommended), or keep
    the existing names.
+
+---
+
+## 9. As built: where Phases 0–1 departed from this plan, and why
+
+Design deviations only (progress lives in `~/.claude/global_projects.md`, not here).
+
+- **Window shape is a flat-top Tukey, not Hann** (`core/preprocess.py`, `preprocess.window_shape`).
+  Under a sloped window a drifting pulse also changes amplitude, so the drift is not a pure phase
+  ramp for any pulse off the window centre. Hann + strong background gave harmonic reduced
+  chi-square 9.1; Tukey 1.11. Lab notebook F38.
+- **Noise from `drift_corrected_scatter`, not the three-term `fit_noise_parameters`.** The latter
+  under-reports sigma_alpha at 4–8 repeats (0.30–0.65x). F38, OQ13.
+- **A known magnet offset is removed in the loader** (`geometry.magnet_angle_for_p_deg`), which is
+  algebraically identical to undoing the Moebius mixing; there is no separate `emitter_offset_deg`
+  key. The Moebius machinery remains for the two-reference fit of an UNKNOWN offset.
+- **The acquisition-mode registry lives in `adapters/stages.py`**, beside the stage registry, rather
+  than in its own `acquisition_modes.py`; `conventions.py` was not needed (the convention is stated
+  in `core/model.py` and enforced by tests); `export.py` is Phase 6.
+- **The tilt fit reports a rank-deficient Jacobian as infinite error.** A pseudo-inverse had
+  returned 0.24 +/- 0.001 deg for a true 0.5 deg on a flat sample.
+- **Calibration error is not in the per-frequency bars.** C is one number per run, so its error is
+  fully correlated across frequency — a run systematic, carried as `ChannelCalibration.standard_error`.
+- **Ellipsometry diagnostics share the repo's `@diagnostic` registry** under `ellipsometry.*` stage
+  names and appear in `docs/assumptions_ledger.md`. Regenerating the ledger must import
+  `thz_ellipsometry.adapters.diagnostics`, or those entries drop out.
+
