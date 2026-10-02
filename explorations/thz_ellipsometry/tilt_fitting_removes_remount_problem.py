@@ -36,7 +36,7 @@ from scipy.optimize import least_squares
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from ellipsometry import materials, model  # noqa: E402
+from thz_ellipsometry.core import materials, model  # noqa: E402
 
 FREQUENCIES = np.linspace(0.8e12, 3.0e12, 60)
 INCIDENCE_ANGLE = np.deg2rad(45.0)

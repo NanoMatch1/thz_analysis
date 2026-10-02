@@ -26,7 +26,7 @@ import numpy as np
 # This exploration sits two levels below the repo root; the production package lives there.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from ellipsometry import materials, model  # noqa: E402
+from thz_ellipsometry.core import materials, model  # noqa: E402
 
 __all__ = ["tilted_jones", "averaged_jones", "recovered_index", "main"]
 
