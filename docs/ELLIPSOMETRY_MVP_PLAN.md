@@ -1,5 +1,7 @@
 # THz ellipsometry MVP — implementation plan
 
+> **Moved (2026-10-02):** the package is now `thz_ellipsometry/` (`core/` pure, `adapters/` repo-aware) and the driver is `thz_ellipsometry_run_me.py`. Paths below are historical. The full build is planned in `docs/THZ_ELLIPSOMETRY_IMPLEMENTATION_PLAN.md`.
+
 *2026-10-01. Plan for a discrete, self-contained ellipsometry package validated on HR-Si and
 doped Si. Physics and design rationale live in `reports/thz_ellipsometry_prospecting_report.md`
 and lab notebook F33–F37; this document is the build spec.*

@@ -10,18 +10,18 @@ form ``key=value`` is extracted regardless of its position. The emitter angle is
 
 Why this module does not go through ``DataSet``: that machinery is built around sample/reference
 pairing of single acquisitions, whereas a polarisation series is a different shape -- one sample,
-many angles. Keeping the MVP loader small and array-based is what makes the package demarcated
-and the whole chain testable on synthetic files. The repeat-scan noise model and drift tracking
-in ``dataset_core`` remain available for the production path.
+many angles. The file format itself is NOT re-implemented here: parsing goes through the repo's
+standalone ``.acc`` reader (``acquisition_editor.load_file``), so the format has one definition.
 """
 
 from __future__ import annotations
 
+import datetime
 import os
-import re
 from dataclasses import dataclass
 
 import numpy as np
+from acquisition_editor import load_file as load_acc_file
 
 __all__ = [
     "AccumulationFile",
@@ -42,6 +42,7 @@ class AccumulationFile:
     time_ps: np.ndarray            #: (n_samples,)
     scans: np.ndarray              #: (n_scans, n_samples)
     title: str
+    scan_timestamps: tuple = ()    #: datetime per scan, from its header; None where absent
 
     @property
     def averaged(self):
@@ -95,52 +96,49 @@ def polarisation_angle_deg_from_filename(filename, angle_token="pol", delimiter=
         return None
 
 
-def read_accumulation_file(path):
-    """Parse one ``.acc`` file: ``%``-prefixed header lines, then two columns per scan.
-
-    A file holds several repeat scans back to back, each introduced by its own header block.
-    """
-    times, amplitudes, scans, title = [], [], [], ""
-    on_first_scan = True
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("%"):
-                if stripped.lower().startswith("%title"):
-                    if amplitudes:
-                        scans.append(np.asarray(amplitudes, dtype=float))
-                        amplitudes = []
-                        on_first_scan = False
-                    if not title:
-                        parts = stripped.split()
-                        title = parts[1] if len(parts) > 1 else os.path.basename(path)
-                continue
-            parts = stripped.split()
-            if len(parts) < 2:
-                continue
+def _scan_timestamp(scan_header):
+    """The ``Date and time`` parameter of one scan's header block, or None."""
+    for line in scan_header:
+        if line.lower().startswith("param date and time,"):
+            text = line.split(",", 1)[1].strip()
             try:
-                time_value, amplitude = float(parts[0]), float(parts[1])
+                return datetime.datetime.fromisoformat(text)
             except ValueError:
-                continue
-            if on_first_scan:
-                times.append(time_value)
-            amplitudes.append(amplitude)
-    if amplitudes:
-        scans.append(np.asarray(amplitudes, dtype=float))
-    if not scans:
-        raise ValueError(f"no data rows parsed from {path}")
+                return None
+    return None
 
-    sample_count = min(min(scan.size for scan in scans), len(times))
-    stacked = np.vstack([scan[:sample_count] for scan in scans])
-    time_axis = np.asarray(times[:sample_count], dtype=float)
-    if time_axis.size < 8:
+
+def read_accumulation_file(path):
+    """Parse one ``.acc`` file into its repeat scans and their timestamps.
+
+    Parsing is delegated to the repo's standalone ``.acc`` reader (``acquisition_editor``), so
+    there is one definition of the file format; this function only reshapes its output and pulls
+    the per-scan timestamps the drift model needs.
+    """
+    loaded = load_acc_file(path)
+    data = loaded["data"]
+    if data.size == 0 or data.shape[1] < 2:
         raise ValueError(
-            f"{path}: only {time_axis.size} time points parsed; the file does not look like "
+            f"no data rows parsed from {path}; the file does not look like an .acc "
+            "accumulation (expected '%'-prefixed headers then two numeric columns)")
+    if data.shape[0] < 8:
+        raise ValueError(
+            f"{path}: only {data.shape[0]} time points parsed; the file does not look like "
             "an .acc accumulation (expected '%'-prefixed headers then two numeric columns)")
-    return AccumulationFile(path=path, time_ps=time_axis, scans=stacked,
-                            title=title or os.path.basename(path))
+    title = ""
+    for line in loaded["header"]:
+        if line.lower().startswith("title"):
+            parts = line.split()
+            title = parts[1] if len(parts) > 1 else ""
+            break
+    return AccumulationFile(
+        path=path,
+        time_ps=np.asarray(data[:, 0], dtype=float),
+        scans=np.asarray(data[:, 1:].T, dtype=float),
+        title=title or os.path.basename(path),
+        scan_timestamps=tuple(_scan_timestamp(header)
+                              for header in loaded["scan_headers"]),
+    )
 
 
 def _is_reference(filename, vocabulary):

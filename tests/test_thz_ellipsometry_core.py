@@ -9,8 +9,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import ellipsometry as ell
-from ellipsometry import calibration, harmonic, inversion, materials, model, pipeline, simulate
+import thz_ellipsometry as ell
+from thz_ellipsometry.core import (
+    calibration, harmonic, inversion, materials, model, pipeline, simulate, validation)
 
 
 FREQUENCIES = np.linspace(0.8e12, 3.0e12, 40)
@@ -95,7 +96,7 @@ def test_high_resistivity_silicon_k_is_far_below_any_measurement_floor():
     index_sample = materials.high_resistivity_silicon_index(1e12)
     assert index_sample.real == pytest.approx(3.4175, rel=1e-12)
     assert 1e-5 < -index_sample.imag < 1e-3
-    floor = ell.validation.extinction_measurement_floor(0.005, INCIDENCE_ANGLE, index_sample)
+    floor = validation.extinction_measurement_floor(0.005, INCIDENCE_ANGLE, index_sample)
     assert floor > 10 * (-index_sample.imag)
 
 
@@ -469,3 +470,37 @@ def test_validation_fails_loudly_on_a_wrong_answer():
     report = ell.validate_index_against_reference(result, 3.4175 - 0j, label="deliberate")
     assert not report.passed
     assert "FAIL" in str(report)
+
+
+# ---------------------------------------------------------------------------
+# The layer rule: core/ is liftable into thz-core
+# ---------------------------------------------------------------------------
+
+def test_core_imports_nothing_from_the_repository():
+    """core/ may import only the standard library, numpy, scipy, thz_core and itself.
+
+    This is what makes the planned move into the separate thz-core repository a copy rather
+    than a refactor. A violation here means repo knowledge has leaked into the pure half.
+    """
+    import ast
+    import pathlib
+    import sys
+
+    allowed_roots = {"numpy", "scipy", "thz_core", "__future__"} | set(sys.stdlib_module_names)
+    core_directory = pathlib.Path(ell.__file__).parent / "core"
+    violations = []
+    for source in sorted(core_directory.glob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level > 1:
+                    violations.append(f"{source.name}: relative import above core/")
+                    continue
+                roots = [] if node.level == 1 else [node.module.split(".")[0]]
+            else:
+                continue
+            violations.extend(f"{source.name}: imports {root}"
+                              for root in roots if root not in allowed_roots)
+    assert not violations, "\n".join(violations)

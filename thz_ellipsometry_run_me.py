@@ -7,12 +7,12 @@ Phase 2.
 
 Run it against real data:
 
-    .venv/bin/python run_me_ellipsometry.py
+    .venv/bin/python thz_ellipsometry_run_me.py
 
 Or against a synthetic dataset, with no bench and no files, to check the chain end to end:
 
-    .venv/bin/python run_me_ellipsometry.py --simulate hr_silicon
-    .venv/bin/python run_me_ellipsometry.py --simulate doped_silicon
+    .venv/bin/python thz_ellipsometry_run_me.py --simulate hr_silicon
+    .venv/bin/python thz_ellipsometry_run_me.py --simulate doped_silicon
 
 Design rationale and the error budget: reports/thz_ellipsometry_prospecting_report.md
 Build spec and validation gates:      docs/ELLIPSOMETRY_MVP_PLAN.md
@@ -28,10 +28,10 @@ import tempfile
 
 import numpy as np
 
-from ellipsometry import materials
-from ellipsometry.report import format_run_report, plot_run
-from ellipsometry.simulate import write_accumulation_files
-from ellipsometry.stages import run_ellipsometry
+from thz_ellipsometry.adapters.report import format_run_report, plot_run
+from thz_ellipsometry.adapters.stages import run_ellipsometry
+from thz_ellipsometry.adapters.synthetic_files import write_accumulation_files
+from thz_ellipsometry.core import materials
 
 DATA_ROOT = os.environ.get("THZ_DATA_ROOT", "/home/match/data")
 
@@ -167,7 +167,7 @@ def main(argv=None):
         config["data"]["directory"] = arguments.directory
 
     if not os.path.isdir(config["data"]["directory"]):
-        print(f"[run_me_ellipsometry] data directory does not exist: "
+        print(f"[thz_ellipsometry_run_me] data directory does not exist: "
               f"{config['data']['directory']}\n"
               f"   Point config['data']['directory'] at a real directory, set THZ_DATA_ROOT, "
               f"or run with --simulate hr_silicon.", file=sys.stderr)

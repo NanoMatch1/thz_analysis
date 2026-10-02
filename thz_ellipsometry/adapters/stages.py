@@ -13,12 +13,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .calibration import fit_instrument_from_references
+from ..core.calibration import fit_instrument_from_references
 from .loader import load_polarisation_series, spectra_from_traces
-from .materials import reference_index
-from .model import is_degenerate_azimuth
-from .pipeline import analyse_polarisation_series
-from .validation import validate_index_against_reference
+from ..core.materials import reference_index
+from ..core.model import is_degenerate_azimuth
+from ..core.pipeline import analyse_polarisation_series
+from ..core.validation import validate_index_against_reference
 
 __all__ = [
     "ELLIPSOMETRY_STAGES",

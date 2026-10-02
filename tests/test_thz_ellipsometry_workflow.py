@@ -13,22 +13,23 @@ import os
 import numpy as np
 import pytest
 
-from ellipsometry import loader, materials, simulate
-from ellipsometry.report import format_run_report, plot_run
-from ellipsometry.stages import ELLIPSOMETRY_STAGES, run_ellipsometry, stage_names
+from thz_ellipsometry.adapters import loader, synthetic_files
+from thz_ellipsometry.core import materials, simulate
+from thz_ellipsometry.adapters.report import format_run_report, plot_run
+from thz_ellipsometry.adapters.stages import ELLIPSOMETRY_STAGES, run_ellipsometry, stage_names
 
-import run_me_ellipsometry
+import thz_ellipsometry_run_me
 
 
 EMITTER_ANGLES_DEG = np.linspace(0.0, 180.0, 4, endpoint=False)
 # Follow the driver's own geometry rather than duplicating it, so a change to the specced
 # incidence angle does not silently desynchronise the synthesized data from the analysis.
-INCIDENCE_ANGLE_DEG = run_me_ellipsometry.config["geometry"]["incidence_angle_deg"]
+INCIDENCE_ANGLE_DEG = thz_ellipsometry_run_me.config["geometry"]["incidence_angle_deg"]
 
 
 def _base_config(directory, expect="hr_silicon"):
     import copy
-    config = copy.deepcopy(run_me_ellipsometry.config)
+    config = copy.deepcopy(thz_ellipsometry_run_me.config)
     config["data"]["directory"] = directory
     config["general"]["show_graph"] = False
     config["validation"]["expect"] = expect
@@ -37,7 +38,7 @@ def _base_config(directory, expect="hr_silicon"):
 
 def _write_dataset(directory, sample_name, *, relative_noise=0.002, drift_span_fs=30.0,
                    incidence_angle_deg=INCIDENCE_ANGLE_DEG, out_of_plane_tilt_deg=0.0):
-    return run_me_ellipsometry.build_simulated_dataset(
+    return thz_ellipsometry_run_me.build_simulated_dataset(
         str(directory), sample_name, incidence_angle_deg=incidence_angle_deg,
         emitter_angles_deg=EMITTER_ANGLES_DEG, relative_noise=relative_noise,
         drift_span_fs=drift_span_fs)
@@ -59,7 +60,7 @@ def test_polarisation_angle_parsed_from_the_repo_filename_grammar(filename, expe
 
 
 def test_accumulation_file_round_trips_through_the_writer_and_reader(tmp_path):
-    paths = simulate.write_accumulation_files(
+    paths = synthetic_files.write_accumulation_files(
         str(tmp_path), index_sample_function=materials.high_resistivity_silicon_index,
         emitter_angles_rad=np.deg2rad([0.0, 45.0]), sample_name="probe", scans_per_angle=3)
     assert len(paths) == 2
@@ -78,7 +79,7 @@ def test_loader_splits_sample_from_reference(tmp_path):
 
 
 def test_loader_explains_a_missing_polarisation_token(tmp_path):
-    simulate.write_accumulation_files(
+    synthetic_files.write_accumulation_files(
         str(tmp_path), index_sample_function=materials.high_resistivity_silicon_index,
         emitter_angles_rad=np.deg2rad([0.0]), sample_name="probe", angle_token="angle")
     with pytest.raises(ValueError, match="angle_token"):
@@ -170,7 +171,7 @@ def test_workflow_warns_about_a_degenerate_crystal_azimuth(tmp_path):
 
 
 def test_workflow_warns_when_too_few_angles_were_measured(tmp_path):
-    run_me_ellipsometry.build_simulated_dataset(
+    thz_ellipsometry_run_me.build_simulated_dataset(
         str(tmp_path), "hr_silicon", incidence_angle_deg=INCIDENCE_ANGLE_DEG,
         emitter_angles_deg=np.array([0.0, 60.0, 120.0]))
     outcome = run_ellipsometry(_base_config(str(tmp_path)))
@@ -189,9 +190,9 @@ def test_run_report_and_figure_render_headlessly(tmp_path):
 
 
 def test_driver_main_runs_in_simulation_mode_and_reports_success():
-    assert run_me_ellipsometry.main(["--simulate", "hr_silicon", "--no-graph"]) == 0
+    assert thz_ellipsometry_run_me.main(["--simulate", "hr_silicon", "--no-graph"]) == 0
 
 
 def test_driver_main_reports_a_missing_directory_instead_of_crashing(tmp_path):
-    assert run_me_ellipsometry.main(
+    assert thz_ellipsometry_run_me.main(
         ["--directory", str(tmp_path / "absent"), "--no-graph"]) == 2
