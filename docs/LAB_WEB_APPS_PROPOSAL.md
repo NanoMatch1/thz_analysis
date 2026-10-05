@@ -4,6 +4,34 @@
 repos: `TDS-app` (acquisition), `thz-core` (science), `thz_analysis` (pipeline). Status of this
 proposal lives in `~/.claude/global_projects.md`, not here.*
 
+**Parked until the ellipsometry work is finished. This is the starting point to come back to.**
+It lives in `thz_analysis` because the tools, the catalogue and the pipeline are here; the
+TDS-app memory points at it. When the build starts, the web app's code belongs in TDS-app (it is
+the bench's UI), the tool contract in thz-core (shared by both apps), and the bundle browser here.
+
+## Decisions taken (2026-10-05, Samuel's replies)
+
+- **Diagnostics only, for now.** The first web app is the read-only health page. Hardware control
+  (motors, split scan, setup) is deferred; leave room for it, build none of it.
+- **The tool contract is agreed as described in 1.2:** the app knows nothing about any individual
+  tool; everything (help, tooltips, parameters, payload) comes with the tool.
+- **Humidity: warn, never block; correct, don't wait.** Samuel's operating numbers: at least
+  **30 min after a fully opened box**, at least **10 min after a small lid lift** for an optic
+  adjustment. The criterion that matters is "did the spectrum change from reference to sample", so
+  a little residual water is fine as long as it is CONSISTENT across what is being ratioed. (He is
+  also considering a glove-port lid, which removes the lid-lift disturbance.)
+- **Bundle notes move to the END of the script**, as a prompt on saving (§1.5a), because entering
+  them up front is the reason the catalogue is hard to read.
+- **Two separate apps** confirmed.
+- **Health page runs locally** on the acquisition PC; the out-of-memory machine is getting a
+  factory reset, expected to be enough.
+- **Data on disk:** the py2 app writes the `.acc` at the end (save button), and probably a backup
+  after each acquisition — to be confirmed. If confirmed, the folder-watching route gets
+  per-acquisition cadence; if not, the health page needs that backup or an event stream.
+- **`tds_core` phase 1 is committed** (Samuel, 2026-10-05).
+- **The browser indexes the catalogue root only.** `~/data/data_sync` is a transfer route to the Pi
+  for development, not a data home.
+
 ---
 
 ## 0. Two facts that change the framing
@@ -12,9 +40,8 @@ proposal lives in `~/.claude/global_projects.md`, not here.*
    (TDS-app memory `py3_port_decisions.md`): headless `tds_core`, no Qt port, a **web UI replaces
    the desktop GUI and eventually absorbs `orchestrator/experiment_gui.py`**, keep serving the
    9100/9101 socket protocol during the overlap, **reuse `thz-core/metrics.py` for live quality
-   verdicts**, bind to localhost + VPN, single-writer control lock. Phase 1 of `tds_core` exists
-   on `feature/tds-core` — **uncommitted** (staged renames plus untracked files, as of
-   2026-10-05). That is the same exposure that lost the thz-core work in August; commit it.
+   verdicts**, bind to localhost + VPN, single-writer control lock. Phase 1 of `tds_core` is on
+   `feature/tds-core` (committed by Samuel 2026-10-05).
    So the question is not "py2 or py3 for the web app" — the web app is py3 by decision. The
    question is only how long the py2 app stays the acquisition engine underneath it.
 
@@ -103,6 +130,22 @@ Advise on change and usability, not on absolute RH, unless a sensor is added.
 - The `.gitignore` rule from the TDS-app cleanup (`**/data/**/*.dat|acc|ndjson`) already covers
   sidecars in data folders.
 
+### 1.5a Bundle notes at the end, as a save prompt — **YES, with three refinements**
+
+Samuel's diagnosis: notes go in the config before processing, often for a directory change on the
+same script, so they are skipped or wrong. Asking at the end, when the result is on screen, gets
+better descriptions.
+
+- **Pre-fill what the machine knows** (script, input directory, sample/reference names, key config
+  values, diagnostic flags, git SHA), so the prompt asks only for the meaning: "what is this
+  dataset and why was it run".
+- **Never block automation.** Headless runs and tests must not hang on `input()`: a config flag or
+  environment variable selects "prompt", "use config notes" or "none", and a non-interactive
+  session falls back to the pre-filled summary.
+- **Make notes editable afterwards** (`catalog_browse.py --annotate <bundle_id>`, re-indexed), so a
+  run saved in a hurry can be described properly later — the prompt is the convenient path, not
+  the only one.
+
 ### 1.5 A second web app to browse processed bundles — **YES, cheap, but fix provenance first**
 
 The index already exists: `dataset_core/adapters/catalog` + `catalog_browse.py` (find by type,
@@ -128,9 +171,8 @@ analysis machine. They share the tool contract and the plotting component, not a
 ## 2. Practical constraints to check before building
 
 - **Memory on the acquisition PC.** It ran out of memory with the py2 app resident (OpenBLAS
-  failure, 2026-08-26). A py3 web backend running numpy/scipy tools alongside needs
-  `OPENBLAS_NUM_THREADS=1` at minimum, and possibly to run on another machine that watches the
-  data folder over the network. Measure before choosing.
+  failure, 2026-08-26). Decision: run locally after a factory reset. Still pin
+  `OPENBLAS_NUM_THREADS=1` in the backend, and measure.
 - **Where the data stream comes from.** Two options: (a) watch the data folder — works with the
   py2 app today with zero changes, and the same code runs offline; (b) an event stream from the
   socket server / `tds_core` phase 2 — lower latency, needs the engine. **Start with (a).** It
@@ -159,12 +201,9 @@ innermost loop.
 
 ---
 
-## 4. Open questions for Samuel
+## 4. Still open
 
-1. Which machine should run the health page: the acquisition PC (memory?) or a separate one
-   watching the data share?
-2. Does the py2 app write each scan to disk as it completes, or only at the end of an
-   accumulation? (Sets the finest cadence the folder-watching route can offer.)
-3. Commit the uncommitted `tds_core` phase-1 work on `feature/tds-core`?
-4. For the bundle browser: is `THZ_CATALOG_ROOT` the right single root, given data now also
-   arrives via `~/data/data_sync`?
+1. Confirm whether the py2 app writes a per-acquisition backup, and where (sets the health page's
+   cadence).
+2. After the factory reset: measure free memory with the py2 app running before relying on the
+   local health page.
