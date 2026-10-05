@@ -91,6 +91,12 @@ The TILT is what identifies water specifically: a laser power drift scales the w
 - **Why it matters:** A drift that reaches the search bound has been clipped, and the part that was not fitted remains as a phase error in rho (1.5 fs is ~0.9% at 1 THz).
 - **If it fails:** Shorten the acquisition or cycle the states faster; check the lab temperature and the purge; raise maximum_drift_fs only if the drift is real.
 
+### the acquisition order lets the drift be told apart from the channel ratio
+
+- **Check:** `drift_separable_from_ratio` (severity when broken: **warn**)
+- **Why it matters:** A drift is measured by seeing the SAME polarisation state at different times. In a single pass 0/90/180/270 on gold with C ~ -1 the p and s channels are equal, so 0 and 90 (and 180 and 270) look alike and a drift between them is, to first order, a change of P/Q -- exactly the calibration. The fit then returns a number, but a biased one (F40: index error 0.026 -> 0.14 with no purge at all).
+- **If it fails:** Record the block as a palindrome (0,90,180,270,270,180,90,0): it revisits every state and separates drift from C at any channel ratio.
+
 ### the fitted amplitude drift across a block is a few percent at most
 
 - **Check:** `amplitude_drift_small` (severity when broken: **warn**)

@@ -86,12 +86,19 @@ config: dict = {
         # Fit a polarisation-independent background: equivalent to the plan's +/-M
         # differencing for 0/90/180/270, and valid for unpaired angle sets too.
         "background_term": True,
-        # 'linear_ramp' over the REAL elapsed time from the file timestamps (F35). Interleave
-        # the acquisition: cycle 0/90/180/270 repeatedly rather than one block per state.
-        "drift_model": "linear_ramp",
-        # Per-acquisition scale drift (laser power, broadband purge loss): differential between
-        # magnet states, so it does not cancel. A one-parameter ramp is well determined.
-        "amplitude_model": "linear_ramp",
+        # Purge drift between magnet states does not cancel, so it is modelled over the REAL
+        # elapsed time (F35, F40): a delay (gas exchange) plus a gain and a spectral TILT (water;
+        # unresolved lines on a short record look like a log-amplitude tilt, linear in f).
+        # 'auto' picks by block length: 4 acquisitions -> linear delay + 'tilt_ramp';
+        # 8+ (the palindrome 0,90,180,270,270,180,90,0) -> exponential 'settling' delay and
+        # 'tilt_settling' gain + tilt (rates fitted): removes the measured purge transient 10 min
+        # after closing the box.
+        # USE THE PALINDROME: a single pass can only separate drift from the channel ratio when
+        # C ~ +1 (F40); the drift_separable diagnostic reports when it could not.
+        # Explicit choices: drift 'none'|'linear_ramp'|'settling'|'per_acquisition';
+        # amplitude 'none'|'linear_ramp'|'tilt_ramp'|'tilt_settling'|'per_acquisition'.
+        "drift_model": "auto",
+        "amplitude_model": "auto",
     },
     "detection": {
         # Probe polarisation from the GaP [001] axis. 31.72 deg balances the two channels;

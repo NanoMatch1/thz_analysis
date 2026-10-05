@@ -1110,6 +1110,40 @@ rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a 
    nesting {sample/ref block: {probe setting: {magnet state}}}; identical open/wait/scan routine
    per state so the transient is common-mode; palindromic order when time allows.
 
+### F40 — The purge's spectral signature is one shape (delay + gain + linear-in-f log-amplitude tilt); with a palindrome and exponential settling models it is fully correctable 10 min after closing; and a SINGLE PASS cannot separate drift from the calibration when C ~ -1 *(2026-10-05, August purge data `data_sync/diagnostics/2026-08-20_humidity_and_purge_CNT`, `explorations/thz_ellipsometry/purge_spectral_template.py`)*
+
+1. **One shape.** Each scan's complex log-ratio to the purged end of the 12mm run (128 scans,
+   95 min, from an unpurged box) decomposes into flat gain + log-amplitude TILT linear in f +
+   phase offset + delay, leaving 0.3% rms; the first SVD mode holds 98.4% of the variance. On a
+   ~6.7 ps record the water lines are unresolved (0.15 THz resolution), so the water appears only
+   as this tilt — no line template is needed or possible. Time constants agree with F32: delay
+   39 min, gain 44 min, tilt 42 min.
+2. **Sample independence: partly.** Gold and CNT show the same kind of change (first-mode
+   correlation 0.72), but the tilt-to-delay ratio differs 1.8x between runs, and the gold run
+   settled with tau 8-13 min, not ~40. Most plausibly a different purge history (fast gas
+   exchange vs slow wall-water desorption; consistent with Samuel's 10 min after a lid lift vs
+   30 min after a full opening) rather than the sample — this data cannot separate the two.
+   Consequence: delay, gain and tilt are fitted as INDEPENDENT terms, not one locked template,
+   and tau is fitted, not assumed.
+3. **Correction beats waiting (Samuel's position, now quantified).** Blocks of 4-scan
+   acquisitions starting 10/30/60 min after closing: a linear ramp leaves 0.86/0.68/0.15 fs of
+   delay against 0.29 fs averaged noise; a curved model reaches the noise. In the full harmonic
+   fit, a palindrome with an exponential `settling` delay and `tilt_settling` gain+tilt (rates
+   fitted) removes the measured transient EXACTLY (noise-free |dN| 1.2e-4 vs 1.4e-4 clean; 6
+   noisy seeds 0.0133 vs 0.0129), even starting 10 min after closing.
+4. **A quadratic is the wrong curve, and it showed why model misfit matters.** A quadratic
+   approximates the exponential to ~0.4 fs, but with a background term that misfit leaks into
+   P/Q through a near-degeneracy that opens when C ~ -1 (|dN| 0.07 noise-free). Removed in favour
+   of the exact exponential family (which contains the line as its zero-rate limit).
+5. **The finding that changes the bench protocol: a single pass 0/90/180/270 cannot separate
+   drift from C when C ~ -1** — gold's channels are then equal (P = Q), so 0 and 90 (and 180 and
+   270) produce the same signal and a drift between those neighbours looks like a change of P/Q.
+   With NO purge, the drift terms raise the index error from 0.026 to 0.14 at C = -1 and cost
+   nothing at C = +1 or +/-0.27. The plan's crystal mounting ([001] along s) gives C ~ -1. A
+   PALINDROME revisits every state at two times and is unaffected at every orientation. New
+   noise-independent diagnostic `drift_separable_from_ratio` uses the "revisit lever arm" (how
+   far apart in time the same signal was seen twice): 0.33 for the bad case, 1.0 otherwise.
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].

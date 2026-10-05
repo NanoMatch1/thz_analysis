@@ -399,3 +399,39 @@ def test_amplitude_ramp_is_fitted_and_without_it_the_ratio_is_biased():
     error_fitted = np.median(np.abs(fitted.channel_ratio / truth.channel_ratio - 1.0))
     error_ignored = np.median(np.abs(ignored.channel_ratio / truth.channel_ratio - 1.0))
     assert error_fitted < 0.002 < error_ignored
+
+
+def test_spectral_tilt_ramp_is_recovered_and_a_flat_ramp_cannot_absorb_it():
+    """The purge's water signature on a short record is a log-amplitude TILT (F40)."""
+    measured = _series(DOPED, elapsed_seconds=ELAPSED, tilt_drift_per_thz=0.04,
+                       background_relative=0.05, relative_noise=0.0005, seed=8)
+    clean = _series(DOPED, elapsed_seconds=ELAPSED)
+    truth = harmonic.fit_emitter_harmonic(MAGNET_STATES, clean.spectra, FREQUENCIES,
+                                          elapsed_seconds=ELAPSED, drift_model="none")
+    tilted = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                           elapsed_seconds=ELAPSED, background_term=True,
+                                           amplitude_model="tilt_ramp")
+    flat = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                         elapsed_seconds=ELAPSED, background_term=True,
+                                         amplitude_model="linear_ramp")
+    assert tilted.fitted_tilt_change_per_thz == pytest.approx(0.04, abs=0.003)
+    error_tilted = np.median(np.abs(tilted.channel_ratio / truth.channel_ratio - 1.0))
+    error_flat = np.median(np.abs(flat.channel_ratio / truth.channel_ratio - 1.0))
+    assert error_tilted < 0.002 < error_flat
+
+
+def test_auto_nuisance_models_are_linear_for_one_pass_and_curved_for_a_palindrome():
+    from thz_ellipsometry.adapters.stages import resolve_nuisance_models
+    assert resolve_nuisance_models("auto", "auto", 4) == ("linear_ramp", "tilt_ramp")
+    assert resolve_nuisance_models("auto", "auto", 8) == ("settling", "tilt_settling")
+    assert resolve_nuisance_models("none", "linear_ramp", 8) == ("none", "linear_ramp")
+
+
+def test_settling_profile_spans_zero_to_one_and_is_the_exact_exponential():
+    abscissa = np.linspace(0.0, 1.0, 9)
+    assert np.allclose(harmonic.settling_profile(abscissa, 0.0), abscissa)
+    for rate in (-2.0, 0.5, 3.0):
+        profile = harmonic.settling_profile(abscissa, rate)
+        assert profile[0] == pytest.approx(0.0) and profile[-1] == pytest.approx(1.0)
+        exponential = 1.0 - np.exp(-rate * abscissa)
+        assert np.allclose(profile, exponential / exponential[-1])

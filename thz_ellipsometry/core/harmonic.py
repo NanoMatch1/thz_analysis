@@ -51,7 +51,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 __all__ = ["AMPLITUDE_MODELS", "DRIFT_MODELS", "HarmonicFit", "fit_emitter_harmonic",
-           "harmonic_residual_norm"]
+           "harmonic_residual_norm", "revisit_lever_arm", "settling_profile"]
 
 
 @dataclass(frozen=True)
@@ -74,8 +74,14 @@ class HarmonicFit:
     reduced_chi_square: float | None = None
     elapsed_seconds: np.ndarray | None = None
     emitter_angles_rad: np.ndarray | None = None
-    amplitudes: np.ndarray | None = None   #: (n_acquisitions,) fitted scale, first = 1
+    amplitudes: np.ndarray | None = None   #: (n_acquisitions,) fitted scale at 1 THz, first = 1
+    #: (n_acquisitions,) fitted d ln(scale)/df per THz, for amplitude_model='tilt_ramp'
+    amplitude_tilts_per_thz: np.ndarray | None = None
     amplitude_model: str = "none"
+    #: Standard errors of the nuisance parameters in fit order (delay terms in fs, then the
+    #: amplitude terms); None when there are none. Large = not separable from P/Q.
+    nuisance_parameter_errors: np.ndarray | None = None
+    nuisance_parameter_names: tuple = ()
 
     @property
     def channel_ratio(self):
@@ -113,6 +119,12 @@ class HarmonicFit:
         """Largest fractional change in acquisition scale across the series (0 if not fitted)."""
         return 0.0 if self.amplitudes is None else float(np.ptp(self.amplitudes))
 
+    @property
+    def fitted_tilt_change_per_thz(self):
+        """Change in spectral tilt (d ln a / df, per THz) across the series; 0 if not fitted."""
+        return (0.0 if self.amplitude_tilts_per_thz is None
+                else float(np.ptp(self.amplitude_tilts_per_thz)))
+
 
 def _design_matrix(emitter_angles_rad, background_term):
     angles = np.asarray(emitter_angles_rad, dtype=float)
@@ -142,6 +154,9 @@ def _delays_from_parameters(parameters, drift_model, acquisition_count, elapsed_
         return np.zeros(acquisition_count)
     if drift_model == "linear_ramp":
         return parameters[0] * 1e-15 * _ramp_abscissa(acquisition_count, elapsed_seconds)
+    if drift_model == "settling":
+        return parameters[0] * 1e-15 * settling_profile(
+            _ramp_abscissa(acquisition_count, elapsed_seconds), parameters[1])
     if drift_model == "per_acquisition":
         delays = np.zeros(acquisition_count)
         delays[1:] = np.asarray(parameters, dtype=float) * 1e-15
@@ -149,32 +164,73 @@ def _delays_from_parameters(parameters, drift_model, acquisition_count, elapsed_
     raise ValueError(f"unknown drift_model {drift_model!r}; known: {sorted(DRIFT_MODELS)}")
 
 
-#: Nuisance parameter count for each drift model, given the number of acquisitions.
+def settling_profile(abscissa, rate):
+    """0 -> 1 over the block along an exponential settle; ``rate`` = block length / tau.
+
+    (1 - exp(-rate x)) / (1 - exp(-rate)): rate -> 0 is the straight line, rate > 0 a transient
+    that is slowing down (a purge settling), rate < 0 one speeding up. This is the EXACT shape of
+    a single purge transient, so -- unlike a quadratic -- it leaves no model misfit for other
+    terms to absorb. That matters: with a background column, a quadratic's small misfit can leak
+    into P/Q through a near-degeneracy that opens for some channel ratios (F40).
+    """
+    abscissa = np.asarray(abscissa, dtype=float)
+    if abs(rate) < 1e-6:
+        return abscissa
+    return np.expm1(-rate * abscissa) / np.expm1(-rate)
+
+
+#: drift model -> the names of its parameters for a given number of acquisitions. The one place
+#: a drift model is declared; its parameter count is len(names).
 DRIFT_MODELS = {
-    "none": lambda acquisition_count: 0,
-    "linear_ramp": lambda acquisition_count: 1,
-    "per_acquisition": lambda acquisition_count: max(acquisition_count - 1, 0),
+    "none": lambda count: (),
+    "linear_ramp": lambda count: ("delay_span_fs",),
+    # A purge settling after a disturbance is an exponential with a tau that depends on the
+    # disturbance (13-40 min measured); the rate is fitted. Not a quadratic: its small misfit
+    # leaks into P/Q through the background when C ~ -1 (F40). purge_spectral_template.py.
+    "settling": lambda count: ("delay_span_fs", "settling_rate"),
+    "per_acquisition": lambda count: tuple(f"delay_{k}_fs" for k in range(1, count)),
 }
 
 
+#: Frequency about which the spectral tilt is defined, so the gain term means "scale at 1 THz".
+TILT_REFERENCE_HZ = 1.0e12
+
+
 def _amplitudes_from_parameters(parameters, amplitude_model, acquisition_count,
-                                elapsed_seconds=None):
-    """Per-acquisition scale, gauge-fixed with the first acquisition at 1."""
+                                elapsed_seconds=None, frequencies_hz=None):
+    """Per-acquisition scale, (n_acquisitions, n_frequencies), first acquisition = 1.
+
+    'tilt_ramp' is the purge model: water removal raises the amplitude more at high frequency,
+    and on a short record (unresolved lines) that shows as a log-amplitude TILT, linear in f to
+    0.3% (purge_spectral_template.py, August purge data): ln a_k(f) = x_k (g + t (f - 1 THz)).
+    """
+    columns = 1 if frequencies_hz is None else np.size(frequencies_hz)
     if amplitude_model == "none":
-        return np.ones(acquisition_count)
+        return np.ones((acquisition_count, columns))
+    abscissa = _ramp_abscissa(acquisition_count, elapsed_seconds)[:, None]
     if amplitude_model == "linear_ramp":
-        return 1.0 + parameters[0] * _ramp_abscissa(acquisition_count, elapsed_seconds)
+        return np.repeat(1.0 + parameters[0] * abscissa, columns, axis=1)
+    if amplitude_model in ("tilt_ramp", "tilt_settling"):
+        offset_thz = (np.asarray(frequencies_hz, dtype=float) - TILT_REFERENCE_HZ)[None, :] / 1e12
+        profile = (abscissa if amplitude_model == "tilt_ramp"
+                   else settling_profile(abscissa, parameters[2]))
+        return np.exp(profile * (parameters[0] + parameters[1] * offset_thz))
     if amplitude_model == "per_acquisition":
-        return np.concatenate([[1.0], np.exp(np.asarray(parameters, dtype=float))])
+        values = np.concatenate([[1.0], np.exp(np.asarray(parameters, dtype=float))])
+        return np.repeat(values[:, None], columns, axis=1)
     raise ValueError(f"unknown amplitude_model {amplitude_model!r}; known: "
                      f"{sorted(AMPLITUDE_MODELS)}")
 
 
-#: Nuisance parameter count for each amplitude model, given the number of acquisitions.
+#: amplitude model -> the names of its parameters for a given number of acquisitions.
 AMPLITUDE_MODELS = {
-    "none": lambda acquisition_count: 0,
-    "linear_ramp": lambda acquisition_count: 1,
-    "per_acquisition": lambda acquisition_count: max(acquisition_count - 1, 0),
+    "none": lambda count: (),
+    "linear_ramp": lambda count: ("gain",),
+    "tilt_ramp": lambda count: ("gain", "tilt_per_thz"),
+    # The water part of a purge settles exponentially too (tau ~47 min vs ~38 for the gas), so
+    # over a block that starts soon after closing the tilt needs its own settling rate.
+    "tilt_settling": lambda count: ("gain", "tilt_per_thz", "tilt_settling_rate"),
+    "per_acquisition": lambda count: tuple(f"log_gain_{k}" for k in range(1, count)),
 }
 
 
@@ -189,8 +245,8 @@ def _solve_linear(design, spectra, frequencies_hz, delays_s, weights, amplitudes
     derotated = np.asarray(spectra) * phase
     if amplitudes is not None:
         # Divide out the scale; the noise is divided with it, so the weights scale by a^2.
-        derotated = derotated / amplitudes[:, None]
-        weights = weights * amplitudes[:, None] ** 2
+        derotated = derotated / amplitudes
+        weights = weights * amplitudes**2
     # normal[f] = A^T diag(w_f) A ; right_hand_side[f] = A^T diag(w_f) b_f
     normal = np.einsum("kf,ki,kj->fij", weights, design, design)
     right_hand_side = np.einsum("kf,ki,kf->fi", weights, design, derotated)
@@ -198,7 +254,7 @@ def _solve_linear(design, spectra, frequencies_hz, delays_s, weights, amplitudes
     solution = np.einsum("fij,fj->if", inverse_normal, right_hand_side)
     residual = derotated - design @ solution
     if amplitudes is not None:
-        residual = residual * amplitudes[:, None]   # back in measured units
+        residual = residual * amplitudes            # back in measured units
     return solution, residual, inverse_normal
 
 
@@ -261,11 +317,13 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
             f"the emitter angles are degenerate; {what} cannot be separated "
             f"(angles: {np.round(np.rad2deg(emitter_angles_rad), 3).tolist()} deg)")
 
-    delay_parameter_count = DRIFT_MODELS[drift_model](acquisition_count)
+    if drift_model not in DRIFT_MODELS:
+        raise ValueError(f"unknown drift_model {drift_model!r}; known: {sorted(DRIFT_MODELS)}")
+    delay_parameter_count = len(DRIFT_MODELS[drift_model](acquisition_count))
     if amplitude_model not in AMPLITUDE_MODELS:
         raise ValueError(f"unknown amplitude_model {amplitude_model!r}; known: "
                          f"{sorted(AMPLITUDE_MODELS)}")
-    amplitude_parameter_count = AMPLITUDE_MODELS[amplitude_model](acquisition_count)
+    amplitude_parameter_count = len(AMPLITUDE_MODELS[amplitude_model](acquisition_count))
     parameter_count = delay_parameter_count + amplitude_parameter_count
     # Each acquisition contributes two real numbers per frequency against the 2*n_columns of the
     # linear unknowns, so a nuisance shared across frequencies needs one spare acquisition; a
@@ -299,11 +357,13 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
                                          acquisition_count, elapsed_seconds)
         amplitudes = _amplitudes_from_parameters(parameters[delay_parameter_count:],
                                                  amplitude_model, acquisition_count,
-                                                 elapsed_seconds)
+                                                 elapsed_seconds, frequencies_hz)
         return delays, amplitudes
 
+    nuisance_errors = None
     if parameter_count == 0:
-        delays, amplitudes = np.zeros(acquisition_count), np.ones(acquisition_count)
+        delays = np.zeros(acquisition_count)
+        amplitudes = np.ones((acquisition_count, frequency_count))
     else:
         def residual_vector(parameters):
             trial_delays, trial_amplitudes = nuisance(parameters)
@@ -316,9 +376,19 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         # 50% scale change or e^0.5 is far outside anything physical).
         bound = np.concatenate([maximum_drift_fs * np.ones(delay_parameter_count),
                                 0.5 * np.ones(amplitude_parameter_count)])
-        result = least_squares(residual_vector, np.zeros(parameter_count),
+        start = np.zeros(parameter_count)
+        names = (DRIFT_MODELS[drift_model](acquisition_count)
+                 + AMPLITUDE_MODELS[amplitude_model](acquisition_count))
+        for position, name in enumerate(names):
+            if name.endswith("settling_rate"):
+                # The rate is block length / tau: +/-10 spans tau from a tenth of the block to
+                # infinity. Start at a moderate settle; at rate 0 its gradient vanishes.
+                bound[position] = 10.0
+                start[position] = 1.0
+        result = least_squares(residual_vector, start,
                                bounds=(-bound, bound), xtol=1e-12, ftol=1e-12)
         delays, amplitudes = nuisance(result.x)
+        nuisance_errors = _nuisance_standard_errors(result, spectral_variance is not None)
 
     solution, residual, inverse_normal = _solve_linear(design, spectra, frequencies_hz, delays,
                                                        weights, amplitudes)
@@ -360,9 +430,72 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         elapsed_seconds=None if elapsed_seconds is None else np.asarray(elapsed_seconds,
                                                                         dtype=float),
         emitter_angles_rad=emitter_angles_rad,
-        amplitudes=None if amplitude_model == "none" else amplitudes,
+        amplitudes=(None if amplitude_model == "none"
+                    else amplitudes[:, int(np.argmin(np.abs(frequencies_hz
+                                                            - TILT_REFERENCE_HZ)))]),
+        amplitude_tilts_per_thz=(None if not amplitude_model.startswith("tilt") else np.polyfit(
+            frequencies_hz / 1e12, np.log(amplitudes).T, 1)[0]),
         amplitude_model=amplitude_model,
+        nuisance_parameter_errors=nuisance_errors,
+        nuisance_parameter_names=(DRIFT_MODELS[drift_model](acquisition_count)
+                                  + AMPLITUDE_MODELS[amplitude_model](acquisition_count)),
     )
+
+
+
+
+def _nuisance_standard_errors(result, weighted):
+    """Standard errors of the drift/amplitude parameters, from the variable-projection Jacobian.
+
+    The Jacobian is of the residual AFTER the linear unknowns (P, Q, B) are re-solved, so a
+    nuisance parameter that trades against them -- the case where drift cannot be told apart
+    from the channel ratio -- shows up as a large error here. Rank deficiency is reported as
+    infinite, never hidden by a pseudo-inverse.
+    """
+    jacobian = result.jac
+    dof = max(result.fun.size - result.x.size, 1)
+    # A weighted residual is in units of sigma (reduced chi-square ~1 when the noise model is
+    # right); scale by the observed scatter either way so a wrong noise model cannot shrink it.
+    scale = float(np.sum(result.fun**2) / dof)
+    singular_values = np.linalg.svd(jacobian, compute_uv=False)
+    if singular_values.size < result.x.size or singular_values[-1] <= 1e-10 * singular_values[0]:
+        return np.full(result.x.size, np.inf)
+    covariance = np.linalg.inv(jacobian.T @ jacobian) * scale
+    return np.sqrt(np.maximum(np.diag(covariance), 0.0))
+
+
+def revisit_lever_arm(fit, band=None, similarity_threshold=0.95):
+    """How far apart in time the series saw the SAME signal twice, as a fraction of the block.
+
+    A drift is pinned by measuring an identical state at two different times. Compute each
+    acquisition's expected signal from the fit (P cos a + Q sin a + B), find pairs that are
+    nearly identical (normalised complex correlation above the threshold, same sign), and
+    return the largest time separation among them, over the block length. 1.0 = the first and
+    last acquisitions repeat each other (best); a small value = only neighbours repeat, and a
+    drift between them is indistinguishable from a change of P/Q (F40). Returns 0.0 when no
+    pair repeats -- the drift then rests on the frequency structure alone.
+
+    Independent of the noise level, unlike a parameter error, so it reads the same on a quiet
+    and a noisy run.
+    """
+    angles = np.asarray(fit.emitter_angles_rad, dtype=float)
+    band = slice(None) if band is None else np.asarray(band, dtype=bool)
+    signals = (np.cos(angles)[:, None] * fit.channel_p[None, band]
+               + np.sin(angles)[:, None] * fit.channel_s[None, band])
+    if fit.background is not None:
+        signals = signals + fit.background[None, band]
+    norms = np.linalg.norm(signals, axis=1)
+    times = (np.arange(angles.size, dtype=float) if fit.elapsed_seconds is None
+             else np.asarray(fit.elapsed_seconds, dtype=float))
+    span = np.ptp(times) or 1.0
+    lever = 0.0
+    for first in range(angles.size):
+        for second in range(first + 1, angles.size):
+            similarity = np.real(np.vdot(signals[first], signals[second])) / (
+                norms[first] * norms[second] or 1.0)
+            if similarity >= similarity_threshold:
+                lever = max(lever, abs(times[second] - times[first]) / span)
+    return float(lever)
 
 
 def harmonic_residual_norm(emitter_angles_rad, spectra, frequencies_hz):

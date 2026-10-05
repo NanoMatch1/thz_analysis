@@ -48,10 +48,19 @@ cancels. **Only drift inside a block matters**, so for every magnet change insid
 - **Make every disturbance identical:** same open time, same wait before the first scan, same
   number of scans. The purge transient then becomes the same function of time-since-closing for
   every state, which is common-mode, not differential.
-- **Order the states as a palindrome when time allows:** 0, 90, 180, 270, 270, 180, 90, 0. A
-  linear drift then cancels by symmetry, and the drift fit gets leverage. A single pass of
-  0/90/180/270 is the minimum: four states are needed for the background term plus one drift
-  parameter.
+- **Record every block as a palindrome: 0, 90, 180, 270, 270, 180, 90, 0.** (Changed
+  2026-10-05, F40 — no longer optional.) Drift is measured by seeing the same state twice at
+  different times. In a single pass with the crystal mounted [001]-along-s, gold's p and s
+  channels come out equal, so 0 and 90 look alike and a drift between them is
+  indistinguishable from the calibration itself: the result is biased even with no purge at
+  all (simulated index error 0.026 -> 0.14). The palindrome revisits every state and removes
+  this at any crystal orientation. If time is short, take FEWER SCANS per state, not a single
+  pass. The `drift_separable_from_ratio` check flags a block where this went wrong.
+- **What the palindrome buys with the purge (August data, F40):** the analysis fits an
+  exponential settling of the delay and of the water tilt, and removes the measured transient
+  completely even when a block starts 10 min after the box was closed. So your operating
+  numbers stand — at least 30 min after a full opening, 10 min after a small lid lift — and
+  waiting longer buys essentially nothing.
 
 ---
 
@@ -125,8 +134,10 @@ At ~2 min/scan with 4–6 scans per state plus T_eq per state, a single-pass blo
 **Log for every file:** the magnet reading actually set, the time the box was closed, anything
 touched. A paper log is fine.
 
-The analysis now also fits a per-acquisition AMPLITUDE ramp (laser power, broadband purge loss),
-alongside the delay ramp; both are reported, and a change of more than 5% across a block is flagged.
+The analysis fits, per acquisition, the purge's three signatures: a delay (gas exchange), a gain,
+and a spectral tilt (water; unresolved lines on a short record look like a log-amplitude tilt
+linear in frequency). With a palindrome they settle exponentially with fitted rates. Large
+changes are reported as advisories, never as stops.
 
 ---
 

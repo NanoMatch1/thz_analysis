@@ -388,4 +388,10 @@ Design deviations only (progress lives in `~/.claude/global_projects.md`, not he
 - **Bench tools** (`core/bench.py` pure; `adapters/bench_tools.py` with a `@bench_tool` registry;
   `thz_ellipsometry_bench_run_me.py`): wire-grid nulls (paired sweeps share a background), purge
   settling, HWP walk (plan sec. 7.8). These were not in the plan; they serve the bench sessions.
+- **Purge nuisance models** (F40): drift `settling` (exponential, rate fitted) and amplitude
+  `tilt_settling` / `tilt_ramp` (gain + log-amplitude tilt linear in f); `auto` picks them by
+  block length. A quadratic was tried and removed (its misfit leaks into P/Q when C ~ -1).
+  Model parameter names are declared once, in `DRIFT_MODELS` / `AMPLITUDE_MODELS`.
+- **Acquisition order is part of the method:** palindromic blocks, because a single pass cannot
+  separate drift from C when C ~ -1; `revisit_lever_arm` + `drift_separable_from_ratio` detect it.
 

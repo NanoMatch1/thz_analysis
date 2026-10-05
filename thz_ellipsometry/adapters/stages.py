@@ -168,17 +168,42 @@ def estimate_noise(config, series, transformed):
                                  minimum_scans=settings.get("minimum_scans", 3))
 
 
+#: Below this many acquisitions the curved (exponential settling) delay overfits: four
+#: acquisitions with a background leave one complex number of redundancy per frequency.
+CURVED_DRIFT_MINIMUM_ACQUISITIONS = 8
+
+
+def resolve_nuisance_models(drift_model, amplitude_model, acquisition_count):
+    """Turn 'auto' into concrete models for a series of this length.
+
+    Measured on the August purge transient (purge_spectral_template.py + simulation, F40): a
+    palindrome of eight or more takes an exponential 'settling' delay and an exponentially
+    settling gain + spectral tilt (rates fitted), which removes the measured purge transient
+    10 min after closing the box, at any channel ratio. A single pass of four cannot carry the curved delay,
+    and its drift is only separable from C when C ~ +1 -- hence the identifiability diagnostic.
+    """
+    curved = acquisition_count >= CURVED_DRIFT_MINIMUM_ACQUISITIONS
+    if drift_model == "auto":
+        drift_model = "settling" if curved else "linear_ramp"
+    if amplitude_model == "auto":
+        amplitude_model = "tilt_settling" if curved else "tilt_ramp"
+    return drift_model, amplitude_model
+
+
 @ellipsometry_stage
 def fit_harmonic(config, series, transformed, noise):
     """Fit P, Q (and background, drift) to one series, weighted by its noise when known."""
     acquisition = _section(config, "acquisition")
+    drift_model, amplitude_model = resolve_nuisance_models(
+        acquisition.get("drift_model", "auto"), acquisition.get("amplitude_model", "auto"),
+        len(series))
     return fit_emitter_harmonic(
         series.angles_rad, transformed.spectra, transformed.frequencies_hz,
-        drift_model=acquisition.get("drift_model", "linear_ramp"),
+        drift_model=drift_model,
         elapsed_seconds=series.elapsed_seconds,
         background_term=acquisition.get("background_term", True),
         spectral_variance=noise.spectral_variance,
-        amplitude_model=acquisition.get("amplitude_model", "linear_ramp"))
+        amplitude_model=amplitude_model)
 
 
 @ellipsometry_stage

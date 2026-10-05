@@ -132,6 +132,20 @@ def _amplitude_factors(acquisition_count, elapsed_seconds, amplitude_drift):
         _drift_delays(acquisition_count, elapsed_seconds, 1.0))
 
 
+def _tilt_factors(acquisition_count, elapsed_seconds, frequencies_hz, tilt_drift_per_thz,
+                  tilt_profile=None):
+    """exp(tilt(t) * (f - 1 THz)): the purge's spectral tilt, 0 at the first acquisition.
+
+    ``tilt_profile`` (n_acquisitions,) gives the tilt per THz explicitly (e.g. an exponential
+    settling); otherwise it rises linearly to ``tilt_drift_per_thz`` at the last acquisition.
+    """
+    if tilt_profile is None:
+        tilt_profile = float(tilt_drift_per_thz) * _drift_delays(acquisition_count,
+                                                                 elapsed_seconds, 1.0)
+    offset_thz = (np.asarray(frequencies_hz, dtype=float) - 1.0e12) / 1e12
+    return np.exp(np.asarray(tilt_profile, dtype=float)[:, None] * offset_thz[None, :])
+
+
 def _channels(index_sample, frequencies_hz, incidence_angle_rad, index_incident, detection,
               out_of_plane_tilt_rad, angular_spread_rad):
     """P and Q per frequency, before the emitted spectrum: d^T J projected on p and s."""
@@ -151,6 +165,7 @@ def synthesize_spectra(index_sample, frequencies_hz, *, emitter_angles_rad=None,
                        crystal_orientation_rad=0.0, emitted_spectrum=None,
                        relative_noise=0.0, drift_span_s=0.0, white_jitter_s=0.0,
                        elapsed_seconds=None, background_relative=0.0, amplitude_drift=0.0,
+                       tilt_drift_per_thz=0.0, tilt_profile=None,
                        out_of_plane_tilt_rad=0.0, angular_spread_rad=0.0,
                        emitter_angle_offset_rad=0.0, label="synthetic", seed=0):
     """Build a polarisation series in the frequency domain with every error channel injectable.
@@ -189,6 +204,9 @@ def synthesize_spectra(index_sample, frequencies_hz, *, emitter_angles_rad=None,
     if amplitude_drift:
         spectra = spectra * _amplitude_factors(acquisition_count, elapsed_seconds,
                                                amplitude_drift)[:, None]
+    if tilt_drift_per_thz or tilt_profile is not None:
+        spectra = spectra * _tilt_factors(acquisition_count, elapsed_seconds, frequencies_hz,
+                                          tilt_drift_per_thz, tilt_profile)
 
     if relative_noise:
         scale = relative_noise * np.abs(spectra).max()
@@ -245,6 +263,7 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
                             sample_count=512, time_step_ps=0.05, pulse_centre_ps=5.0,
                             pulse_width_ps=0.11, relative_noise=0.0,
                             multiplicative_noise=0.0, drift_span_s=0.0, amplitude_drift=0.0,
+                            tilt_drift_per_thz=0.0, tilt_profile=None,
                             background_relative=0.0, background_delay_ps=0.4,
                             background_width_ps=0.3, out_of_plane_tilt_rad=0.0, seed=0):
     """Repeat-scan time traces for each acquisition of a polarisation series.
@@ -298,6 +317,12 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
     if amplitude_drift:
         clean = clean * _amplitude_factors(acquisition_count, elapsed_seconds,
                                            amplitude_drift)[:, None]
+    if tilt_drift_per_thz or tilt_profile is not None:
+        # The purge tilt acts on the spectrum; apply it there and come back.
+        tilt = _tilt_factors(acquisition_count, elapsed_seconds,
+                             np.where(frequencies_hz > 0, frequencies_hz, 1.0e12),
+                             tilt_drift_per_thz, tilt_profile)
+        clean = np.fft.irfft(np.fft.rfft(clean, axis=1) * tilt, n=sample_count, axis=1)
 
     generator = np.random.default_rng(seed)
     scans = np.repeat(clean[:, None, :], scans_per_acquisition, axis=1)

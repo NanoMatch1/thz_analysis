@@ -144,6 +144,45 @@ def drift_within_range(outcome, config):
                           "fs across the series", detail={"drift_fs": fit.fitted_drift_fs})
 
 
+#: How well each nuisance term must be determined for its drift to be told apart from the
+#: channel ratio. ~0.3 fs of delay or ~0.3% of gain is ~0.2% in rho at 1 THz.
+SEPARABILITY_LIMITS = {"delay_span_fs": 0.3, "gain": 0.003, "tilt_per_thz": 0.005}
+
+
+@diagnostic(
+    stage=ACQUISITION,
+    assumption="the acquisition order lets the drift be told apart from the channel ratio",
+    why="A drift is measured by seeing the SAME polarisation state at different times. In a "
+        "single pass 0/90/180/270 on gold with C ~ -1 the p and s channels are equal, so 0 and "
+        "90 (and 180 and 270) look alike and a drift between them is, to first order, a change "
+        "of P/Q -- exactly the calibration. The fit then returns a number, but a biased one "
+        "(F40: index error 0.026 -> 0.14 with no purge at all).",
+    remedy="Record the block as a palindrome (0,90,180,270,270,180,90,0): it revisits every "
+           "state and separates drift from C at any channel ratio.",
+    severity=Severity.WARN)
+def drift_separable_from_ratio(outcome, config):
+    if not _is_outcome(outcome):
+        return
+    from ..core.harmonic import revisit_lever_arm
+    for key, fit in outcome.fits.items():
+        if fit.nuisance_parameter_errors is None:
+            continue
+        lever = revisit_lever_arm(fit, outcome.result.band)
+        if 0.0 < lever < 0.5:
+            yield Problem(f"{key[0]} @ probe {key[1]}: the same signal was only seen again "
+                          f"{lever:.0%} of the block later (neighbouring acquisitions), so "
+                          "drift trades with P/Q -- a palindrome order fixes this",
+                          detail={"revisit_lever_arm": lever})
+            continue
+        poorly = {name: float(error) for name, error in zip(fit.nuisance_parameter_names,
+                                                             fit.nuisance_parameter_errors)
+                  if name in SEPARABILITY_LIMITS and not error <= SEPARABILITY_LIMITS[name]}
+        if poorly:
+            described = ", ".join(f"{name} +/- {value:.3g}" for name, value in poorly.items())
+            yield Problem(f"{key[0]} @ probe {key[1]}: drift terms poorly determined "
+                          f"({described}); {len(fit.delays_s)} acquisitions", detail=poorly)
+
+
 @diagnostic(
     stage=ACQUISITION,
     assumption="the fitted amplitude drift across a block is a few percent at most",
@@ -161,6 +200,11 @@ def amplitude_drift_small(outcome, config):
             yield Problem(f"{key[0]} @ probe {key[1]}: amplitude changed "
                           f"{fit.fitted_amplitude_change:.1%} across the series",
                           detail={"amplitude_change": fit.fitted_amplitude_change})
+        if fit.fitted_tilt_change_per_thz > 0.05:
+            yield Problem(f"{key[0]} @ probe {key[1]}: spectral tilt changed "
+                          f"{fit.fitted_tilt_change_per_thz:.1%}/THz across the series -- the "
+                          "purge was still drying the box (the fit models it; this is advisory)",
+                          detail={"tilt_change_per_thz": fit.fitted_tilt_change_per_thz})
 
 
 @diagnostic(

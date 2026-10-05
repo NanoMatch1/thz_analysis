@@ -281,3 +281,48 @@ def test_amplitude_drift_is_fitted_end_to_end(tmp_path):
     fit = outcome.result.sample_fit
     assert fit.fitted_amplitude_change == pytest.approx(0.03, abs=0.005)
     assert _index_error(outcome) < 0.02
+
+
+def test_a_measured_purge_transient_is_removed_from_a_palindrome_ten_minutes_after_closing(
+        tmp_path):
+    """F40: delay (tau 38 min) + water tilt (tau 47 min), spans from the August purge data.
+
+    Noise-free, so the claim is exact rather than statistical: the 'auto' models (exponential
+    settling delay + settling tilt) remove the transient completely, the linear ramps do not.
+    (With noise, 6 seeds give a median index error of 0.0133 with the purge vs 0.0129 without.)
+    """
+    from thz_ellipsometry.adapters.synthetic_files import write_accumulation_files
+    from thz_ellipsometry.core.simulate import AcquisitionSchedule
+    palindrome = np.array([0.0, 90.0, 180.0, 270.0, 270.0, 180.0, 90.0, 0.0])
+    elapsed = 600.0 + np.arange(palindrome.size) * 600.0      # starts 10 min after closing
+    delays = -40e-15 * np.exp(-elapsed / (38 * 60.0))
+    tilts = -0.096 * np.exp(-elapsed / (47 * 60.0))
+    schedule = AcquisitionSchedule(np.deg2rad(palindrome), elapsed - elapsed[0],
+                                   np.repeat([1, 2], 4))
+    shared = dict(schedule=schedule, scans_per_angle=4, angle_token="mag",
+                  incidence_angle_rad=np.deg2rad(INCIDENCE_ANGLE_DEG),
+                  crystal_orientation_rad=np.deg2rad(90.0), relative_noise=0.0,
+                  probe_azimuth_deg=PRIMARY_PROBE, drift_span_s=delays - delays[0],
+                  tilt_profile=tilts - tilts[0])
+    write_accumulation_files(str(tmp_path), sample_name="doped_silicon", seed=0,
+                             index_sample_function=thz_ellipsometry_run_me.SIMULATED_SAMPLES[
+                                 "doped_silicon"], **shared)
+    write_accumulation_files(str(tmp_path), sample_name="ref-gold", seed=1,
+                             index_sample_function=materials.gold_index,
+                             time_offset_seconds=elapsed[-1] + 600.0, **shared)
+    noise_off = {"enabled": False}
+    modelled = run_ellipsometry(_config(str(tmp_path), noise=noise_off))
+    unmodelled = run_ellipsometry(_config(str(tmp_path), noise=noise_off, acquisition={
+        "drift_model": "linear_ramp", "amplitude_model": "linear_ramp"}))
+    assert modelled.result.sample_fit.drift_model == "settling"
+    assert modelled.result.sample_fit.amplitude_model == "tilt_settling"
+    assert _index_error(modelled) < 1e-3
+    assert _index_error(unmodelled) > 0.02
+
+
+def test_a_single_pass_with_c_near_minus_one_is_flagged_as_inseparable(tmp_path):
+    """F40: in 0/90/180/270 on gold with C ~ -1, drift and the channel ratio trade."""
+    directory = _write(tmp_path, cycles=1, crystal_001_from_p_deg=90.0,
+                       emitter_angles_deg=(0.0, 90.0, 180.0, 270.0))
+    outcome = run_ellipsometry(_config(directory))
+    assert "drift_separable_from_ratio" in _diagnostics(outcome)
