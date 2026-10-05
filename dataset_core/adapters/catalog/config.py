@@ -6,7 +6,7 @@ into call sites:
     1. explicit argument
     2. environment variable  THZ_CATALOG_ROOT
     3. per-user config file   ~/.thz/catalog.toml   (key: ``root = "..."``)
-    4. documented default     C:/Users/Samuel/Data/THz
+    4. documented default     ~/data   (the data root on the lab Linux machine)
 
 The catalogue index file lives *at* the resolved root (see ``store.default_catalog_path``),
 so "find the catalogue" reduces to "find the root".
@@ -20,7 +20,7 @@ from pathlib import Path
 
 ENV_VAR_NAME = "THZ_CATALOG_ROOT"
 USER_CONFIG_PATH = Path.home() / ".thz" / "catalog.toml"
-DEFAULT_ROOT = r"C:/Users/Samuel/Data/THz"
+DEFAULT_ROOT = "~/data"
 
 
 def _read_root_from_config_file(config_path: Path = USER_CONFIG_PATH) -> str | None:

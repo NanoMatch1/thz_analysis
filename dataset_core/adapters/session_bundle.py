@@ -63,6 +63,29 @@ def _count_files(dataset) -> int | None:
         return None
 
 
+def localise_source_dir(recorded_source_dir: str | None, bundle_dir: str) -> str | None:
+    """Map a recorded raw-data directory onto this machine, using where the bundle now sits.
+
+    Bundles store ``source_dir`` as an absolute path from the machine that saved them (e.g.
+    ``C:\\Users\\Samuel\\Data\\THz\\LNB``). Bundles are always saved inside their data directory,
+    so when the recorded path doesn't exist here but its last component matches the bundle's
+    parent directory, that parent IS the data directory on this machine. Anything else is
+    returned unchanged (with a warning), so a genuinely missing source is still visible.
+    """
+    if not recorded_source_dir or os.path.isdir(recorded_source_dir):
+        return recorded_source_dir
+    bundle_parent = os.path.dirname(os.path.abspath(os.path.normpath(bundle_dir)))
+    # Split on both separators: a Windows path is one opaque component to posixpath.
+    recorded_leaf = recorded_source_dir.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if recorded_leaf == os.path.basename(bundle_parent):
+        print(f"[session_bundle] source_dir '{recorded_source_dir}' not found here; "
+              f"using the bundle's data directory '{bundle_parent}'.")
+        return bundle_parent
+    print(f"[session_bundle] WARNING: source_dir '{recorded_source_dir}' not found and could not "
+          f"be matched to the bundle location; replay from raw data will fail.")
+    return recorded_source_dir
+
+
 def _build_recipe(dataset, notes: str = "", bundle_id: str | None = None) -> dict:
     """Assemble the replayable recipe dict from a dataset's recorded context.
 
@@ -233,6 +256,7 @@ def replay_session(bundle_dir: str, *, override_config: dict | None = None,
     from dataset_core.adapters.pipeline_registry import replay_recipe
 
     recipe = read_recipe(bundle_dir)
+    recipe["source_dir"] = localise_source_dir(recipe.get("source_dir"), bundle_dir)
     dataset = replay_recipe(recipe, override_config=override_config, override_steps=override_steps)
     if save_to is not None:
         save_session(dataset, save_to, notes=notes or f"edited replay of {bundle_dir}")
@@ -251,7 +275,7 @@ def load_session(bundle_dir: str):
         snapshot = pickle.load(f)
 
     dataset = DataSet(
-        snapshot.get("file_dir") or bundle_dir,
+        localise_source_dir(snapshot.get("file_dir"), bundle_dir) or bundle_dir,
         config=snapshot.get("config", {}),
         seriesname=snapshot.get("seriesname"),
     )

@@ -16,7 +16,37 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dataset_core.adapters import pipeline_registry as registry
 from dataset_core.adapters import session_bundle
 
-_TRANSMISSION_DATA = r"C:\Users\Samuel\Data\THz\Sam\2026-07-03_silicon_trans"
+from dataset_core.adapters.catalog.config import resolve_catalog_root
+
+# Real data under the configured data root (THZ_CATALOG_ROOT / ~/.thz/catalog.toml / ~/data).
+_TRANSMISSION_DATA = os.path.join(resolve_catalog_root(), "Sam", "2026-07-03_silicon_trans")
+
+
+# ── Unit tests: mapping a recorded source_dir onto this machine ────────────────
+
+
+class TestLocaliseSourceDir(unittest.TestCase):
+    def test_existing_dir_is_kept(self):
+        with tempfile.TemporaryDirectory() as data_dir:
+            bundle_dir = os.path.join(data_dir, "run.thzbundle")
+            self.assertEqual(session_bundle.localise_source_dir(data_dir, bundle_dir), data_dir)
+
+    def test_windows_path_maps_to_bundle_parent(self):
+        with tempfile.TemporaryDirectory() as root:
+            data_dir = os.path.join(root, "LNB")
+            bundle_dir = os.path.join(data_dir, "LNB.thzbundle")
+            os.makedirs(bundle_dir)
+            recorded = r"C:\Users\Samuel\Data\THz\LNB"
+            self.assertEqual(session_bundle.localise_source_dir(recorded, bundle_dir), data_dir)
+
+    def test_unmatched_path_is_returned_unchanged(self):
+        with tempfile.TemporaryDirectory() as root:
+            bundle_dir = os.path.join(root, "elsewhere", "run.thzbundle")
+            recorded = r"C:\Users\Samuel\Data\THz\LNB"
+            self.assertEqual(session_bundle.localise_source_dir(recorded, bundle_dir), recorded)
+
+    def test_none_passes_through(self):
+        self.assertIsNone(session_bundle.localise_source_dir(None, "/any/run.thzbundle"))
 
 
 # ── Unit tests: the recording wrapper (no data, no heavy deps) ─────────────────

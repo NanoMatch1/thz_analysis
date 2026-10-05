@@ -30,7 +30,14 @@ class Catalog:
 
     def __init__(self, root: str | None = None, store: CatalogStore | None = None):
         self.root = resolve_catalog_root(root)
-        os.makedirs(self.root, exist_ok=True)
+        # Never create a missing root: a mis-resolved root (e.g. a Windows default on Linux,
+        # which abspath turns into '<cwd>/C:/Users/...') would silently become an empty
+        # catalogue inside whatever directory the script was launched from.
+        if not os.path.isdir(self.root):
+            print(
+                f"[catalog] WARNING: catalogue root '{self.root}' does not exist. Set "
+                f"THZ_CATALOG_ROOT or 'root' in ~/.thz/catalog.toml to your data directory."
+            )
         self.store: CatalogStore = store or JsonCatalogStore(default_catalog_path(self.root))
 
     # ── indexing ─────────────────────────────────────────────────────────────

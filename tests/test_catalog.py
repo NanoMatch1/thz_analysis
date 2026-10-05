@@ -77,6 +77,25 @@ class TestRootResolution(unittest.TestCase):
                 os.environ[ENV_VAR_NAME] = original
 
 
+    def test_default_is_home_data(self):
+        """With no explicit/env/config root, the default is ~/data — never the cwd."""
+        from unittest import mock
+        from dataset_core.adapters.catalog import config as catalog_config
+
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(catalog_config, "_read_root_from_config_file", return_value=None):
+            os.environ.pop(ENV_VAR_NAME, None)
+            self.assertEqual(
+                resolve_catalog_root(), os.path.join(os.path.expanduser("~"), "data")
+            )
+
+    def test_missing_root_is_not_created(self):
+        with tempfile.TemporaryDirectory() as parent:
+            missing_root = os.path.join(parent, "C:", "Users", "nobody")
+            Catalog(root=missing_root)
+            self.assertFalse(os.path.exists(missing_root))
+
+
 # ── the extractor (pure metadata derivation) ────────────────────────────────────
 
 
