@@ -258,6 +258,29 @@ class TestCatalogFacade(unittest.TestCase):
             self.assertEqual(len(catalog.find(has_flags=True)), 1)
             self.assertEqual(len(catalog.find(text="silicon")), 1)
 
+    def test_match_by_id_prefix_then_series(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._populate(root)
+            catalog = Catalog(root=root)
+            catalog.rebuild()
+            silicon = catalog.find(text="silicon")[0]
+            self.assertEqual(catalog.match(silicon.bundle_id[:8]), [silicon])
+            self.assertEqual(len(catalog.match("cnt21")), 2)       # series substring, case-blind
+            self.assertEqual(catalog.match("no_such_thing"), [])
+
+    def test_short_id_resolves_and_ambiguity_raises(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._populate(root)
+            catalog = Catalog(root=root)
+            catalog.rebuild()
+            silicon = catalog.find(text="silicon")[0]
+            self.assertEqual(
+                catalog.resolve_bundle_dir(silicon.bundle_id[:8]),
+                os.path.join(root, silicon.relative_path),
+            )
+            with self.assertRaises(KeyError):
+                catalog.resolve_bundle_dir("CNT21")              # two series match
+
     def test_verify_flags_missing(self):
         with tempfile.TemporaryDirectory() as root:
             self._populate(root)

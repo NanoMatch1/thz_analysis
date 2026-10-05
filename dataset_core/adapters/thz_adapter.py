@@ -6850,96 +6850,6 @@ def time_shift_slider(
 
 
 # ---------------------------------------------------------------------------
-# export
-# ---------------------------------------------------------------------------
-
-def export_results(dataset: DataSet, export_dir: str | None = None) -> list[str]:
-    """Export per-sample CSV files containing all computed arrays.
-
-    Three files per sample:
-      {stem}_results.csv       – freq-domain: freq_THz, fft_mag, n, k,
-                                 eps_real, eps_imag, sigma_real, sigma_imag
-      {stem}_time_raw.csv      – original averaged time trace (before any
-                                 processing): time_ps, amplitude, stderr
-      {stem}_time_prefft.csv   – preprocessed time trace just before FFT
-                                 (after baseline / align / window / pad):
-                                 time_ps, amplitude
-
-    Returns list of written file paths.
-    """
-    import os
-
-    if export_dir is None:
-        export_dir = os.path.join(dataset.file_dir, 'results')
-    os.makedirs(export_dir, exist_ok=True)
-
-    written = []
-    for fn, data_obj in _sample_items(dataset):
-        proc = data_obj.processing_dict
-        stem = os.path.splitext(fn)[0]
-
-        # --- raw time trace ---
-        td_raw = proc.get('time_domain')
-        if td_raw is not None:
-            raw_path = os.path.join(export_dir, f"{stem}_time_raw.csv")
-            raw_out = td_raw.copy()
-            raw_out[:, 0] *= _S_TO_PS          # s → ps
-            np.savetxt(raw_path, raw_out,
-                       delimiter=',',
-                       header='time_ps,amplitude,stderr',
-                       comments='')
-            written.append(raw_path)
-
-        # --- pre-FFT time trace ---
-        td_prefft = proc.get('time_domain_prefft')
-        if td_prefft is not None:
-            prefft_path = os.path.join(export_dir, f"{stem}_time_prefft.csv")
-            prefft_out = td_prefft.copy()
-            prefft_out[:, 0] *= _S_TO_PS       # s → ps
-            np.savetxt(prefft_path, prefft_out,
-                       delimiter=',',
-                       header='time_ps,amplitude',
-                       comments='')
-            written.append(prefft_path)
-
-        # --- frequency-domain results ---
-        freq = proc.get('fft_freq')
-        if freq is None:
-            print(f"Skipping freq-domain for '{fn}': no FFT data.")
-            continue
-
-        nan_col = np.full_like(freq, np.nan)
-
-        def _safe(arr):
-            return arr if arr is not None else nan_col
-
-        spec = proc.get('fft_spectrum')
-        eps = proc.get('eps')
-        sigma = proc.get('sigma')
-
-        columns = [
-            freq * _HZ_TO_THZ,
-            np.abs(spec) if spec is not None else nan_col,
-            _safe(proc.get('n')),
-            _safe(proc.get('k')),
-            eps.real if eps is not None else nan_col,
-            eps.imag if eps is not None else nan_col,
-            sigma.real if sigma is not None else nan_col,
-            sigma.imag if sigma is not None else nan_col,
-        ]
-
-        headers = 'freq_THz,fft_mag,n,k,eps_real,eps_imag,sigma_real,sigma_imag'
-        data = np.column_stack(columns)
-
-        filepath = os.path.join(export_dir, f"{stem}_results.csv")
-        np.savetxt(filepath, data, delimiter=',', header=headers, comments='')
-        written.append(filepath)
-
-    print(f"Exported {len(written)} file(s) to {export_dir}")
-    return written
-
-
-# ---------------------------------------------------------------------------
 # plotting (standalone)
 # ---------------------------------------------------------------------------
 
@@ -7721,7 +7631,8 @@ def result_viewer(dataset: DataSet, show_snr_mask: bool = True) -> ResultViewer:
     return ResultViewer(dataset, show_snr_mask=show_snr_mask)
 
 
-# NEW (Phase 2): registry-driven viewer + export that supersede ResultViewer / export_results.
+# NEW (Phase 2): registry-driven viewer + export that supersede ResultViewer and the removed
+# export_results.
 # Lazy imports avoid a circular dependency (results_viewer imports this module). Swap
 # ``thz.result_viewer(dataset)`` -> ``thz.launch_results_viewer(dataset)`` to adopt the new one.
 def launch_results_viewer(dataset: DataSet, **kwargs):
@@ -7731,7 +7642,7 @@ def launch_results_viewer(dataset: DataSet, **kwargs):
 
 
 def export_quantities(dataset: DataSet, export_dir: str | None = None, **kwargs):
-    """Registry-driven CSV export (replacement for :func:`export_results`)."""
+    """Registry-driven CSV export (replaced the legacy ``export_results``)."""
     from dataset_core.adapters.results_viewer import export_quantities as _export
     return _export(dataset, export_dir, **kwargs)
 

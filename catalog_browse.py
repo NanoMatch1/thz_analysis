@@ -54,7 +54,7 @@ def main() -> None:
     parser.add_argument("--root", default=None, help="Override the catalogue root for this call.")
     parser.add_argument("--rebuild", action="store_true", help="Rescan the root and rebuild the index.")
     parser.add_argument("--verify", action="store_true", help="Report indexed bundles missing on disk.")
-    parser.add_argument("--open", dest="open_id", default=None, help="Bundle id to load + view.")
+    parser.add_argument("--open", dest="open_id", default=None, help="Bundle id (or unique prefix / series name) to load + view.")
     parser.add_argument("--find", nargs="+", default=None, metavar="key=value", help="Query filters.")
     args = parser.parse_args()
 

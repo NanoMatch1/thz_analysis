@@ -60,7 +60,6 @@ config: dict = {
         'show_graph': True,
         'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
         'preprocess_data': False,        # run the preprocessing steps (baseline, window, FFT) before transfer function
-        'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': 'CNT sample doped inert holder',            # free-text notes stored in the bundle
         # 'measured' = uncertainty from the repeat scans (default, honest).
@@ -383,9 +382,6 @@ if config.get('drude', {}).get('enabled', False):
 # frequency-domain products exist, so they all land on the same decimated grid.
 thz.apply_instrument_resolution(dataset, config)
 
-if config['general']['save_database']:
-    dataset.save_database()
-
 # --- END-OF-RUN HEALTH REPORT ---
 # Checks every registered assumption against the final state and prints what is
 # strained. It never halts; docs/assumptions_ledger.md lists what is checked.
@@ -411,4 +407,3 @@ if _session_target:
 
 # --- inspect / launch the interactive result viewer ---
 # thz.result_viewer(dataset)
-# dataset.save_database()

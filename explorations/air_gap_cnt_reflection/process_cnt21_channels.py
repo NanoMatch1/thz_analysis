@@ -89,7 +89,7 @@ CHANNELS = {
 def build_channel_config(polarization, regions):
     """Fresh config per channel (build_full_trace_reflection self-modifies config.regions)."""
     return {
-        "general": {"show_graph": False, "save_database": False},
+        "general": {"show_graph": False},
         "geometry": {"theta_external_deg": 45.0, "n_sio2": 1.96, "polarization": polarization},
         "regions": {key: tuple(value) for key, value in regions.items()},
         # first pulse sits ~2.2 ps from trace start; 2 ps half-width keeps both pulses clean (F23)

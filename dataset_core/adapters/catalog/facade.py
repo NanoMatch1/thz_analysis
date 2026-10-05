@@ -120,6 +120,20 @@ class Catalog:
             results.append(record)
         return results
 
+    def match(self, identifier: str) -> list[CatalogRecord]:
+        """Records a typed identifier refers to: bundle-id prefix first, else series substring.
+
+        The single lookup rule behind every front-end that accepts a short id or a name
+        (``open_session.py``, ``catalog_browse.py --open``, :meth:`open`). An id prefix wins
+        outright so ``49ad3cc4`` never also matches a series that happens to contain it.
+        """
+        records = self.list_all()
+        by_id = [record for record in records if record.bundle_id.startswith(identifier)]
+        if by_id:
+            return by_id
+        needle = identifier.lower()
+        return [record for record in records if needle in (record.series_name or "").lower()]
+
     @staticmethod
     def _matches_sample(record: CatalogRecord, sample: str) -> bool:
         needle = sample.lower()
@@ -161,4 +175,10 @@ class Catalog:
     def _as_record(self, record_or_id) -> CatalogRecord | None:
         if isinstance(record_or_id, CatalogRecord):
             return record_or_id
-        return self.store.get(str(record_or_id))
+        exact = self.store.get(str(record_or_id))
+        if exact is not None:
+            return exact
+        matches = self.match(str(record_or_id))
+        if len(matches) > 1:
+            raise KeyError(f"{record_or_id!r} is ambiguous: matches {len(matches)} catalogue entries.")
+        return matches[0] if matches else None

@@ -57,7 +57,6 @@ config: dict = {
         'show_graph': False,
         'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
         'preprocess_data': True,        # run the preprocessing steps (baseline, window, FFT) before transfer function
-        'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': '',            # free-text notes stored in the bundle
         'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
@@ -250,9 +249,6 @@ if config.get('fit', {}).get('interactive', False):
         samples=fit_cfg.get('sample'),
         fit_band_thz=fit_cfg.get('fit_band_thz'),
     )
-
-if config['general'].get('save_database', True):
-    dataset.save_database()
 
 # --- SAVE A REPLAYABLE SESSION BUNDLE (opt-in) ---
 # Writes <dir>.thzbundle/ with recipe.json (config + ordered steps + git SHA), snapshot.pkl

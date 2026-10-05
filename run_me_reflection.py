@@ -27,10 +27,13 @@ Choose with pipeline_config['processing_path']:
 Set headless=True to suppress all SpanSelectors / plot windows (needs presets).
 """
 
+import os
+
 import numpy as np
 
 from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import session_bundle
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +288,7 @@ if __name__ == '__main__':
 
     thz.result_viewer(result)
 
-    dataset.save_database()
+    session_bundle.save_session(dataset, os.path.join(dataset.file_dir, f"{dataset.seriesname}.thzbundle"))
 
     # def eps_series(eps_range=np.arange(1, 12, 1)):
     #     eps_results = {}

@@ -117,8 +117,8 @@ flowchart TD
     DE["deembed_air_gap_reflection<br/>(optional)"] -->|"n, k overwritten;<br/>n_window/k_window kept"| DV
     DV["derive_eps_sigma"] -->|"eps, sigma"| SV
 
-    SV["save_database()<br/><i>(DataSet)</i>"] --> RV
-    RV["result_viewer / plot_fft<br/><i>(viz, reads processing_dict)</i>"]
+    SV["session_bundle.save_session()<br/><i>(.thzbundle, catalogue-indexed)</i>"] --> RV
+    RV["launch_results_viewer / display / export_quantities<br/><i>(viz, reads processing_dict via quantity_registry)</i>"]
 ```
 
 ---
@@ -130,9 +130,9 @@ flowchart TD
 must read/write the same names so legacy viz/consumers keep working. (Renames, if
 any, come later in a dedicated pass once consumers move over.)
 
-Keys marked **★** are read by downstream consumers (`result_viewer`, `plot_*`,
-`export_results`, `save_database`) — breaking these breaks the GUI/output, not just
-one stage.
+Keys marked **★** are read by downstream consumers (`quantity_registry` → ResultsViewer,
+`display`, `export_quantities`; legacy `result_viewer`, `plot_*`) — breaking these breaks the
+GUI/output, not just one stage.
 
 | Key | Type | Written by | Meaning |
 |-----|------|-----------|---------|

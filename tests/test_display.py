@@ -164,6 +164,14 @@ class TestGetSeries(unittest.TestCase):
         with self.assertRaises(KeyError):
             display.get_series(self.dataset, "not_a_quantity")
 
+    def test_get_time_series_includes_references(self):
+        series = display.get_time_series(self.dataset)
+        self.assertEqual(len(series), 5)                      # references included
+        one = series["reference_gold_plus-0-mrad.acc"]
+        self.assertTrue(np.allclose(one["time_ps"], one["time_s"] * 1e12))
+        self.assertEqual(one["amplitude"].shape, one["time_s"].shape)
+        self.assertIsNone(one["error"])                       # 2-column trace: no stderr
+
     def test_available_quantities(self):
         names = display.available_quantities(self.dataset)
         for expected in ["fft_mag", "fft_phase", "n", "k", "transfer_mag"]:

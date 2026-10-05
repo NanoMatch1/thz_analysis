@@ -39,8 +39,12 @@ matchbook/thz/
 ├── run_me_dataset_core.py      — main pipeline script (edit file_dir + run)
 ├── ANALYSIS_NOTES.md           — physics decisions and methodology log  ← READ THIS
 ├── TODO.md                     — tracked open work
-├── open_session.py              — reopen a saved .thzbundle via the catalogue; interactive
-│                                  REPL / CLI to browse, replay, fit, export, extract quantities
+├── open_session.py             — THE everyday viewer: pick a saved .thzbundle from the
+│                                  catalogue → ResultsViewer; also --replay / --fit / --export
+├── extract_session_data.py     — dig in: pull a bundle's arrays out as
+│                                  {quantity: {filename: {freq, y, error, mask}}} dicts
+├── display_cookbook.py         — worked examples for custom figures via the display layer
+├── catalog_browse.py           — scriptable catalogue CLI (--rebuild / --verify / --find)
 ├── acq_editor_run_me.py        — launch the standalone acquisition editor on a data folder
 ├── acc_file_manager.py         — GUI to join / split .acc files (built on acquisition_editor)
 ├── acquisition_editor/         — standalone interactive scan cleaner: step through scans to
@@ -307,7 +311,7 @@ container suites), thz-core 180 pass (incl. `test_remove_phase_offset.py`).
 - Single-step phase-offset handling — collapse the complex-H round-trip so the integer
   cycle is not lost in `invert_nk`'s re-unwrap; keep BOTH the `anchor_phase_origin` and
   `remove_phase_offset` corrections (parsimony refactor, not a correctness fix).
-- `save_database`/`load_database` cleanup (hardcoded path, deduplication).
+- Delete `save_database`/`load_database` (deprecated 2026-10-05; no callers left).
 
 ### Done (was deferred)
 - ~~n_SiO₂ extraction from the SiO₂-only trace~~ — `characterise_window` /

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import acquisition_editor
 from dataset_core.dataset import DataSet
 from dataset_core.adapters import thz_adapter as thz
+from dataset_core.adapters import session_bundle
 from dataset_core.adapters import analysis_tools as tools
 
 
@@ -197,6 +198,6 @@ if __name__ == "__main__":
     # )
     thz.derive_eps_sigma(dataset)
 
-    dataset.save_database()
+    session_bundle.save_session(dataset, os.path.join(dataset.file_dir, f"{dataset.seriesname}.thzbundle"))
     thz.result_viewer(dataset)
-    thz.export_results(dataset)
+    thz.export_quantities(dataset)

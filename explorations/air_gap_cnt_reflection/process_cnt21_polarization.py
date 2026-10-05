@@ -44,7 +44,7 @@ plt.show = lambda *a, **k: None  # headless
 ROOT = r"C:\Users\Samuel\Data\THz\Sam\Analysis\CNT-21\polarization"
 
 CONFIG = {
-    "general": {"show_graph": False, "save_database": False},
+    "general": {"show_graph": False},
     "geometry": {"theta_external_deg": 45.0, "n_sio2": 1.96},
     "regions": {"first_reflection": (152.5, 158.5), "second_reflection": (177.0, 183.5)},
     # First pulse sits ~2.2 ps from the trace start (155.2 ps, trace [153, 184.5]); a 4 ps

@@ -199,5 +199,7 @@ Two refinements beyond the doc, both from the CLI full-workflow smoke test:
   on any single malformed bundle instead of aborting — a batch scan must survive one bad run. (The
   smoke test caught a real UnicodeDecodeError that strict UTF-8 reading would have crashed on.)
 
-Not yet done (design §11 staging): deprecation warning on `save_database`/`load_database`; removing
-`database_viewer.py`. Left for a follow-up so this change stays additive.
+Done 2026-10-05 (design §11 staging): `save_database`/`load_database` emit a DeprecationWarning and
+have no callers; `database_viewer.py` and `datadict_viewer.py` removed; `open_session.py` is the
+viewer, `extract_session_data.py` the dict-extraction front-end. One lookup rule,
+`Catalog.match` (id prefix, else series substring), serves every front-end.

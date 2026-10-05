@@ -75,9 +75,12 @@
 
 ## dataset_core
 
-- [ ] Clean up `save_database` / `load_database` in `dataset.py`:
-  - Remove hardcoded `database_dir` default path (`C:\Users\Samuel\Data\database`) — should be injected or read from config.
-  - Deduplicate pickle serialisation/deserialisation logic shared with `save_state` / `load_state`.
+- [ ] Delete `save_database` / `load_database` from `dataset.py`. Deprecated 2026-10-05 (they
+  emit a DeprecationWarning); every caller now uses `session_bundle.save_session` and
+  `database_viewer.py` is gone. Remove once no old pickled databases need reopening.
+- [ ] Retire the legacy `ResultViewer` / `thz.result_viewer` in `thz_adapter.py` — superseded by
+  `launch_results_viewer`; still called (uncommented) only by `run_me_reflection.py`,
+  `run_me_dataset_core.py` and `wip.py`.
 
 ## dataset_core — coupling / dependency audit
 

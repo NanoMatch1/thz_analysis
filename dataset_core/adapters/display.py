@@ -23,8 +23,8 @@ Two responsibilities, two clearly-separated config dicts:
 
 Frequency-domain quantities go through :func:`plot_quantity`. Time-domain traces have no
 registry entry and a different x-axis, so they get their own small helper
-:func:`plot_time_domain`. Use :func:`get_series` to pull the exact arrays that *would* be
-plotted (x, y, error, mask) without drawing anything — for inspection or manipulation.
+:func:`plot_time_domain`. Use :func:`get_series` / :func:`get_time_series` to pull the exact
+arrays that *would* be plotted without drawing anything — for inspection or manipulation.
 
 Rendering convention (Samuel's standing preference): every frequency-domain series is drawn
 as SCATTER points with ERROR BARS on the stored grid. When the pipeline ran with
@@ -402,6 +402,29 @@ def get_series(dataset, quantity: str, *, files=None) -> dict:
             "y": np.asarray(values),
             "error": processing_dict.get(quantity_spec.error_key),
             "mask": processing_dict.get(quantity_spec.mask_key),
+        }
+    return series
+
+
+def get_time_series(dataset, *, files=None, time_key: str = "time_domain") -> dict:
+    """Return the time-domain traces :func:`plot_time_domain` would draw, keyed by filename.
+
+    Each value is ``{'time_s', 'time_ps', 'amplitude', 'error'}``; ``error`` is the stored
+    per-point standard error column when the trace has one (raw averaged traces do), else
+    None. References are included, as in :func:`plot_time_domain`. Pass
+    ``time_key='time_domain_prefft'`` for the processed trace just before the FFT.
+    """
+    series = {}
+    for filename, data_obj in _iter_selected_items(dataset, files, include_references=True):
+        trace = data_obj.processing_dict.get(time_key)
+        if trace is None:
+            continue
+        trace = np.asarray(trace)
+        series[filename] = {
+            "time_s": trace[:, 0],
+            "time_ps": trace[:, 0] * _S_TO_PS,
+            "amplitude": trace[:, 1],
+            "error": trace[:, 2] if trace.shape[1] > 2 else None,
         }
     return series
 

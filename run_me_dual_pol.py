@@ -28,7 +28,7 @@ data_dir_p = r"C:\Users\Samuel\Data\THz\Sam\2026-06-30_CNT\export\p_pol"
 
 # ── Shared processing config (mirrors run_me_low-level.py; polarization set per run) ──
 config: dict = {
-    "general": {"show_graph": False, "save_database": False},
+    "general": {"show_graph": False},
     "geometry": {"theta_external_deg": 45.0, "n_sio2": 1.96},
     "regions": {
         "first_reflection": (146.5, 159.5),

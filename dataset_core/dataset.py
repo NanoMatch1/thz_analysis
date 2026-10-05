@@ -786,7 +786,15 @@ class DataSet:
         return edited_data
     
     def save_database(self, seriesname=None, database_dir=r"C:\Users\Samuel\Data\database"):
-        '''Saves dataset to a pickle file in the database directory. Never overwrites — appends a numeric index suffix if the filename already exists. Logs the save to a chronological index file.'''
+        '''Saves dataset to a pickle file in the database directory. Never overwrites — appends a numeric index suffix if the filename already exists. Logs the save to a chronological index file.
+
+        Deprecated — superseded by ``session_bundle.save_session`` + the catalogue.'''
+        import warnings
+        warnings.warn(
+            "DataSet.save_database is deprecated: save a replayable .thzbundle with "
+            "session_bundle.save_session(dataset, bundle_dir) and find it again via the catalogue.",
+            DeprecationWarning, stacklevel=2,
+        )
         import pickle
         if seriesname is not None:
             self.seriesname = seriesname.strip()
@@ -849,7 +857,15 @@ class DataSet:
           seriesname : str  — used as a search filter; auto-selects if only one match.
           index      : int or str — directly selects from the full ordered list by 1-based position
                        (same numbering shown in the printed list). Negative indices count from the end.
+
+        Deprecated — superseded by ``open_session.py`` / ``session_bundle.load_session``.
         '''
+        import warnings
+        warnings.warn(
+            "DataSet.load_database is deprecated: open a saved .thzbundle with "
+            "`python open_session.py` (catalogue picker) or session_bundle.load_session(bundle_dir).",
+            DeprecationWarning, stacklevel=2,
+        )
         import pickle
         if not (os.path.exists(database_dir) and os.path.isdir(database_dir)):
             print(f"Database directory '{database_dir}' does not exist.")

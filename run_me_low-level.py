@@ -87,7 +87,6 @@ config: dict = {
         'show_graph': True,
         'air_gap_explorer': False,   # open the interactive air-gap de-embed slider after inversion
         'preprocess_data': True,        # run the preprocessing steps (baseline, window, FFT) before transfer function
-        'save_database': False,          # save the dataset database after processing
         'save_session': True,          # True (default dir) or a path -> write a replayable .thzbundle
         'session_notes': '',            # free-text notes stored in the bundle
         'propagate_uncertainty': True, # Monte-Carlo error bars on n/k/eps/sigma (additive-noise floor)
@@ -503,9 +502,6 @@ if config['general'].get('air_gap_explorer', False):
         initial_position_um=0.0,   # good contact: little/no mean gap
         initial_width_um=0.0,      # raise to explore roughness suppression
     )
-
-if config['general'].get('save_database', False):
-    dataset.save_database()
 
 # --- INTERACTIVE FITTING (opt-in): fit GUI with the MC error bars; results save in the bundle. ---
 if config.get('fit', {}).get('interactive', False):
