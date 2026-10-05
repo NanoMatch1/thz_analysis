@@ -170,7 +170,39 @@ class Catalog:
         """Load the bundle's saved results into a ``DataSet`` (no recompute)."""
         from dataset_core.adapters import session_bundle
 
+        record = self._as_record(record_or_id)
+        if record is not None and record.bundle_kind != "session":
+            raise ValueError(
+                f"{record.relative_path} is a '{record.bundle_kind}' bundle, not a DataSet "
+                "session; load it with the code shown at the end of its report.md")
         return session_bundle.load_session(self.resolve_bundle_dir(record_or_id))
+
+    # ── annotating ───────────────────────────────────────────────────────────
+    def annotate(self, record_or_id, notes: str, *, append: bool = False) -> CatalogRecord:
+        """Replace (or append to) a bundle's notes after the fact, keep the history, re-index.
+
+        The previous notes are kept in ``recipe['notes_history']`` with a timestamp, so editing
+        the description never loses what was said before; ``report.md`` gets the change appended.
+        """
+        import json
+        from datetime import datetime, timezone
+
+        bundle_dir = self.resolve_bundle_dir(record_or_id)
+        recipe_path = os.path.join(bundle_dir, "recipe.json")
+        with open(recipe_path, "r", encoding="utf-8") as handle:
+            recipe = json.load(handle)
+        previous = recipe.get("notes", "") or ""
+        updated = f"{previous}\n{notes}".strip() if append and previous else notes.strip()
+        now = datetime.now(timezone.utc).isoformat()
+        recipe.setdefault("notes_history", []).append(
+            {"replaced_at": now, "previous": previous, "source": "annotate"})
+        recipe["notes"] = updated
+        with open(recipe_path, "w", encoding="utf-8") as handle:
+            json.dump(recipe, handle, indent=2)
+        report_path = os.path.join(bundle_dir, "report.md")
+        with open(report_path, "a", encoding="utf-8") as handle:
+            handle.write(f"\n## Notes edited {now}\n\n{updated}\n")
+        return self.update(bundle_dir)
 
     def _as_record(self, record_or_id) -> CatalogRecord | None:
         if isinstance(record_or_id, CatalogRecord):

@@ -132,6 +132,12 @@ Advise on change and usability, not on absolute RH, unless a sensor is added.
 
 ### 1.5a Bundle notes at the end, as a save prompt — **YES, with three refinements**
 
+*Built 2026-10-05 for the ellipsometry driver, as reusable pieces:*
+`dataset_core/adapters/run_notes.py` (prompt with pre-fill, never blocks headless, `THZ_NOTES_MODE`),
+`dataset_core/services/provenance.py` (`code_versions`, `file_sha256`), catalogue `producer` /
+`bundle_kind` fields, `catalog_browse.py --annotate / --show`. **Still to do:** route the other
+run_me scripts' `save_session` through the same notes helper and record their producer.
+
 Samuel's diagnosis: notes go in the config before processing, often for a directory change on the
 same script, so they are skipped or wrong. Asking at the end, when the result is on screen, gets
 better descriptions.

@@ -130,6 +130,11 @@ At ~2 min/scan with 4–6 scans per state plus T_eq per state, a single-pass blo
       need a sample; run B and C each against A, then against D). Check the `[check_assumptions]`
       findings before moving on. A large `harmonic_model_holds` chi-square means something
       changed inside the block.
+- [ ] **At the end of each analysis it asks you to describe the dataset** (what the run knows is
+      pre-filled; finish with an empty line, `-` to skip). It then writes a `.thzbundle` beside
+      the data — results, figure, findings, code commits and input-file hashes — findable with
+      `catalog_browse.py --find type=ellipsometry`. Fix a rushed note later with
+      `catalog_browse.py --annotate <id>`. `--notes "..."` on the command line skips the prompt.
 
 **Log for every file:** the magnet reading actually set, the time the box was closed, anything
 touched. A paper log is fine.

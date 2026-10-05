@@ -76,3 +76,52 @@ def record_provenance(*, store_return: bool = False, note: Optional[str] = None)
         wrapper.__doc__ = func.__doc__
         return wrapper
     return deco
+
+
+# ── code and input identity, for saved results ──────────────────────────────────
+
+def git_state(path: str) -> Dict[str, Any]:
+    """Commit, branch and dirtiness of the git repo containing ``path`` (best effort).
+
+    ``dirty`` matters for provenance: a result made from uncommitted code cannot be reproduced
+    from the SHA alone, so it is recorded rather than assumed clean.
+    """
+    import os
+    import subprocess
+
+    directory = path if os.path.isdir(path) else os.path.dirname(os.path.abspath(path))
+
+    def run(*arguments):
+        try:
+            result = subprocess.run(["git", *arguments], cwd=directory, capture_output=True,
+                                    text=True, timeout=5)
+            return result.stdout.strip() if result.returncode == 0 else None
+        except Exception:
+            return None
+
+    status = run("status", "--porcelain", "--untracked-files=no")
+    return {"commit": run("rev-parse", "HEAD"),
+            "branch": run("rev-parse", "--abbrev-ref", "HEAD"),
+            "dirty": None if status is None else bool(status)}
+
+
+def code_versions() -> Dict[str, Any]:
+    """git state of thz_analysis and of the thz-core checkout it imports."""
+    import os
+
+    versions = {"thz_analysis": git_state(os.path.dirname(os.path.abspath(__file__)))}
+    try:
+        import thz_core.thz_core as core
+        versions["thz_core"] = git_state(os.path.realpath(os.path.dirname(core.__file__)))
+    except Exception:
+        versions["thz_core"] = None
+    return versions
+
+
+def file_sha256(path: str, chunk_bytes: int = 1 << 20) -> str:
+    """SHA-256 of a file's contents: identifies the exact raw data a result came from."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_bytes), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

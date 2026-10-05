@@ -12,6 +12,9 @@ Examples
     python catalog_browse.py --find type=reflection sample=CNT since=2026-06
     python catalog_browse.py --find fits=yes flags=yes
     python catalog_browse.py --open <bundle_id>       # load the saved results + launch the viewer
+    python catalog_browse.py --annotate <bundle_id> "what this dataset is and why it was run"
+    python catalog_browse.py --annotate <bundle_id>   # prompts for the notes (multi-line)
+    python catalog_browse.py --show <bundle_id>       # producer, notes, flags of one bundle
     python catalog_browse.py --root D:/THz --rebuild  # point at a different root for this call
 """
 
@@ -34,7 +37,7 @@ def _print_table(records) -> None:
     if not records:
         print("No matching analyses.")
         return
-    header = f"{'id':8}  {'created':10}  {'type':11}  {'pol':3}  {'quantities':16}  {'series / path'}"
+    header = f"{'id':8}  {'created':10}  {'type':12}  {'pol':3}  {'quantities':16}  {'series / path'}"
     print(header)
     print("-" * len(header))
     for record in records:
@@ -43,10 +46,25 @@ def _print_table(records) -> None:
         flag_marker = "  [flags]" if record.flags_raised else ""
         label = record.series_name or record.relative_path
         print(
-            f"{record.bundle_id[:8]:8}  {created:10}  {record.measurement_type:11}  "
+            f"{record.bundle_id[:8]:8}  {created:10}  {record.measurement_type:12}  "
             f"{(record.polarization or '-'):3}  {quantities:16}  {label}{flag_marker}"
         )
     print(f"\n{len(records)} analysis/analyses.")
+
+
+def _describe(record) -> str:
+    """Several lines on one bundle: what made it, what it is, what it says about itself."""
+    return "\n".join([
+        f"id          : {record.bundle_id}",
+        f"path        : {record.relative_path}",
+        f"created     : {record.created}",
+        f"producer    : {record.producer or '(not recorded)'}",
+        f"kind / type : {record.bundle_kind} / {record.measurement_type}",
+        f"source      : {record.source_dir}",
+        f"quantities  : {', '.join(record.quantities) or '-'}",
+        f"flags       : {', '.join(record.flags_raised) or 'none'}",
+        "notes       : " + (record.notes.replace(chr(10), chr(10) + ' ' * 14) or '(none)'),
+    ])
 
 
 def main() -> None:
@@ -56,6 +74,10 @@ def main() -> None:
     parser.add_argument("--verify", action="store_true", help="Report indexed bundles missing on disk.")
     parser.add_argument("--open", dest="open_id", default=None, help="Bundle id (or unique prefix / series name) to load + view.")
     parser.add_argument("--find", nargs="+", default=None, metavar="key=value", help="Query filters.")
+    parser.add_argument("--annotate", nargs="+", default=None, metavar=("ID", "NOTES"),
+                        help="Replace a bundle's notes (prompted if NOTES is omitted).")
+    parser.add_argument("--append", action="store_true", help="With --annotate: append, not replace.")
+    parser.add_argument("--show", dest="show_id", default=None, help="Print one bundle's details.")
     args = parser.parse_args()
 
     catalog = Catalog(root=args.root)
@@ -73,6 +95,24 @@ def main() -> None:
                 print(f"  - {relative_path}")
         else:
             print("All indexed bundles present on disk.")
+
+    if args.annotate is not None:
+        identifier, *words = args.annotate
+        if words:
+            notes = " ".join(words)
+        else:
+            from dataset_core.adapters.run_notes import collect_run_notes
+            record = catalog._as_record(identifier)
+            notes = collect_run_notes(_describe(record) if record else identifier,
+                                      mode="prompt").text
+        record = catalog.annotate(identifier, notes, append=args.append)
+        print(f"Notes updated for {record.bundle_id[:8]} ({record.relative_path}).")
+        return
+
+    if args.show_id is not None:
+        record = catalog._as_record(args.show_id)
+        print(_describe(record) if record else f"No catalogue entry for {args.show_id!r}.")
+        return
 
     if args.open_id is not None:
         dataset = catalog.open(args.open_id)

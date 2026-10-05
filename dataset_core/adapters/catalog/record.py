@@ -37,7 +37,7 @@ class CatalogRecord:
     created: str | None
     git_sha: str | None
     notes: str
-    measurement_type: str         # 'transmission' | 'reflection' | 'gold' | 'unknown'
+    measurement_type: str         # 'transmission' | 'reflection' | 'gold' | 'ellipsometry' | 'unknown'
     polarization: str | None      # 's' | 'p' | None
     geometry_detail: str | None   # 'window' | 'gold' | ... (from the reflection invert stage)
     sample_tags: list[str]
@@ -47,6 +47,8 @@ class CatalogRecord:
     flags_raised: list[str]
     indexed_at: str
     catalog_schema_version: str
+    producer: str | None = None   # the script that saved the bundle, when it recorded one
+    bundle_kind: str = "session"  # 'session' (DataSet .thzbundle) or e.g. 'thz_ellipsometry_run'
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -181,6 +183,9 @@ def extract_record(bundle_dir: str, root: str) -> CatalogRecord:
     config = recipe.get("config") or {}
     steps_by_stage = _steps_by_stage(recipe)
     measurement_type, geometry_detail = _derive_measurement_type(steps_by_stage)
+    # A bundle that is not a replayable DataSet session has no stages to infer from, so it may
+    # state its type and quantities outright; when it does, that wins.
+    measurement_type = recipe.get("measurement_type") or measurement_type
     has_fits = bool(fit_models)
 
     bundle_id = recipe.get("bundle_id") or str(
@@ -200,9 +205,11 @@ def extract_record(bundle_dir: str, root: str) -> CatalogRecord:
         geometry_detail=geometry_detail,
         sample_tags=_derive_sample_tags(recipe),
         n_files=recipe.get("n_files"),
-        quantities=_derive_quantities(steps_by_stage, has_fits),
+        quantities=list(recipe.get("quantities") or _derive_quantities(steps_by_stage, has_fits)),
         fit_models=fit_models,
         flags_raised=flags_raised,
         indexed_at=datetime.now(timezone.utc).isoformat(),
         catalog_schema_version=CATALOG_SCHEMA_VERSION,
+        producer=recipe.get("producer"),
+        bundle_kind=recipe.get("bundle_kind") or "session",
     )

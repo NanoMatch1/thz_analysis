@@ -34,6 +34,7 @@ import tempfile
 
 import numpy as np
 
+from thz_ellipsometry.adapters.export import save_run
 from thz_ellipsometry.adapters.report import format_run_report, plot_run
 from thz_ellipsometry.adapters.stages import run_ellipsometry
 from thz_ellipsometry.adapters.synthetic_files import write_accumulation_files
@@ -175,6 +176,17 @@ config: dict = {
         "show_graph": True,
         "save_figure": None,
     },
+    "save": {
+        # At the END of the run, write a .thzbundle next to the data (recipe + report + results
+        # + arrays + figure, with code commits and input-file hashes) and index it in the
+        # catalogue. Notes are asked for THEN, with what the run knows pre-filled.
+        "enabled": True,
+        "directory": None,              # None = the data directory
+        # 'auto' prompts only on an interactive terminal; 'config' uses "notes" below; 'none'.
+        # THZ_NOTES_MODE in the environment overrides (e.g. none on a batch machine).
+        "notes_mode": "auto",
+        "notes": "",                    # fallback / non-interactive notes
+    },
 }
 
 
@@ -246,6 +258,8 @@ def main(argv=None):
                         help="synthesise this sample instead of reading real data")
     parser.add_argument("--directory", help="override config['data']['directory']")
     parser.add_argument("--no-graph", action="store_true", help="headless; skip the figure")
+    parser.add_argument("--no-save", action="store_true", help="do not write a result bundle")
+    parser.add_argument("--notes", help="notes to save with the bundle (skips the prompt)")
     arguments = parser.parse_args(argv)
 
     if arguments.no_graph:
@@ -278,6 +292,13 @@ def main(argv=None):
     if config["general"]["show_graph"] or config["general"]["save_figure"]:
         plot_run(outcome, show=config["general"]["show_graph"],
                  save_path=config["general"]["save_figure"])
+
+    save = config.get("save") or {}
+    if save.get("enabled", True) and not arguments.no_save:
+        save_run(outcome, directory=save.get("directory"),
+                 notes_mode="config" if arguments.notes else save.get("notes_mode", "auto"),
+                 config_notes=arguments.notes or save.get("notes", ""),
+                 producer=os.path.basename(__file__))
 
     if outcome.report is not None and not outcome.report.passed:
         return 1
