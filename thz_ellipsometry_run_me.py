@@ -64,11 +64,13 @@ config: dict = {
         # systematic (eps' = A eps + B, plan sec. 8.1), reported separately as the shift it
         # would cause. Near 45 deg it is ~5% in n per degree.
         "incidence_angle_uncertainty_deg": 0.1,
-        # The MAGNET reading at which the emission is p-polarised, from the wire-grid null
-        # (plan sec. 4.4). Subtracted from every filename angle, which removes a known offset
-        # exactly; an offset left in mixes the channels (a Moebius map of rho, not a scale
-        # factor) and is NOT absorbed by the gold calibration.
-        "magnet_angle_for_p_deg": 0.0,
+        # {THz polarisation (deg from p): magnet READING that gives it}, from the wire-grid
+        # nulls (bench_run_me null; plan sec. 4.4). One entry is a pure offset, e.g. {0: 86.3};
+        # all four states, e.g. {0: 86.3, 90: 176.8, 180: 266.0, 270: 356.9}, also remove
+        # per-state errors of the scale. These cannot be fitted from the sample data (one
+        # complex redundancy per frequency), and an error left in MIXES the channels (a Moebius
+        # map of rho) rather than scaling them, so the gold calibration does not absorb it.
+        "magnet_calibration": {0.0: 0.0},
         "index_incident": 1.0,
     },
     "acquisition": {
@@ -87,6 +89,9 @@ config: dict = {
         # 'linear_ramp' over the REAL elapsed time from the file timestamps (F35). Interleave
         # the acquisition: cycle 0/90/180/270 repeatedly rather than one block per state.
         "drift_model": "linear_ramp",
+        # Per-acquisition scale drift (laser power, broadband purge loss): differential between
+        # magnet states, so it does not cancel. A one-parameter ramp is well determined.
+        "amplitude_model": "linear_ramp",
     },
     "detection": {
         # Probe polarisation from the GaP [001] axis. 31.72 deg balances the two channels;
@@ -179,9 +184,9 @@ SIMULATED_MAGNET_ANGLES_DEG = (0.0, 90.0, 180.0, 270.0)
 def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
                             emitter_angles_deg=SIMULATED_MAGNET_ANGLES_DEG, cycles=3,
                             scans_per_acquisition=4, seconds_per_scan=10.0,
-                            relative_noise=0.002, drift_span_fs=30.0,
+                            relative_noise=0.002, drift_span_fs=30.0, amplitude_drift=0.0,
                             background_relative=0.05, out_of_plane_tilt_deg=0.0,
-                            magnet_angle_for_p_deg=0.0, probe_azimuth_deg=None,
+                            magnet_calibration=None, probe_azimuth_deg=None,
                             second_probe_azimuth_deg=None, crystal_001_from_p_deg=90.0,
                             angle_reference=False):
     """Write a synthetic sample + gold reference measurement, in the real .acc format.
@@ -201,10 +206,11 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
     block_seconds = float(schedule.elapsed_seconds[-1]) + scans_per_acquisition * seconds_per_scan
     shared = dict(schedule=schedule, scans_per_angle=scans_per_acquisition,
                   seconds_per_scan=seconds_per_scan, angle_token="mag",
-                  magnet_angle_for_p_deg=magnet_angle_for_p_deg,
+                  magnet_calibration=magnet_calibration,
                   incidence_angle_rad=np.deg2rad(incidence_angle_deg),
                   crystal_orientation_rad=np.deg2rad(crystal_001_from_p_deg),
                   relative_noise=relative_noise, drift_span_s=drift_span_fs * 1e-15,
+                  amplitude_drift=amplitude_drift,
                   background_relative=background_relative)
     write_accumulation_files(directory, index_sample_function=SIMULATED_SAMPLES[sample_name],
                              sample_name=sample_name, probe_azimuth_deg=probe_deg,

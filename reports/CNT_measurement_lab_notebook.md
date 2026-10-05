@@ -1085,6 +1085,31 @@ Also confirmed, as expected from F34: in isotropic mode an UNFITTED out-of-plane
 rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a dispersive sample
 (1.003 +/- 0.002 deg, resistivity 1.02 vs 1.0 ohm.cm); the offset needs the wire-grid null.
 
+### F39 — Bench preparation: the magnet angle must be CALIBRATED, not fitted; a lone wire-grid sweep cannot tell a background from a moved null; amplitude drift IS fittable *(2026-10-05, building the bench tools before the first ellipsometry beam time)*
+
+1. **Per-state magnet angle errors are not identifiable from the sample data.** With four magnet
+   states and a background term each frequency has one complex number of redundancy, and per-state
+   angle errors have no distinct signature in it: singular-value ratio ~1e-8 on gold AND on doped
+   silicon (fitted errors of 2-13 deg against planted 0.4-0.8 deg). Contrast the out-of-plane tilt,
+   which IS fittable on a dispersive sample (F37/582b43e). How much it matters: random setting
+   error of 0.25/0.5/1.0 deg rms per acquisition raises the doped-Si index error from 0.014 to
+   0.021/0.035/0.065 (12 acquisitions, 0.2% noise), with the harmonic chi-square at 2.6/7/25 --
+   flagged, not fixed. Remedy adopted: wire-grid nulls at ALL FOUR states give a reading ->
+   polarisation table (`geometry.magnet_calibration`), applied in the loader; then the states are
+   set reproducibly at the calibrated readings.
+2. **A lone wire-grid sweep confuses a background with a shift of the null.** Over +/-20 deg, cos(b)
+   and a constant are nearly collinear, so a 2% magnet-independent background moves the fitted null
+   by 1.1 deg (and the earlier fit with a free offset traded the two arbitrarily: 1.6 deg off on a
+   test with no background at all). Sweeps 180 deg apart through the same grid share the background
+   and reverse the signal, which separates them exactly -- the +/-M trick applied to the
+   calibration itself.
+3. **An amplitude drift between acquisitions is fittable**: a one-parameter ramp is recovered to
+   2.01% for a planted 2.00%, alongside 30 fs of delay drift, for four states. Now on by default.
+4. **Purge/box openings (Samuel):** every magnet or HWP change opens the box and restarts a purge
+   transient, so interleaving costs equilibration time until the optics are motorised. Adopted:
+   nesting {sample/ref block: {probe setting: {magnet state}}}; identical open/wait/scan routine
+   per state so the transient is common-mode; palindromic order when time allows.
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
@@ -1150,3 +1175,8 @@ rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a 
   (0.30-0.65x on clean additive noise). Bars are safe (they use `drift_corrected_scatter`);
   the reported three-source breakdown is not. Fix the fit or flag it as unreliable below ~30
   repeats, in thz-core. [F38]
+- `OQ14` - Knife-edge data (bench 2026-10-06): analyse once collected and decide whether a
+  frequency-dependent blur correction is worth building (the opt-in `inversion.blur` path needs
+  a measured angular spread; a 50%-wrong spread is worse than none). Includes Samuel's question
+  of whether defocus adds an angle error beyond the angular spread (expected: not for a flat,
+  uniform sample; yes once the sample is finite or non-flat). [F36, F37, F39]

@@ -126,6 +126,12 @@ def _drift_delays(acquisition_count, elapsed_seconds, drift_span_s):
     return float(drift_span_s) * fraction
 
 
+def _amplitude_factors(acquisition_count, elapsed_seconds, amplitude_drift):
+    """1 at the first acquisition, 1 + amplitude_drift at the last, linear in elapsed time."""
+    return 1.0 + float(amplitude_drift) * (
+        _drift_delays(acquisition_count, elapsed_seconds, 1.0))
+
+
 def _channels(index_sample, frequencies_hz, incidence_angle_rad, index_incident, detection,
               out_of_plane_tilt_rad, angular_spread_rad):
     """P and Q per frequency, before the emitted spectrum: d^T J projected on p and s."""
@@ -144,7 +150,7 @@ def synthesize_spectra(index_sample, frequencies_hz, *, emitter_angles_rad=None,
                        probe_azimuth_rad=BALANCED_PROBE_AZIMUTH_RAD,
                        crystal_orientation_rad=0.0, emitted_spectrum=None,
                        relative_noise=0.0, drift_span_s=0.0, white_jitter_s=0.0,
-                       elapsed_seconds=None, background_relative=0.0,
+                       elapsed_seconds=None, background_relative=0.0, amplitude_drift=0.0,
                        out_of_plane_tilt_rad=0.0, angular_spread_rad=0.0,
                        emitter_angle_offset_rad=0.0, label="synthetic", seed=0):
     """Build a polarisation series in the frequency domain with every error channel injectable.
@@ -180,6 +186,9 @@ def synthesize_spectra(index_sample, frequencies_hz, *, emitter_angles_rad=None,
         peak = np.max(np.abs(spectra))
         phase = np.exp(1j * 2.0 * np.pi * frequencies_hz[None, :] * delays[:, None])
         spectra = spectra + background_relative * peak * spectrum[None, :] * phase
+    if amplitude_drift:
+        spectra = spectra * _amplitude_factors(acquisition_count, elapsed_seconds,
+                                               amplitude_drift)[:, None]
 
     if relative_noise:
         scale = relative_noise * np.abs(spectra).max()
@@ -235,7 +244,7 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
                             crystal_orientation_rad=0.0, emitter_angle_offset_rad=0.0,
                             sample_count=512, time_step_ps=0.05, pulse_centre_ps=5.0,
                             pulse_width_ps=0.11, relative_noise=0.0,
-                            multiplicative_noise=0.0, drift_span_s=0.0,
+                            multiplicative_noise=0.0, drift_span_s=0.0, amplitude_drift=0.0,
                             background_relative=0.0, background_delay_ps=0.4,
                             background_width_ps=0.3, out_of_plane_tilt_rad=0.0, seed=0):
     """Repeat-scan time traces for each acquisition of a polarisation series.
@@ -285,6 +294,10 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
             shift = np.exp(1j * 2.0 * np.pi * frequencies_hz * delay)
             clean[position] += (background_relative * peak / background_peak
                                 * np.fft.irfft(background_spectrum * shift, n=sample_count))
+
+    if amplitude_drift:
+        clean = clean * _amplitude_factors(acquisition_count, elapsed_seconds,
+                                           amplitude_drift)[:, None]
 
     generator = np.random.default_rng(seed)
     scans = np.repeat(clean[:, None, :], scans_per_acquisition, axis=1)

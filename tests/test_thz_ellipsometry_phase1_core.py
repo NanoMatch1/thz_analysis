@@ -361,3 +361,41 @@ def test_preprocessing_returns_the_window_it_applied():
     assert transformed.window.max() == pytest.approx(1.0, abs=0.01)
     assert transformed.window[0] == 0.0
     assert transformed.padded_length == 4 * 512
+
+
+# ---------------------------------------------------------------------------
+# Emitter calibration and the amplitude-drift nuisance
+# ---------------------------------------------------------------------------
+
+def test_reading_and_polarisation_maps_are_inverse_and_periodic():
+    from thz_ellipsometry.core import emitter
+    table = {0.0: 86.3, 90.0: 176.8, 180.0: 266.0, 270.0: 356.9}
+    polarisations = np.array([0.0, 37.0, 90.0, 180.0, 300.0, -30.0, 400.0])
+    readings = emitter.reading_from_polarization(polarisations, table)
+    assert np.allclose(emitter.polarization_from_reading(readings, table), polarisations)
+    assert np.allclose(emitter.polarization_from_reading([86.3, 176.8, 266.0, 356.9], table),
+                       [0.0, 90.0, 180.0, 270.0])
+    assert np.allclose(emitter.polarization_from_reading([90.0], {0.0: 86.3}), [3.7])
+
+
+def test_a_table_whose_readings_run_backwards_is_rejected():
+    from thz_ellipsometry.core import emitter
+    with pytest.raises(ValueError, match="rotation sense"):
+        emitter.polarization_from_reading([0.0], {0.0: 90.0, 90.0: 0.0, 180.0: 270.0})
+
+
+def test_amplitude_ramp_is_fitted_and_without_it_the_ratio_is_biased():
+    measured = _series(DOPED, elapsed_seconds=ELAPSED, amplitude_drift=0.03,
+                       background_relative=0.05, relative_noise=0.0005, seed=7)
+    clean = _series(DOPED, elapsed_seconds=ELAPSED)
+    truth = harmonic.fit_emitter_harmonic(MAGNET_STATES, clean.spectra, FREQUENCIES,
+                                          elapsed_seconds=ELAPSED, drift_model="none")
+    fitted = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                           elapsed_seconds=ELAPSED, background_term=True,
+                                           amplitude_model="linear_ramp")
+    ignored = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                            elapsed_seconds=ELAPSED, background_term=True)
+    assert fitted.fitted_amplitude_change == pytest.approx(0.03, abs=0.002)
+    error_fitted = np.median(np.abs(fitted.channel_ratio / truth.channel_ratio - 1.0))
+    error_ignored = np.median(np.abs(ignored.channel_ratio / truth.channel_ratio - 1.0))
+    assert error_fitted < 0.002 < error_ignored

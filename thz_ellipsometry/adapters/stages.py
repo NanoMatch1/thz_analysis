@@ -137,7 +137,7 @@ def load_series(config):
         delimiter=acquisition.get("filename_delimiter", "_"),
         role_vocabulary={role: tuple(words) for role, words in
                          acquisition.get("roles", {}).items()} or None,
-        magnet_angle_for_p_deg=_section(config, "geometry").get("magnet_angle_for_p_deg", 0.0),
+        magnet_calibration=_section(config, "geometry").get("magnet_calibration"),
         default_probe_azimuth_deg=_primary_probe_deg(config),
     )
 
@@ -177,7 +177,8 @@ def fit_harmonic(config, series, transformed, noise):
         drift_model=acquisition.get("drift_model", "linear_ramp"),
         elapsed_seconds=series.elapsed_seconds,
         background_term=acquisition.get("background_term", True),
-        spectral_variance=noise.spectral_variance)
+        spectral_variance=noise.spectral_variance,
+        amplitude_model=acquisition.get("amplitude_model", "linear_ramp"))
 
 
 @ellipsometry_stage
@@ -228,7 +229,7 @@ def calibrate(config, fits, frequencies_hz, band, primary_probe_deg):
         frequencies_hz=frequencies_hz, band=band,
         incidence_angle_rad=_incidence_angle_rad(config),
         index_incident=geometry.get("index_incident", 1.0),
-        # A KNOWN emitter offset is already removed in the loader (magnet_angle_for_p_deg),
+        # A KNOWN emitter offset is already removed in the loader (magnet_calibration),
         # which is exactly equivalent to undoing its Moebius mixing; nothing is left here.
         emitter_offset_rad=0.0,
         channel_reference_fit=reference_fit,

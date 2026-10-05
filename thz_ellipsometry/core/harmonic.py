@@ -23,6 +23,17 @@ nuisance is a ONE-parameter ramp. When per-acquisition timestamps are supplied t
 real elapsed time, which models an interleaved acquisition exactly; otherwise it runs over
 acquisition order, which is the same thing for evenly spaced acquisitions.
 
+The amplitude term. A laser-power drift, or the broadband part of a purge transient, scales a
+whole acquisition. Like a delay, a scale COMMON to every acquisition cancels and one that varies
+between them does not, so it gets the same treatment: an optional one-parameter ramp a_k = 1 +
+g x_k (or a free value per acquisition), fitted alongside the delay. It is well determined even
+for four magnet states (a planted 2% ramp is recovered as 2.01%).
+
+What CANNOT be fitted here: an error in the polarisation angle of individual states. With four
+states and a background, each frequency has one complex number of redundancy, and per-state
+angle errors have no distinct signature in it -- singular-value ratio ~1e-8 on gold AND on doped
+silicon. The angles must come from a calibration (the wire-grid nulls), not from the sample.
+
 Weights. If the per-acquisition spectral noise variance is supplied (from the repeat-scan noise
 model), the fit is weighted by it and the returned covariance is the propagated measurement
 noise. Otherwise it is unweighted and the covariance is estimated from the residual scatter.
@@ -39,7 +50,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-__all__ = ["DRIFT_MODELS", "HarmonicFit", "fit_emitter_harmonic", "harmonic_residual_norm"]
+__all__ = ["AMPLITUDE_MODELS", "DRIFT_MODELS", "HarmonicFit", "fit_emitter_harmonic",
+           "harmonic_residual_norm"]
 
 
 @dataclass(frozen=True)
@@ -62,6 +74,8 @@ class HarmonicFit:
     reduced_chi_square: float | None = None
     elapsed_seconds: np.ndarray | None = None
     emitter_angles_rad: np.ndarray | None = None
+    amplitudes: np.ndarray | None = None   #: (n_acquisitions,) fitted scale, first = 1
+    amplitude_model: str = "none"
 
     @property
     def channel_ratio(self):
@@ -93,6 +107,11 @@ class HarmonicFit:
     @property
     def fitted_drift_fs(self):
         return float(np.ptp(self.delays_s) * 1e15)
+
+    @property
+    def fitted_amplitude_change(self):
+        """Largest fractional change in acquisition scale across the series (0 if not fitted)."""
+        return 0.0 if self.amplitudes is None else float(np.ptp(self.amplitudes))
 
 
 def _design_matrix(emitter_angles_rad, background_term):
@@ -138,7 +157,28 @@ DRIFT_MODELS = {
 }
 
 
-def _solve_linear(design, spectra, frequencies_hz, delays_s, weights):
+def _amplitudes_from_parameters(parameters, amplitude_model, acquisition_count,
+                                elapsed_seconds=None):
+    """Per-acquisition scale, gauge-fixed with the first acquisition at 1."""
+    if amplitude_model == "none":
+        return np.ones(acquisition_count)
+    if amplitude_model == "linear_ramp":
+        return 1.0 + parameters[0] * _ramp_abscissa(acquisition_count, elapsed_seconds)
+    if amplitude_model == "per_acquisition":
+        return np.concatenate([[1.0], np.exp(np.asarray(parameters, dtype=float))])
+    raise ValueError(f"unknown amplitude_model {amplitude_model!r}; known: "
+                     f"{sorted(AMPLITUDE_MODELS)}")
+
+
+#: Nuisance parameter count for each amplitude model, given the number of acquisitions.
+AMPLITUDE_MODELS = {
+    "none": lambda acquisition_count: 0,
+    "linear_ramp": lambda acquisition_count: 1,
+    "per_acquisition": lambda acquisition_count: max(acquisition_count - 1, 0),
+}
+
+
+def _solve_linear(design, spectra, frequencies_hz, delays_s, weights, amplitudes=None):
     """Weighted closed-form solve per frequency for given delays.
 
     Returns (solution (n_columns, n_frequencies), residual (n_acquisitions, n_frequencies),
@@ -147,18 +187,25 @@ def _solve_linear(design, spectra, frequencies_hz, delays_s, weights):
     phase = np.exp(-1j * 2.0 * np.pi
                    * np.asarray(frequencies_hz)[None, :] * np.asarray(delays_s)[:, None])
     derotated = np.asarray(spectra) * phase
+    if amplitudes is not None:
+        # Divide out the scale; the noise is divided with it, so the weights scale by a^2.
+        derotated = derotated / amplitudes[:, None]
+        weights = weights * amplitudes[:, None] ** 2
     # normal[f] = A^T diag(w_f) A ; right_hand_side[f] = A^T diag(w_f) b_f
     normal = np.einsum("kf,ki,kj->fij", weights, design, design)
     right_hand_side = np.einsum("kf,ki,kf->fi", weights, design, derotated)
     inverse_normal = np.linalg.inv(normal)
     solution = np.einsum("fij,fj->if", inverse_normal, right_hand_side)
     residual = derotated - design @ solution
+    if amplitudes is not None:
+        residual = residual * amplitudes[:, None]   # back in measured units
     return solution, residual, inverse_normal
 
 
 def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
                          drift_model="linear_ramp", maximum_drift_fs=500.0, *,
-                         elapsed_seconds=None, background_term=False, spectral_variance=None):
+                         elapsed_seconds=None, background_term=False, spectral_variance=None,
+                         amplitude_model="none"):
     """Fit P and Q (plus an optional background and a drift nuisance) to a polarisation series.
 
     Parameters
@@ -178,6 +225,8 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
     spectral_variance : (n_acquisitions, n_frequencies) array, optional
         E|dS|^2 of each acquisition's spectrum, from the noise model. Weights the fit and makes
         the returned covariance the propagated measurement noise.
+    amplitude_model : {'none', 'linear_ramp', 'per_acquisition'}
+        Nuisance scale per acquisition (laser power, broadband purge loss).
 
     Returns
     -------
@@ -212,12 +261,17 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
             f"the emitter angles are degenerate; {what} cannot be separated "
             f"(angles: {np.round(np.rad2deg(emitter_angles_rad), 3).tolist()} deg)")
 
-    parameter_count = DRIFT_MODELS[drift_model](acquisition_count)
+    delay_parameter_count = DRIFT_MODELS[drift_model](acquisition_count)
+    if amplitude_model not in AMPLITUDE_MODELS:
+        raise ValueError(f"unknown amplitude_model {amplitude_model!r}; known: "
+                         f"{sorted(AMPLITUDE_MODELS)}")
+    amplitude_parameter_count = AMPLITUDE_MODELS[amplitude_model](acquisition_count)
+    parameter_count = delay_parameter_count + amplitude_parameter_count
     # Each acquisition contributes two real numbers per frequency against the 2*n_columns of the
     # linear unknowns, so a nuisance shared across frequencies needs one spare acquisition; a
     # per-acquisition model needs genuine redundancy because its parameter count grows with it.
     minimum_acquisitions = column_count + (1 if parameter_count else 0)
-    if drift_model == "per_acquisition":
+    if "per_acquisition" in (drift_model, amplitude_model):
         minimum_acquisitions = column_count + 3
     if acquisition_count < minimum_acquisitions:
         raise ValueError(
@@ -240,24 +294,34 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         weights = 1.0 / np.maximum(spectral_variance, np.max(spectral_variance) * 1e-12)
     root_weights = np.sqrt(weights)
 
+    def nuisance(parameters):
+        delays = _delays_from_parameters(parameters[:delay_parameter_count], drift_model,
+                                         acquisition_count, elapsed_seconds)
+        amplitudes = _amplitudes_from_parameters(parameters[delay_parameter_count:],
+                                                 amplitude_model, acquisition_count,
+                                                 elapsed_seconds)
+        return delays, amplitudes
+
     if parameter_count == 0:
-        delays = np.zeros(acquisition_count)
+        delays, amplitudes = np.zeros(acquisition_count), np.ones(acquisition_count)
     else:
         def residual_vector(parameters):
-            trial = _delays_from_parameters(parameters, drift_model, acquisition_count,
-                                            elapsed_seconds)
-            _, residual, _ = _solve_linear(design, spectra, frequencies_hz, trial, weights)
+            trial_delays, trial_amplitudes = nuisance(parameters)
+            _, residual, _ = _solve_linear(design, spectra, frequencies_hz, trial_delays,
+                                           weights, trial_amplitudes)
             weighted = residual * root_weights
             return np.concatenate([weighted.real.ravel(), weighted.imag.ravel()])
 
-        bound = maximum_drift_fs * np.ones(parameter_count)
+        # Delays in fs within +/- maximum_drift_fs; amplitude parameters within +/- 0.5 (a
+        # 50% scale change or e^0.5 is far outside anything physical).
+        bound = np.concatenate([maximum_drift_fs * np.ones(delay_parameter_count),
+                                0.5 * np.ones(amplitude_parameter_count)])
         result = least_squares(residual_vector, np.zeros(parameter_count),
                                bounds=(-bound, bound), xtol=1e-12, ftol=1e-12)
-        delays = _delays_from_parameters(result.x, drift_model, acquisition_count,
-                                         elapsed_seconds)
+        delays, amplitudes = nuisance(result.x)
 
     solution, residual, inverse_normal = _solve_linear(design, spectra, frequencies_hz, delays,
-                                                       weights)
+                                                       weights, amplitudes)
 
     scale = np.linalg.norm(spectra, axis=0)
     scale = np.where(scale > 0, scale, 1.0)
@@ -296,6 +360,8 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         elapsed_seconds=None if elapsed_seconds is None else np.asarray(elapsed_seconds,
                                                                         dtype=float),
         emitter_angles_rad=emitter_angles_rad,
+        amplitudes=None if amplitude_model == "none" else amplitudes,
+        amplitude_model=amplitude_model,
     )
 
 

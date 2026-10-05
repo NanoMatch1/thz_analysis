@@ -253,6 +253,7 @@ def analyse_polarisation_series(
     tilt_model="drude",
     tilt_fixed_parameters=None,
     incidence_angle_uncertainty_deg=0.0,
+    amplitude_model="none",
 ):
     """Run the whole chain on arrays: harmonic fit -> channel calibration -> rho -> n, k.
 
@@ -261,7 +262,8 @@ def analyse_polarisation_series(
     second exists for replaying a stored calibration, and for tests.
     """
     frequencies_hz = np.asarray(frequencies_hz, dtype=float)
-    fit_options = dict(drift_model=drift_model, background_term=background_term)
+    fit_options = dict(drift_model=drift_model, background_term=background_term,
+                       amplitude_model=amplitude_model)
     sample_fit = fit_emitter_harmonic(sample_emitter_angles_rad, sample_spectra, frequencies_hz,
                                       elapsed_seconds=sample_elapsed_seconds,
                                       spectral_variance=sample_spectral_variance,

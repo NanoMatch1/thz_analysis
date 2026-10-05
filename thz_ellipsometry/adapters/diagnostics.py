@@ -146,6 +146,25 @@ def drift_within_range(outcome, config):
 
 @diagnostic(
     stage=ACQUISITION,
+    assumption="the fitted amplitude drift across a block is a few percent at most",
+    why="The amplitude ramp removes a smooth scale change between magnet states. A large one "
+        "means the laser or the purge changed a lot inside the block, and anything not smooth "
+        "(a step when the box was opened) is not removed and leaks into rho.",
+    remedy="Wait longer after closing the box (bench_run_me live), and check the laser power "
+           "log; repeat the block if it coincides with a disturbance.",
+    severity=Severity.WARN)
+def amplitude_drift_small(outcome, config):
+    if not _is_outcome(outcome):
+        return
+    for key, fit in outcome.fits.items():
+        if fit.fitted_amplitude_change > 0.05:
+            yield Problem(f"{key[0]} @ probe {key[1]}: amplitude changed "
+                          f"{fit.fitted_amplitude_change:.1%} across the series",
+                          detail={"amplitude_change": fit.fitted_amplitude_change})
+
+
+@diagnostic(
+    stage=ACQUISITION,
     assumption="each acquisition has enough repeat scans for the noise model",
     why="Without the noise model the fit is unweighted and its error bars come from the "
         "residual scatter, which is fine for the values but makes the bars themselves rough "

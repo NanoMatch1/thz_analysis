@@ -70,9 +70,9 @@ def test_loader_groups_by_role_and_probe_and_orders_rows_in_time(tmp_path):
 
 
 def test_loader_subtracts_the_magnet_angle_that_gives_p(tmp_path):
-    _write(tmp_path, magnet_angle_for_p_deg=7.0)
+    _write(tmp_path, magnet_calibration={0.0: 7.0})
     raw = loader.load_measurement(str(tmp_path), default_probe_azimuth_deg=PRIMARY_PROBE)
-    corrected = loader.load_measurement(str(tmp_path), magnet_angle_for_p_deg=7.0,
+    corrected = loader.load_measurement(str(tmp_path), magnet_calibration={0.0: 7.0},
                                         default_probe_azimuth_deg=PRIMARY_PROBE)
     key = ("sample", PRIMARY_PROBE)
     assert np.allclose(raw[key].angles_deg[:4], [7.0, 97.0, 187.0, 277.0])
@@ -167,9 +167,9 @@ def test_fitted_tilt_rescues_a_tilted_dispersive_sample(tmp_path):
 
 
 def test_a_known_magnet_offset_in_the_config_is_removed_exactly(tmp_path):
-    directory = _write(tmp_path, magnet_angle_for_p_deg=7.0)
+    directory = _write(tmp_path, magnet_calibration={0.0: 7.0})
     unknown = run_ellipsometry(_config(directory))
-    known = run_ellipsometry(_config(directory, geometry={"magnet_angle_for_p_deg": 7.0}))
+    known = run_ellipsometry(_config(directory, geometry={"magnet_calibration": {0.0: 7.0}}))
     assert _index_error(unknown) > 0.1
     assert _index_error(known) < 0.02
 
@@ -263,3 +263,21 @@ def test_report_shows_bars_systematic_and_findings_and_the_figure_renders(tmp_pa
 
 def test_driver_runs_the_doped_silicon_simulation_headlessly():
     assert thz_ellipsometry_run_me.main(["--simulate", "doped_silicon", "--no-graph"]) == 0
+
+
+def test_per_state_magnet_scale_errors_need_the_four_null_table(tmp_path):
+    """An offset-only calibration leaves per-state errors in; the four-state table removes them."""
+    true_table = {0.0: 86.3, 90.0: 176.8, 180.0: 266.0, 270.0: 356.9}
+    directory = _write(tmp_path, magnet_calibration=true_table)
+    offset_only = run_ellipsometry(_config(directory, geometry={"magnet_calibration":
+                                                                 {0.0: 86.3}}))
+    full = run_ellipsometry(_config(directory, geometry={"magnet_calibration": true_table}))
+    assert _index_error(full) < 0.02
+    assert _index_error(offset_only) > 2 * _index_error(full)
+
+
+def test_amplitude_drift_is_fitted_end_to_end(tmp_path):
+    outcome = run_ellipsometry(_config(_write(tmp_path, amplitude_drift=0.03)))
+    fit = outcome.result.sample_fit
+    assert fit.fitted_amplitude_change == pytest.approx(0.03, abs=0.005)
+    assert _index_error(outcome) < 0.02

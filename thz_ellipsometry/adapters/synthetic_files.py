@@ -14,6 +14,7 @@ import os
 
 import numpy as np
 
+from ..core.emitter import reading_from_polarization
 from ..core.simulate import interleaved_schedule, synthesize_acquisitions
 
 __all__ = ["write_accumulation_files"]
@@ -27,15 +28,15 @@ def _angle_label(angle_deg):
 
 def write_accumulation_files(directory, *, index_sample_function, emitter_angles_rad=None,
                              schedule=None, sample_name="sample", scans_per_angle=2,
-                             angle_token="pol", magnet_angle_for_p_deg=0.0, probe_token=None,
+                             angle_token="pol", magnet_calibration=None, probe_token=None,
                              probe_azimuth_deg=None, start_time=DEFAULT_START,
                              time_offset_seconds=0.0, **kwargs):
     """Write one ``.acc`` file per acquisition, in the real on-disk format.
 
     Give either ``emitter_angles_rad`` (one acquisition per angle, in order) or a ``schedule``
     from :func:`~thz_ellipsometry.core.simulate.interleaved_schedule`. Angles are THz
-    polarisation from p; the filename records the MAGNET reading, ``polarisation +
-    magnet_angle_for_p_deg``, as the bench will. With ``probe_token`` set, the probe setting is
+    polarisation from p; the filename records the MAGNET reading that gives it under the TRUE
+    ``magnet_calibration`` table ({polarisation: reading}), as the bench will. With ``probe_token`` set, the probe setting is
     written into the name too. Cycles beyond the first add a ``cyc=NN`` token so the names stay
     unique. ``time_offset_seconds`` shifts this object's whole schedule, for writing a sample and
     its reference as consecutive blocks.
@@ -65,7 +66,8 @@ def write_accumulation_files(directory, *, index_sample_function, emitter_angles
     several_cycles = int(np.max(schedule.cycle_numbers)) > 1
     written = []
     for position, angle in enumerate(schedule.polarization_angles_rad):
-        magnet_deg = float(np.rad2deg(angle)) + magnet_angle_for_p_deg
+        magnet_deg = round(float(reading_from_polarization(np.rad2deg(angle),
+                                                           magnet_calibration or {0.0: 0.0})), 3)
         stem = f"{sample_name}_{angle_token}={_angle_label(magnet_deg)}"
         if probe_token is not None and probe_azimuth_deg is not None:
             stem += f"_{probe_token}={_angle_label(probe_azimuth_deg)}"

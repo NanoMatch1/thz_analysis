@@ -10,10 +10,10 @@ form ``key=value`` is extracted regardless of its position:
     doped-si_mag=090_cyc=03.acc          sample, magnet at 90 deg, third cycle
     gold_mag=000_probe=31.72.acc         channel reference, magnet 0, probe at 31.72 deg
 
-``mag`` is the magnet angle as commanded. THz polarisation is perpendicular to M, so the magnet
-reading at which the emission is p is an instrument value (from the wire-grid null, plan
-sec. 4.4) supplied as ``magnet_angle_for_p_deg`` and subtracted here; everything downstream works
-in polarisation angle from p. A leading ``m`` stands in for a minus sign (``mag=m30``). Files
+``mag`` is the magnet READING. THz polarisation is perpendicular to M, so the reading at which the
+emission is p -- and, if calibrated, at which it is s, -p and -s -- is an instrument calibration
+from the wire-grid nulls (plan sec. 4.4), supplied as ``magnet_calibration`` and applied here via
+``core.emitter``; everything downstream works in polarisation angle from p. A leading ``m`` stands in for a minus sign (``mag=m30``). Files
 without a probe token were taken at the configured fixed probe setting. The role comes from a
 vocabulary per role matched against the filename; whatever matches no vocabulary is the sample.
 Per-scan timestamps from the file headers give each acquisition its elapsed time, which the
@@ -33,6 +33,8 @@ from dataclasses import dataclass
 
 import numpy as np
 from acquisition_editor import load_file as load_acc_file
+
+from ..core.emitter import polarization_from_reading
 
 __all__ = [
     "AccumulationFile",
@@ -199,7 +201,7 @@ def _float_token(filename, token, delimiter):
 
 
 def load_measurement(directory, *, angle_token="mag", probe_token="probe", delimiter="_",
-                     role_vocabulary=None, magnet_angle_for_p_deg=0.0,
+                     role_vocabulary=None, magnet_calibration=None,
                      default_probe_azimuth_deg=None, extension=".acc"):
     """Load every ``.acc`` in a directory into series keyed by ``(role, probe_azimuth_deg)``.
 
@@ -227,7 +229,8 @@ def load_measurement(directory, *, angle_token="mag", probe_token="probe", delim
         probe = _float_token(name, probe_token, delimiter)
         probe = default_probe_azimuth_deg if probe is None else probe
         key = (classify_role(name, role_vocabulary), probe)
-        grouped.setdefault(key, []).append((angle - magnet_angle_for_p_deg,
+        grouped.setdefault(key, []).append((float(polarization_from_reading(
+                                                angle, magnet_calibration or {0.0: 0.0})),
                                             os.path.join(directory, name)))
 
     if not grouped:

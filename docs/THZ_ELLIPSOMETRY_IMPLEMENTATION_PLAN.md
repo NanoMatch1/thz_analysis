@@ -379,4 +379,13 @@ Design deviations only (progress lives in `~/.claude/global_projects.md`, not he
 - **Ellipsometry diagnostics share the repo's `@diagnostic` registry** under `ellipsometry.*` stage
   names and appear in `docs/assumptions_ledger.md`. Regenerating the ledger must import
   `thz_ellipsometry.adapters.diagnostics`, or those entries drop out.
+- **Magnet angle: a calibration table, not a fitted nuisance** (`core/emitter.py`,
+  `geometry.magnet_calibration` = {polarisation: reading}). Per-state angle errors are not
+  identifiable from sample data (F39). Replaces the single `magnet_angle_for_p_deg` offset; one
+  entry is that offset.
+- **Amplitude drift nuisance** (`acquisition.amplitude_model`, default `linear_ramp`), fitted with the
+  delay by the same variable projection.
+- **Bench tools** (`core/bench.py` pure; `adapters/bench_tools.py` with a `@bench_tool` registry;
+  `thz_ellipsometry_bench_run_me.py`): wire-grid nulls (paired sweeps share a background), purge
+  settling, HWP walk (plan sec. 7.8). These were not in the plan; they serve the bench sessions.
 

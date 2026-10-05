@@ -91,6 +91,12 @@ The TILT is what identifies water specifically: a laser power drift scales the w
 - **Why it matters:** A drift that reaches the search bound has been clipped, and the part that was not fitted remains as a phase error in rho (1.5 fs is ~0.9% at 1 THz).
 - **If it fails:** Shorten the acquisition or cycle the states faster; check the lab temperature and the purge; raise maximum_drift_fs only if the drift is real.
 
+### the fitted amplitude drift across a block is a few percent at most
+
+- **Check:** `amplitude_drift_small` (severity when broken: **warn**)
+- **Why it matters:** The amplitude ramp removes a smooth scale change between magnet states. A large one means the laser or the purge changed a lot inside the block, and anything not smooth (a step when the box was opened) is not removed and leaks into rho.
+- **If it fails:** Wait longer after closing the box (bench_run_me live), and check the laser power log; repeat the block if it coincides with a disturbance.
+
 ### each acquisition has enough repeat scans for the noise model
 
 - **Check:** `noise_model_available` (severity when broken: **info**)
