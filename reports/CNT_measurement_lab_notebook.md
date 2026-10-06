@@ -1144,6 +1144,31 @@ rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a 
    noise-independent diagnostic `drift_separable_from_ratio` uses the "revisit lever arm" (how
    far apart in time the same signal was seen twice): 0.33 for the bad case, 1.0 otherwise.
 
+### F41 — First knife-edge (preliminary): beam radius falls from ~4 mm at 1 THz to ~2.7 mm at 2 THz, but the scan stops before the edge is finished below 1 THz, and the signal does not go to zero at 1.5-2 THz *(2026-10-06, `data_sync/diagnostics/2026-10-06_knife-edge-test`, blade 0-11 mm in 1 mm steps, 4 scans each, 6 ps record = 0.17 THz resolution; `diagnostics/knife_edge_run_me.py`)*
+
+1. **What the curve is.** EO detection measures the field projected onto the detection mode, not
+   power. For a detection mode matched to the beam that overlap is the power-meter erf with the
+   1/e^2 intensity radius, so the erf is fitted to |E(f)|; |E|^2 is its square, not an erf. If
+   the mode is not matched, the radius is "the spot the measurement sees" (the quantity the blur
+   correction needs anyway).
+2. **Radii (1/e^2, erf on |E|):** 3.99 mm @ 0.99 THz, 2.99 @ 1.49, 2.66 @ 1.98 (errors +/-0.13-0.23
+   mm after chi-square inflation). 0.29/0.50/0.74 THz give 5.9/5.6/5.3 mm but are EXTRAPOLATED: the
+   scan covers only 62-75% of the edge there. The ratio from 1 to 2 THz is 1.5, not the 2 a purely
+   diffraction-limited focus gives (w proportional to lambda) -- tentatively part geometric, part diffraction.
+3. **The erf does not describe the points to within noise** (reduced chi-square 6 at 0.3 THz up to
+   830 at 2 THz). Visible cause: a 2-4% overshoot at 4-5 mm at 1.5-2 THz just before the edge,
+   the shape of a Fresnel edge-diffraction fringe (tentative). The radius is a shape summary there.
+4. **Not fully blocked at high frequency.** The fit puts the fully-blocked level at 34-38% of the
+   open signal at 1.5-2 THz (4-16% below 1 THz), and the 10-11 mm points do flatten. Either the
+   blade had not crossed the beam, or a path reaches the detector without passing the blade plane.
+   Extending the scan separates the two.
+5. **The pulse arrives 0.65 ps earlier over the 11 mm** (peak 103.55 -> 102.90 ps; about 0.2 mm
+   of path). Not explained yet: depends on whether the blade stage moves anything else in the
+   beam path. |E(f)| is unaffected, since one common window covers every file.
+
+**Action:** extend the scan to ~20 mm (the 0.3 THz edge centre ~9 mm + 1.5 w ~ 9 mm), and record
+the geometry (what the stage carries, distance from the focus). Feeds OQ14.
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
@@ -1214,3 +1239,5 @@ rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a 
   a measured angular spread; a 50%-wrong spread is worse than none). Includes Samuel's question
   of whether defocus adds an angle error beyond the angular spread (expected: not for a flat,
   uniform sample; yes once the sample is finite or non-flat). [F36, F37, F39]
+  *2026-10-06: first data analysed in F41 -- the scan must be extended to ~20 mm before the
+  low-frequency radii, which are the ones the blur correction needs, can be trusted.*

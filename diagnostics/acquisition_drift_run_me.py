@@ -46,11 +46,16 @@ pure per-run stability diagnostic.
 from __future__ import annotations
 
 import os
+import sys
 
 import matplotlib.pyplot as plt
 
-from dataset_core import DataSet
-from dataset_core.adapters import acquisition_tracking as tracking
+# Lives in diagnostics/; put the repo root on the path so it runs as
+# `python diagnostics/acquisition_drift_run_me.py` from anywhere.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dataset_core import DataSet  # noqa: E402
+from dataset_core.adapters import acquisition_tracking as tracking  # noqa: E402
 
 
 # ── Data path ────────────────────────────────────────────────────────────────
