@@ -38,6 +38,9 @@ config: dict = {
         "angle_token": "mag",
         "group_token": "null",
         "filename_contains": None,
+        # False: each sweep fitted alone; the 180-deg separation of a pair is then a check.
+        # True: one sinusoid + background through each pair (forces the nulls 180 deg apart).
+        "fit_background": False,
     },
     "live": {
         "angle_token": "mag",           # scans are grouped by magnet state

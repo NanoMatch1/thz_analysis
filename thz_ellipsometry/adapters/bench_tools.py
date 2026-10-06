@@ -135,9 +135,10 @@ class NullSweep:
     polarisation: float | None      #: the ``null=`` token (None if absent)
     name: str                       #: filename stem shared by the sweep's files
     filenames: tuple
-    fit: bench.WireGridNull         #: the fit the report uses (shared background if paired)
+    fit: bench.WireGridNull         #: the fit the report uses
     lone_fit: bench.WireGridNull    #: the same sweep fitted alone, without a background
-    paired: bool                    #: True if a sweep 180 deg away shared the background
+    paired: bool                    #: True if projected together with a sweep 180 deg away
+    background_fitted: bool         #: True if ``fit`` is the shared sinusoid + background
     elapsed_minutes: np.ndarray     #: per reading, file mid-time since the sweep's first file
     time_ps: np.ndarray
     traces: np.ndarray              #: (n_readings, n_samples) averaged, baseline removed
@@ -178,11 +179,14 @@ def _elapsed_minutes(files):
 
 
 def _null_sweeps(groups, config, angle_token):
-    """Fit sweeps pairwise where a partner 180 deg away exists (shared background), else alone.
+    """Project and fit each sweep, together with its partner 180 deg away if there is one.
 
     The two sweeps of a pair are projected onto ONE reference spectrum, so their signed
-    amplitudes -- and the background they share -- are on the same scale.
+    amplitudes are on the same scale. They are fitted alone unless ``config['null']
+    ['fit_background']``, which fits one sinusoid + background through both (see
+    ``core.bench.fit_wire_grid_nulls`` for what that costs).
     """
+    fit_background = bool(config.get("null", {}).get("fit_background", False))
     pending = dict(groups)
     fitted = {}
     while pending:
@@ -211,15 +215,17 @@ def _null_sweeps(groups, config, angle_token):
             rows.append(slice(start, start + len(sweep)))
             sweeps.append(([reading for reading, _ in sweep], amplitudes[rows[-1]]))
             start += len(sweep)
+        background_fitted = fit_background and partner is not None
+        reported = bench.fit_wire_grid_nulls(sweeps, fit_background=background_fitted)
         for (key, sweep), rows_of_sweep, (readings, values), result in zip(
-                members, rows, sweeps, bench.fit_wire_grid_nulls(sweeps)):
+                members, rows, sweeps, reported):
             sweep_files = [file for _, file in sweep]
             fitted[key] = NullSweep(
                 polarisation=key,
                 name=_sweep_name([file.path for file in sweep_files], angle_token),
                 filenames=tuple(os.path.basename(file.path) for file in sweep_files),
                 fit=result, lone_fit=bench.fit_wire_grid_null(readings, values),
-                paired=partner is not None,
+                paired=partner is not None, background_fitted=background_fitted,
                 elapsed_minutes=_elapsed_minutes(sweep_files),
                 time_ps=files[0].time_ps, traces=corrected[rows_of_sweep],
                 window=transformed.window)
@@ -264,13 +270,13 @@ def null(directory, config):
     results, table = {}, {}
     for sweep in collection.sweeps:
         polarisation, result = sweep.polarisation, sweep.fit
-        count, paired = len(sweep.filenames), sweep.paired
+        count = len(sweep.filenames)
         results[polarisation] = result
         label = ("(no null= token; assumed p)" if polarisation is None
                  else f"polarisation {polarisation:g} deg")
-        background = (f"background {result.leakage_fraction:.1%} (shared with the sweep "
-                      "180 deg away)" if paired else
-                      "no background term (no sweep 180 deg away to separate it)")
+        background = (f"background {result.leakage_fraction:.1%} (one sinusoid through this "
+                      "sweep and the one 180 deg away)" if sweep.background_fitted
+                      else "fitted alone, no background")
         lines.append(f"   {label}: NULL at reading {result.null_deg:.2f} +/- "
                      f"{result.null_standard_error_deg:.2f} deg; {background}; {count} readings")
         readings = result.magnet_angles_deg
@@ -279,16 +285,37 @@ def null(directory, config):
                          "the sweep")
         table[0.0 if polarisation is None else float(polarisation)] = round(result.null_deg, 2)
 
+    lines += _separation_checks(collection.sweeps)
     if len(table) > 1:
         polarisations = sorted(table)
         gaps = np.diff([table[key] for key in polarisations])
         nominal = np.diff(polarisations)
+        deviations = (gaps - nominal + 180.0) % 360.0 - 180.0
         lines.append("   spacing between nulls minus nominal: "
-                     + ", ".join(f"{gap - step:+.2f}" for gap, step in zip(gaps, nominal))
-                     + " deg  (scale or sense error if large)")
+                     + ", ".join(f"{deviation:+.2f}" for deviation in deviations)
+                     + " deg  (grid placements not orthogonal, or a scale/sense error, if large)")
     lines += ["   Grid passing s nulls at polarisation 0/180, passing p at 90/270.",
               f"   -> config['geometry']['magnet_calibration'] = {table}"]
     return results, "\n".join(lines)
+
+
+def _separation_checks(sweeps):
+    """For each pair fitted alone: how far from 180 deg apart the two nulls came out."""
+    lines, seen = [], set()
+    by_label = {sweep.polarisation: sweep for sweep in sweeps if sweep.polarisation is not None}
+    for label, sweep in sorted(by_label.items()):
+        partner_label = next((other for other in by_label if other not in seen
+                              and other != label
+                              and np.isclose((other - label) % 360.0, 180.0)), None)
+        if partner_label is None or label in seen or sweep.background_fitted:
+            continue
+        seen.update({label, partner_label})
+        first, second = sweep.fit, by_label[partner_label].fit
+        separation = (second.null_deg - first.null_deg) % 360.0
+        error = float(np.hypot(first.null_standard_error_deg, second.null_standard_error_deg))
+        lines.append(f"   nulls {label:g} and {partner_label:g}: {separation:.2f} +/- {error:.2f} "
+                     f"deg apart (180 expected; magnet scale or drift between sweeps if not)")
+    return lines
 
 
 @bench_figures("null")

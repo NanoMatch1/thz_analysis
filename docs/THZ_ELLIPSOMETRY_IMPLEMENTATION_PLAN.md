@@ -386,7 +386,7 @@ Design deviations only (progress lives in `~/.claude/global_projects.md`, not he
 - **Amplitude drift nuisance** (`acquisition.amplitude_model`, default `linear_ramp`), fitted with the
   delay by the same variable projection.
 - **Bench tools** (`core/bench.py` pure; `adapters/bench_tools.py` with a `@bench_tool` registry;
-  `thz_ellipsometry_bench_run_me.py`): wire-grid nulls (paired sweeps share a background), purge
+  `thz_ellipsometry_bench_run_me.py`): wire-grid nulls (each sweep fitted alone by default, 180-deg separation reported as a check; optional one-sinusoid + background per pair), purge
   settling, HWP walk (plan sec. 7.8). These were not in the plan; they serve the bench sessions.
 - **Purge nuisance models** (F40): drift `settling` (exponential, rate fitted) and amplitude
   `tilt_settling` / `tilt_ramp` (gain + log-amplitude tilt linear in f); `auto` picks them by

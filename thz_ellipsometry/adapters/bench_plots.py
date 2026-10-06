@@ -47,13 +47,14 @@ def plot_null_fits(sweeps):
 
         fit_axis.axhline(0.0, color="0.6", linewidth=0.8)
         fit_axis.plot(dense, sweep.fit.model(dense), color="tab:blue",
-                      label=_null_label("reported" + (" (paired)" if sweep.paired else ""),
+                      label=_null_label("reported" + (" (shared sinusoid)"
+                                                      if sweep.background_fitted else ""),
                                         sweep.fit))
         fit_axis.axvspan(sweep.fit.null_deg - sweep.fit.null_standard_error_deg,
                          sweep.fit.null_deg + sweep.fit.null_standard_error_deg,
                          color="tab:blue", alpha=0.15, linewidth=0)
         fit_axis.axvline(sweep.fit.null_deg, color="tab:blue", linewidth=1.0)
-        if sweep.paired:
+        if sweep.background_fitted:
             fit_axis.plot(dense, sweep.lone_fit.model(dense), color="tab:orange",
                           linestyle="--", label=_null_label("lone", sweep.lone_fit))
             fit_axis.axvline(sweep.lone_fit.null_deg, color="tab:orange", linestyle="--",
@@ -71,7 +72,7 @@ def plot_null_fits(sweeps):
                                         norm=colour_scale, cmap="viridis", marker="o", s=22,
                                         label=f"reported, rms {sweep.fit.residual_rms:.4f}",
                                         zorder=3)
-        if sweep.paired:
+        if sweep.background_fitted:
             residual_axis.scatter(readings, sweep.lone_fit.residuals, marker="s", s=26,
                                   facecolors="none",
                                   edgecolors=plt.get_cmap("viridis")(colour_scale(colours)),

@@ -108,16 +108,63 @@ def _null_near_data(sine_weight, cosine_weight, angles_rad):
     return chosen, sign
 
 
-def fit_wire_grid_nulls(sweeps, *, fit_background=None):
-    """Fit one or two null sweeps through the SAME grid orientation, sharing a background.
+def _fit_one_sinusoid(sweeps, fit_background):
+    """One ``A sin(b - b0) [+ c]`` through every reading of the given sweeps.
 
-    Each sweep is ``(magnet_readings_deg, signed_amplitudes)`` and is modelled as
-    ``A_j sin(b - b0_j) + c``. The constant c is a magnet-independent background (optical
-    rectification in the emitter substrate, pickup). Over a sweep of +/-20 deg it is nearly
-    degenerate with a SHIFT of the null -- cos(b) and a constant are almost collinear there -- so
-    it is only fitted when two sweeps 180 deg apart share it: the signal reverses with the
-    magnet, the background does not, and the pair separates them (the +/-M trick again). A lone
-    sweep is fitted without it; ``fit_background`` overrides.
+    Returns one :class:`WireGridNull` per sweep. They share A, b0 and c, so for two sweeps the
+    nulls are exactly 180 deg apart; each is reported in its own sweep's turn and sign.
+    """
+    angles = np.concatenate([sweep_angles for sweep_angles, _ in sweeps])
+    values = np.concatenate([amplitudes for _, amplitudes in sweeps])
+    columns = [np.sin(angles), np.cos(angles)] + ([np.ones_like(angles)] if fit_background
+                                                   else [])
+    design = np.column_stack(columns)
+    coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
+    residual = values - design @ coefficients
+    dof = max(values.size - design.shape[1], 1)
+    noise_variance = float(residual @ residual) / dof
+    covariance = np.linalg.inv(design.T @ design) * noise_variance
+    sine_weight, cosine_weight = coefficients[:2]
+    background = float(coefficients[2]) if fit_background else 0.0
+    amplitude = float(np.hypot(sine_weight, cosine_weight))
+    gradient = np.zeros(design.shape[1])
+    gradient[:2] = np.array([cosine_weight, -sine_weight]) / amplitude**2
+    null_error = float(np.sqrt(max(gradient @ covariance @ gradient, 0.0)))
+
+    results = []
+    for sweep_angles, amplitudes in sweeps:
+        chosen, sign = _null_near_data(sine_weight, cosine_weight, sweep_angles)
+        # Report the null in the same turn as the readings (a scale may run past 360).
+        chosen_deg = float(np.rad2deg(chosen))
+        mean_reading = float(np.rad2deg(np.mean(sweep_angles)))
+        chosen_deg += 360.0 * round((mean_reading - chosen_deg) / 360.0)
+        results.append(WireGridNull(
+            null_deg=chosen_deg,
+            null_standard_error_deg=float(np.rad2deg(null_error)),
+            amplitude=sign * amplitude, leakage=background,
+            residual_rms=float(np.sqrt(noise_variance)),
+            magnet_angles_deg=np.rad2deg(sweep_angles), signed_amplitudes=amplitudes))
+    return results
+
+
+def fit_wire_grid_nulls(sweeps, *, fit_background=False):
+    """Fit one or two null sweeps through the SAME grid orientation (180 deg apart).
+
+    Each sweep is ``(magnet_readings_deg, signed_amplitudes)``. Two models:
+
+    ``fit_background=False`` (default): each sweep alone, ``A_j sin(b - b0_j)``. The nulls are
+    independent, so their separation (180 deg expected) is a check on the magnet scale and on
+    drift during the sweeps.
+
+    ``fit_background=True``: ONE sinusoid ``A sin(b - b0) + c`` through all readings. The
+    constant c is a magnet-independent background (optical rectification in the emitter
+    substrate, pickup). Over a single sweep of +/-20 deg it is nearly degenerate with a SHIFT of
+    the null -- cos(b) and a constant are almost collinear there. Two sweeps 180 deg apart
+    separate them only because the sinusoid is shared: the signal reverses with the magnet, the
+    background does not (the +/-M trick). The price is that the nulls are forced exactly 180 deg
+    apart, so a scale error or drift between the sweeps is absorbed into c and the shared null.
+    (Giving each sweep its own A and b0 plus a shared c does NOT work: nothing then ties the
+    nulls together and c trades freely against opposite shifts of the two.)
 
     The signed amplitudes of a pair must share one projection reference, or c means nothing.
     Returns a list of :class:`WireGridNull`, one per sweep.
@@ -130,53 +177,16 @@ def fit_wire_grid_nulls(sweeps, *, fit_background=None):
         if angles.size < 4:
             raise ValueError("need at least four magnet readings around each null (two each "
                              "side plus two further out)")
-    if fit_background is None:
-        fit_background = len(sweeps) == 2
-
-    rows, values = [], []
-    column_count = 2 * len(sweeps) + (1 if fit_background else 0)
-    for index, (angles, amplitudes) in enumerate(sweeps):
-        block = np.zeros((angles.size, column_count))
-        block[:, 2 * index] = np.sin(angles)
-        block[:, 2 * index + 1] = np.cos(angles)
-        if fit_background:
-            block[:, -1] = 1.0
-        rows.append(block)
-        values.append(amplitudes)
-    design, values = np.vstack(rows), np.concatenate(values)
-    coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
-    residual = values - design @ coefficients
-    dof = max(values.size - column_count, 1)
-    noise_variance = float(residual @ residual) / dof
-    covariance = np.linalg.inv(design.T @ design) * noise_variance
-    background = float(coefficients[-1]) if fit_background else 0.0
-
-    results = []
-    for index, (angles, amplitudes) in enumerate(sweeps):
-        sine_weight, cosine_weight = coefficients[2 * index:2 * index + 2]
-        amplitude = float(np.hypot(sine_weight, cosine_weight))
-        chosen, sign = _null_near_data(sine_weight, cosine_weight, angles)
-        gradient = np.zeros(column_count)
-        gradient[2 * index:2 * index + 2] = np.array([cosine_weight, -sine_weight]) / amplitude**2
-        null_error = float(np.sqrt(max(gradient @ covariance @ gradient, 0.0)))
-        # Report the null in the same turn as the readings (a scale may run past 360).
-        chosen_deg = float(np.rad2deg(chosen))
-        mean_reading = float(np.rad2deg(np.mean(angles)))
-        chosen_deg += 360.0 * round((mean_reading - chosen_deg) / 360.0)
-        results.append(WireGridNull(
-            null_deg=chosen_deg,
-            null_standard_error_deg=float(np.rad2deg(null_error)),
-            amplitude=sign * amplitude, leakage=background,
-            residual_rms=float(np.sqrt(noise_variance)),
-            magnet_angles_deg=np.rad2deg(angles), signed_amplitudes=amplitudes))
-    return results
+    if fit_background:
+        return _fit_one_sinusoid(sweeps, fit_background=True)
+    return [_fit_one_sinusoid([sweep], fit_background=False)[0] for sweep in sweeps]
 
 
 def fit_wire_grid_null(magnet_angles_deg, signed_amplitudes, *, fit_background=False):
     """One sweep: the magnet reading at the null of A sin(b - b0) (+ c if asked).
 
     With the grid passing s, the null is the magnet reading that emits pure p. See
-    :func:`fit_wire_grid_nulls` for why the background is off by default for a lone sweep.
+    :func:`fit_wire_grid_nulls` for why a background is not separable within a lone sweep.
     """
     return fit_wire_grid_nulls([(magnet_angles_deg, signed_amplitudes)],
                                fit_background=fit_background)[0]

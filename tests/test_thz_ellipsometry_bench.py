@@ -60,11 +60,42 @@ def test_a_background_shifts_a_lone_null_and_the_reversed_sweep_removes_it():
     sweep_minus_p = np.sin(np.deg2rad(readings_minus_p - 86.0)) + background
     lone = bench.fit_wire_grid_null(readings_p, sweep_p)
     paired = bench.fit_wire_grid_nulls([(readings_p, sweep_p),
-                                        (readings_minus_p, sweep_minus_p)])
+                                        (readings_minus_p, sweep_minus_p)], fit_background=True)
     assert lone.null_deg - 86.0 == pytest.approx(-np.rad2deg(background), rel=0.05)
     assert paired[0].null_deg == pytest.approx(86.0, abs=1e-6)
     assert paired[1].null_deg == pytest.approx(266.0, abs=1e-6)
     assert paired[0].leakage == pytest.approx(background, abs=1e-9)
+
+
+def test_a_pair_is_fitted_alone_by_default_and_keeps_a_scale_error_visible():
+    """Nulls 181 deg apart (scale error), no background: each sweep must land on its own null.
+
+    Regression: the old pair model (own A and null per sweep + shared constant) let the constant
+    trade against opposite null shifts -- on bench data it invented 4-11% background and moved
+    the nulls 3-7 deg.
+    """
+    generator = np.random.default_rng(4)
+    offsets = np.array([-22.0, -10.0, -6.0, -4.0, -2.0, 0.0, 2.0, 6.0, 18.0])
+    first_null, second_null = 156.2, 337.2
+    sweeps = [(null + offsets,
+               sign * np.sin(np.deg2rad(offsets)) + 0.005 * generator.normal(size=offsets.size))
+              for null, sign in ((first_null, 1.0), (second_null, -1.0))]
+    first, second = bench.fit_wire_grid_nulls(sweeps)
+    assert first.leakage == 0.0 and second.leakage == 0.0
+    assert first.null_deg == pytest.approx(first_null, abs=0.2)
+    assert second.null_deg == pytest.approx(second_null, abs=0.2)
+    assert first.null_standard_error_deg < 0.2
+
+
+def test_the_shared_sinusoid_forces_the_nulls_180_apart():
+    readings = np.array([66.0, 78.0, 84.0, 86.0, 88.0, 94.0, 106.0])
+    sweeps = [(readings, np.sin(np.deg2rad(readings - 86.0)) + 0.01),
+              (readings + 180.0, np.sin(np.deg2rad(readings + 180.0 - 86.0)) + 0.01)]
+    first, second = bench.fit_wire_grid_nulls(sweeps, fit_background=True)
+    assert second.null_deg - first.null_deg == pytest.approx(180.0, abs=1e-9)
+    assert first.null_standard_error_deg == second.null_standard_error_deg
+    np.testing.assert_allclose(first.residuals, 0.0, atol=1e-12)
+    np.testing.assert_allclose(second.residuals, 0.0, atol=1e-12)
 
 
 def test_wire_grid_null_model_reproduces_the_fitted_points():
@@ -200,12 +231,26 @@ def test_null_sweeps_carry_both_fits_and_the_traces(tmp_path):
     collection = collect_null_sweeps(str(tmp_path), thz_ellipsometry_bench_run_me.config)
     assert [sweep.polarisation for sweep in collection.sweeps] == [0.0, 180.0]
     for sweep in collection.sweeps:
-        assert sweep.paired and sweep.lone_fit.leakage == 0.0
+        assert sweep.paired and not sweep.background_fitted
+        assert sweep.fit.leakage == 0.0 and sweep.lone_fit.leakage == 0.0
         assert sweep.name == f"wgp_grid=s_null={sweep.polarisation:g}"
         assert sweep.traces.shape == (8, sweep.time_ps.size)
         assert sweep.lone_fit.null_deg == pytest.approx(
             true_table[sweep.polarisation], abs=4 * sweep.lone_fit.null_standard_error_deg + 0.05)
         np.testing.assert_allclose(sweep.readings_deg, sweep.lone_fit.magnet_angles_deg)
+
+
+def test_null_report_checks_the_180_degree_separation(tmp_path):
+    _write_paired_null_sweeps(str(tmp_path))
+    _, report = run_bench_tool("null", str(tmp_path), thz_ellipsometry_bench_run_me.config)
+    assert "fitted alone, no background" in report
+    assert "nulls 0 and 180:" in report and "180 expected" in report
+    configuration = {**thz_ellipsometry_bench_run_me.config,
+                     "null": {**thz_ellipsometry_bench_run_me.config["null"],
+                              "fit_background": True}}
+    results, report = run_bench_tool("null", str(tmp_path), configuration)
+    assert "one sinusoid" in report and "180 expected" not in report
+    assert results[180.0].null_deg - results[0.0].null_deg == pytest.approx(180.0, abs=1e-9)
 
 
 def test_only_the_null_tool_registers_figures():
