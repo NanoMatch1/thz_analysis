@@ -433,7 +433,7 @@ def plot_knife_edge(table, edge_fits=None, *, quantities=("amplitude", "intensit
     return figure
 
 
-def plot_fft_traces(table, *, spectrum_max_thz=4.0, show_raw_traces=True):
+def plot_fft_traces(table, *, spectrum_max_thz=6.0, show_raw_traces=True):
     """Check the transform: time traces with the window, and the spectra with the traced bins.
 
     Left: for every position, the trace the FFT saw (solid; baseline removed and windowed,
