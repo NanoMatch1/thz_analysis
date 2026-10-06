@@ -12,5 +12,6 @@ pipeline. Grouped by topic. Run from the repo root with the repo on the path, e.
 - **`reflection_phase_and_windowing/`** — reflection phase audit, phase-unwrap vs legacy, and
   windowing/centering demos that fed the reflection pipeline design.
 - **`selfreferencing_validation/`** — window self-referencing evaluation and consistency checks.
+- **`knife_edge/`** — strip decomposition of knife-edge scans (-dS/dx = pulse per strip of beam): arrival-time gradient across the beam, per-frequency profiles, realignment test (lab notebook F42).
 - **`test_runners/`** — convenience runners for the thz_core test suite.
 - `output/` — scratch outputs.

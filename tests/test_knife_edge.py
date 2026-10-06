@@ -169,7 +169,10 @@ def test_fft_trace_figure_has_time_and_spectrum_panels():
 # Workflow: real files through the run_me
 # ---------------------------------------------------------------------------
 
-def test_run_me_end_to_end(tmp_path, capsys):
+def test_run_me_end_to_end(tmp_path, capsys, monkeypatch):
+    # The synthetic pulse has signal only below ~3 THz; pin the frequencies rather than follow
+    # whatever the bench config currently traces.
+    monkeypatch.setitem(knife_edge_run_me.config, "frequencies_thz", (0.3, 0.5, 1.0, 1.5, 2.0))
     positions = np.arange(0.0, 13.0, 1.0)
     _write_scan_series(str(tmp_path), positions,
                        extra_names=("sample_knife-edge_0mm_purging", "reference_gold"))

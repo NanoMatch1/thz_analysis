@@ -67,6 +67,15 @@ def test_a_background_shifts_a_lone_null_and_the_reversed_sweep_removes_it():
     assert paired[0].leakage == pytest.approx(background, abs=1e-9)
 
 
+def test_wire_grid_null_model_reproduces_the_fitted_points():
+    readings = np.array([66.0, 78.0, 84.0, 86.0, 88.0, 94.0, 106.0])
+    values = -0.7 * np.sin(np.deg2rad(readings - 86.4)) + 0.01
+    fit = bench.fit_wire_grid_null(readings, values, fit_background=True)
+    np.testing.assert_allclose(fit.model(readings), values, atol=1e-12)
+    np.testing.assert_allclose(fit.residuals, 0.0, atol=1e-12)
+    assert fit.model([fit.null_deg])[0] == pytest.approx(fit.leakage, abs=1e-12)
+
+
 def test_wire_grid_null_needs_enough_readings():
     with pytest.raises(ValueError, match="at least four"):
         bench.fit_wire_grid_null([80.0, 90.0, 100.0], [1.0, 0.0, -1.0])
@@ -167,6 +176,57 @@ def test_null_tool_builds_the_four_state_calibration_table(tmp_path):
         assert fitted.null_deg == pytest.approx(reading,
                                                 abs=4 * fitted.null_standard_error_deg + 0.05)
     assert "magnet_calibration'] = {0.0:" in report
+
+
+def _write_paired_null_sweeps(directory):
+    true_table = {0.0: 86.3, 180.0: 266.0}
+    offsets = np.array([-20.0, -8.0, -4.0, -2.0, 2.0, 4.0, 8.0, 20.0])
+    for polarisation in true_table:
+        schedule = simulate.AcquisitionSchedule(
+            np.deg2rad(polarisation + offsets), np.arange(offsets.size) * 60.0,
+            np.ones(offsets.size, dtype=int))
+        write_accumulation_files(
+            directory, index_sample_function=materials.gold_index, schedule=schedule,
+            sample_name=f"wgp_grid=s_null={polarisation:g}", scans_per_angle=2,
+            angle_token="mag", magnet_calibration=true_table, probe_azimuth_deg=0.0,
+            crystal_orientation_rad=0.0, incidence_angle_rad=np.deg2rad(45.0),
+            relative_noise=0.003)
+    return true_table
+
+
+def test_null_sweeps_carry_both_fits_and_the_traces(tmp_path):
+    from thz_ellipsometry.adapters.bench_tools import collect_null_sweeps
+    true_table = _write_paired_null_sweeps(str(tmp_path))
+    collection = collect_null_sweeps(str(tmp_path), thz_ellipsometry_bench_run_me.config)
+    assert [sweep.polarisation for sweep in collection.sweeps] == [0.0, 180.0]
+    for sweep in collection.sweeps:
+        assert sweep.paired and sweep.lone_fit.leakage == 0.0
+        assert sweep.name == f"wgp_grid=s_null={sweep.polarisation:g}"
+        assert sweep.traces.shape == (8, sweep.time_ps.size)
+        assert sweep.lone_fit.null_deg == pytest.approx(
+            true_table[sweep.polarisation], abs=4 * sweep.lone_fit.null_standard_error_deg + 0.05)
+        np.testing.assert_allclose(sweep.readings_deg, sweep.lone_fit.magnet_angles_deg)
+
+
+def test_only_the_null_tool_registers_figures():
+    assert BENCH_TOOLS["null"].figures is not None
+    assert BENCH_TOOLS["live"].figures is None and BENCH_TOOLS["hwp"].figures is None
+
+
+def test_bench_driver_saves_the_null_figures_headlessly(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from thz_ellipsometry.adapters.bench_tools import make_bench_figures
+    _write_paired_null_sweeps(str(tmp_path))
+    assert thz_ellipsometry_bench_run_me.main(["null", str(tmp_path), "--no-graph"]) == 0
+    for name in ("null_fits.png", "null_traces.png"):
+        assert (tmp_path / "bench_analysis" / name).is_file()
+    figures = make_bench_figures("null", str(tmp_path), thz_ellipsometry_bench_run_me.config)
+    fits = figures["null_fits.png"]
+    assert len([axis for axis in fits.axes if axis.get_xlabel() == "magnet reading [deg]"]) == 2
+    import matplotlib.pyplot as plt
+    for figure in figures.values():
+        plt.close(figure)
 
 
 def test_live_tool_tracks_settling_per_magnet_state(tmp_path):

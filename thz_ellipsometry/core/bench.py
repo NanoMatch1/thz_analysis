@@ -86,6 +86,16 @@ class WireGridNull:
         """Background relative to the full swing."""
         return abs(self.leakage) / abs(self.amplitude) if self.amplitude else np.inf
 
+    def model(self, magnet_angles_deg):
+        """The fitted curve ``A sin(b - b0) + c`` at the given readings."""
+        angles = np.deg2rad(np.asarray(magnet_angles_deg, dtype=float))
+        return self.amplitude * np.sin(angles - np.deg2rad(self.null_deg)) + self.leakage
+
+    @property
+    def residuals(self):
+        """Measured minus fitted signed amplitude, at each reading of the sweep."""
+        return self.signed_amplitudes - self.model(self.magnet_angles_deg)
+
 
 def _null_near_data(sine_weight, cosine_weight, angles_rad):
     """The zero of a sin(b) + b' cos(b) nearest the middle of the readings, and the sign of A."""

@@ -2,7 +2,9 @@
 
 Registered with ``@bench_tool``; the registry is the single source of truth for the command-line
 subcommands, their help text and their dispatch in ``thz_ellipsometry_bench_run_me.py``.
-Every tool takes ``(directory, config)`` and returns ``(result, text_report)``.
+Every tool takes ``(directory, config)`` and returns ``(result, text_report)``. A tool can also
+have figures, registered with ``@bench_figures("<tool>")``: a function of ``(directory, config)``
+returning ``{filename: matplotlib Figure}``; the drawing itself is in ``bench_plots``.
 
 The analyses themselves are pure and live in ``thz_ellipsometry.core.bench``; this module only
 finds the files, parses their filename tokens and builds spectra.
@@ -11,7 +13,7 @@ finds the files, parses their filename tokens and builds spectra.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -20,7 +22,8 @@ from ..core.preprocess import transform_traces
 from .loader import parse_key_value_tokens, polarisation_angle_deg_from_filename, \
     read_accumulation_file
 
-__all__ = ["BENCH_TOOLS", "bench_tool", "bench_tool_names", "run_bench_tool"]
+__all__ = ["BENCH_TOOLS", "NullSweep", "NullSweepCollection", "bench_figures", "bench_tool",
+           "bench_tool_names", "collect_null_sweeps", "make_bench_figures", "run_bench_tool"]
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,7 @@ class BenchTool:
     name: str
     function: object
     summary: str
+    figures: object = None          #: (directory, config) -> {filename: Figure}, or None
 
 
 #: name -> BenchTool. The one place a bench tool exists.
@@ -43,6 +47,14 @@ def bench_tool(function):
     return function
 
 
+def bench_figures(tool_name):
+    """Register the figures of an already-registered tool (decorator)."""
+    def register(function):
+        BENCH_TOOLS[tool_name] = replace(BENCH_TOOLS[tool_name], figures=function)
+        return function
+    return register
+
+
 def bench_tool_names():
     return sorted(BENCH_TOOLS)
 
@@ -54,6 +66,12 @@ def run_bench_tool(name, directory, config):
         raise KeyError(f"unknown bench tool {name!r}; registered: {bench_tool_names()}") \
             from None
     return entry.function(directory, config)
+
+
+def make_bench_figures(name, directory, config):
+    """The tool's figures as ``{filename: Figure}``; empty if the tool has none."""
+    entry = BENCH_TOOLS[name]
+    return {} if entry.figures is None else entry.figures(directory, config)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +126,58 @@ def _token(path, key, delimiter="_"):
 # Tools
 # ---------------------------------------------------------------------------
 
-def _null_sweeps(groups, config):
+@dataclass(frozen=True)
+class NullSweep:
+    """One wire-grid null sweep: what was measured, and the fits made to it.
+
+    Everything the report and the figures need, so both read the same numbers.
+    """
+    polarisation: float | None      #: the ``null=`` token (None if absent)
+    name: str                       #: filename stem shared by the sweep's files
+    filenames: tuple
+    fit: bench.WireGridNull         #: the fit the report uses (shared background if paired)
+    lone_fit: bench.WireGridNull    #: the same sweep fitted alone, without a background
+    paired: bool                    #: True if a sweep 180 deg away shared the background
+    elapsed_minutes: np.ndarray     #: per reading, file mid-time since the sweep's first file
+    time_ps: np.ndarray
+    traces: np.ndarray              #: (n_readings, n_samples) averaged, baseline removed
+    window: np.ndarray              #: the window the transform applied
+
+    @property
+    def readings_deg(self):
+        return self.fit.magnet_angles_deg
+
+    @property
+    def signed_amplitudes(self):
+        return self.fit.signed_amplitudes
+
+
+@dataclass(frozen=True)
+class NullSweepCollection:
+    sweeps: list                    #: NullSweep, ordered by polarisation label
+    file_count: int
+    sweep_count: int                #: including the groups too small to fit
+    too_small: dict                 #: label -> number of files, for groups below four
+
+
+def _sweep_name(paths, angle_token):
+    stems = [os.path.splitext(os.path.basename(path))[0] for path in paths]
+    tokens = [stem.split("_") for stem in stems]
+    shared = [token for token in tokens[0]
+              if all(token in others for others in tokens[1:])
+              and not token.lower().startswith(f"{angle_token.lower()}=")]
+    return "_".join(shared) or stems[0]
+
+
+def _elapsed_minutes(files):
+    stamps = [file.mean_timestamp for file in files]
+    if any(stamp is None for stamp in stamps):
+        return np.full(len(files), np.nan)
+    first = min(stamps)
+    return np.array([(stamp - first).total_seconds() / 60.0 for stamp in stamps])
+
+
+def _null_sweeps(groups, config, angle_token):
     """Fit sweeps pairwise where a partner 180 deg away exists (shared background), else alone.
 
     The two sweeps of a pair are projected onto ONE reference spectrum, so their signed
@@ -126,25 +195,42 @@ def _null_sweeps(groups, config):
         if partner is not None:
             members.append((partner, sorted(pending.pop(partner), key=lambda entry: entry[0])))
         files = [file for _, sweep in members for _, file in sweep]
-        transformed = _transform(files[0].time_ps, np.vstack([file.averaged for file in files]),
-                                 config, _common_window_centre_ps(files))
+        traces = np.vstack([file.averaged for file in files])
+        transformed = _transform(files[0].time_ps, traces, config,
+                                 _common_window_centre_ps(files))
         band = _band(transformed.frequencies_hz, config)
         strongest = int(np.argmax(np.sum(np.abs(transformed.spectra[:, band]) ** 2, axis=1)))
         amplitudes = bench.signed_projection(transformed.spectra,
                                              transformed.spectra[strongest], band)
-        sweeps, start = [], 0
+        baseline_count = max(int(config.get("preprocess", {}).get("baseline_fraction", 0.1)
+                                 * traces.shape[1]), 1)
+        corrected = traces - traces[:, :baseline_count].mean(axis=1, keepdims=True)
+        sweeps, rows = [], []
+        start = 0
         for _, sweep in members:
-            sweeps.append(([reading for reading, _ in sweep],
-                           amplitudes[start:start + len(sweep)]))
+            rows.append(slice(start, start + len(sweep)))
+            sweeps.append(([reading for reading, _ in sweep], amplitudes[rows[-1]]))
             start += len(sweep)
-        for (key, sweep), result in zip(members, bench.fit_wire_grid_nulls(sweeps)):
-            fitted[key] = (result, len(sweep), partner is not None)
+        for (key, sweep), rows_of_sweep, (readings, values), result in zip(
+                members, rows, sweeps, bench.fit_wire_grid_nulls(sweeps)):
+            sweep_files = [file for _, file in sweep]
+            fitted[key] = NullSweep(
+                polarisation=key,
+                name=_sweep_name([file.path for file in sweep_files], angle_token),
+                filenames=tuple(os.path.basename(file.path) for file in sweep_files),
+                fit=result, lone_fit=bench.fit_wire_grid_null(readings, values),
+                paired=partner is not None,
+                elapsed_minutes=_elapsed_minutes(sweep_files),
+                time_ps=files[0].time_ps, traces=corrected[rows_of_sweep],
+                window=transformed.window)
     return fitted
 
 
-@bench_tool
-def null(directory, config):
-    """Wire-grid nulls -> the magnet calibration table, from files named ..._null=<pol>_mag=<reading>."""
+def collect_null_sweeps(directory, config):
+    """Read and fit every wire-grid null sweep in a directory. Returns NullSweepCollection.
+
+    Shared by the ``null`` tool's report and its figures, so both show the same fits.
+    """
     settings = config.get("null", {})
     angle_token = settings.get("angle_token", "mag")
     group_token = settings.get("group_token", "null")
@@ -159,15 +245,26 @@ def null(directory, config):
     if not groups:
         raise ValueError(f"no files with a '{angle_token}=' token in {directory}")
 
-    small = {key: entries for key, entries in groups.items() if len(entries) < 4}
+    too_small = {key: len(entries) for key, entries in groups.items() if len(entries) < 4}
     usable = {key: entries for key, entries in groups.items() if len(entries) >= 4}
-    lines = [f"[null] {sum(map(len, groups.values()))} files in {len(groups)} null sweep(s)"]
-    lines += [f"   {group_token}={key}: only {len(entries)} files; need 4+"
-              for key, entries in small.items()]
-    fitted = _null_sweeps(usable, config)
+    fitted = _null_sweeps(usable, config, angle_token)
+    ordered = [fitted[key] for key in sorted(fitted, key=lambda key: (key is None, key))]
+    return NullSweepCollection(sweeps=ordered, file_count=sum(map(len, groups.values())),
+                               sweep_count=len(groups), too_small=too_small)
+
+
+@bench_tool
+def null(directory, config):
+    """Wire-grid nulls -> the magnet calibration table, from files named ..._null=<pol>_mag=<reading>."""
+    group_token = config.get("null", {}).get("group_token", "null")
+    collection = collect_null_sweeps(directory, config)
+    lines = [f"[null] {collection.file_count} files in {collection.sweep_count} null sweep(s)"]
+    lines += [f"   {group_token}={key}: only {count} files; need 4+"
+              for key, count in collection.too_small.items()]
     results, table = {}, {}
-    for polarisation in sorted(fitted, key=lambda key: (key is None, key)):
-        result, count, paired = fitted[polarisation]
+    for sweep in collection.sweeps:
+        polarisation, result = sweep.polarisation, sweep.fit
+        count, paired = len(sweep.filenames), sweep.paired
         results[polarisation] = result
         label = ("(no null= token; assumed p)" if polarisation is None
                  else f"polarisation {polarisation:g} deg")
@@ -192,6 +289,15 @@ def null(directory, config):
     lines += ["   Grid passing s nulls at polarisation 0/180, passing p at 90/270.",
               f"   -> config['geometry']['magnet_calibration'] = {table}"]
     return results, "\n".join(lines)
+
+
+@bench_figures("null")
+def null_figures(directory, config):
+    """The fit to every sweep with its residuals, and the time traces behind the points."""
+    from . import bench_plots
+    sweeps = collect_null_sweeps(directory, config).sweeps
+    return {"null_fits.png": bench_plots.plot_null_fits(sweeps),
+            "null_traces.png": bench_plots.plot_null_traces(sweeps)}
 
 
 @bench_tool

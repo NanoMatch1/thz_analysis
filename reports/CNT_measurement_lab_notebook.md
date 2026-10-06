@@ -1178,6 +1178,91 @@ delayed contributions interfering, which fits the edge-diffracted wave adding to
 transmitted part, and probably explains point 4's non-zero high-frequency floor and part of point
 5's walk. Tentative until the longer scan.
 
+### F42 — The knife-edge "diffraction" is a linear arrival-time gradient across the beam (-59 fs/mm, the same with and without the aperture): the detected strips of beam do not arrive together. Removing it makes every knife-edge curve monotonic, and it may be costing a large factor in high-frequency signal *(2026-10-06, extended unclipped scan 0-17 mm + 5 mm aperture scan 0-16 mm; `explorations/knife_edge/knife_edge_strip_analysis.py`)*
+
+**Status: CURRENT.** Supersedes F41 points 3-5 (the interpretations) and F41's radii (the method).
+
+1. **Method: strip decomposition.** Coherent detection measures the overlap of the THz field with
+   the detection mode, integrated over the unblocked part of the blade plane, so -dS/dx0 is the
+   pulse carried by the strip at x, as the detector sees it. Its |s(x,f)| is the beam profile per
+   frequency and its arrival time is the relative wavefront between beam and detection mode.
+2. **The finding.** Strip arrival time falls LINEARLY across the beam: -59.4 fs/mm unclipped
+   (envelope centroid -59, 1-2 THz group delay -59.4), -62/-70 fs/mm with the aperture. Same
+   in the 0.4-1 and 1-2 THz bands -> non-dispersive, geometric. Equivalent to a 1.0 deg wavefront
+   tilt between the THz beam and the detection mode, referred to the blade plane. NOT drift: the
+   unclipped 12 mm point, taken last, lies on the line. It explains F41's 0.65 ps pulse walk
+   exactly (59 fs/mm x 11 mm).
+3. **It is the whole story for the non-erf curves.** Rebuilding S(x0) from the strips with the
+   linear delay removed makes every unclipped curve strictly monotonic (largest rise going into
+   the beam: raw +0.4 to +2.0%, realigned none). The 1.5-2 THz overshoot, the second lobe, the
+   spectral dip near 1 THz and the non-zero "blocked" level are coherent summation of strips
+   arriving at different times. Not edge diffraction (that is already inside the Kirchhoff
+   integral). The erf radii of F41 are therefore not beam sizes: |S| is not an intensity integral
+   when the integrand's phase varies across the beam.
+4. **What it may cost.** Summing the strips WITH the gradient removed gives x3.6 at 1 THz, x7.2
+   at 2 THz, x2.1 at 0.5 THz over the measured full-beam signal (unclipped; aperture x2.2 / x4.8).
+   This is an UPPER BOUND (it assumes a realignment would bring the strips into phase without
+   changing their amplitudes), but the direction is clear: the detection averages over a ~0.9 ps
+   delay spread, which washes out the high frequencies. A mode-matched detection has no gradient
+   (Fermat: equal paths from every blade-plane point to the detection point), so this is a
+   fixable misalignment: most likely the probe spot offset from the THz focus in the EO crystal,
+   or the beam entering the final focusing optic ~1 deg off (the same thing seen from the
+   collimated side), or a pulse-front tilt from the source. A scan along y gives the other
+   component.
+5. **Beam profiles (strip |s|).** Unclipped: still strong at the first strip (0.5 mm, 0.85 of
+   peak) -> the scan started INSIDE the beam; its "open" 0 mm spectrum is not the full beam. The
+   high-frequency profile peaks at ~2 mm and reaches 1/e^2 by ~14.5 mm; the 0.3/0.5 THz profiles
+   are double-humped (2 and 8.5 mm) and broader. 5 mm aperture: a sharp edge at ~4 mm, high-
+   frequency footprint ~3.5-10.5 mm = 7 mm, i.e. 5 mm / cos 45 deg (consistent with x lying in the
+   45 deg sample plane), and a flat 0.3-0.45 tail at 0.3/0.5 THz out to 15.5 mm. **OQ12 answered,
+   as F37 predicted: the aperture confines the high frequencies but NOT the low ones.**
+6. **Aperture throughput** (0 mm, aperture / unclipped |E|): 0.14 at 0.3 THz, 0.26 at 0.5, 0.37
+   at 0.75, ~0.4 at 1-3 THz. Since the unclipped 0 mm was not the full beam, the true loss is
+   larger. Peak shapes show no lock-in clipping (unclipped peak 122 mV on a 0.1 V range per the
+   12 mm .dat: worth checking the range used for 0-11 mm).
+7. **For ellipsometry.** Anything that moves the beam relative to the detection mode -- the HWP
+   walk, a remount, a sample edge clipping part of the footprint -- now has a known conversion to
+   arrival time: of order the gradient times the centroid shift (tens of fs per mm). For rho this is
+   common-mode unless p and s weight the beam differently, which is exactly what an HWP walk
+   does. Fixing the gradient removes the conversion.
+
+**Actions:** (a) live alignment check: blade covering one half of the beam, then the other; the
+arrival-time difference is the gradient times the half-centroid separation -- adjust the probe /
+EO overlap (or final focusing optic) to null it, watching the 1-2 THz amplitude rise. (b) a y-axis
+scan. (c) start the unclipped scan well outside the beam (negative positions). (d) Record the
+blade geometry (on the Si surface at 45 deg? which direction is +x?).
+
+*Addendum 2026-10-06 (Samuel's alternative + two discriminating checks):* Samuel's mechanism:
+the stage axis is not parallel to the Si surface (beam leaves the parabolic pair slightly off the
+intended path), so translating moves the reflector along its normal and shifts the WHOLE pulse,
+by 2 d cos 45 / c. Test: the whole-pulse delay of S(x0) where the blade is still OUTSIDE the
+beam (aperture scan, 0-3 mm) is +6/+9/+14 fs (drift level; 0/1 mm taken 40 min after 2/3 mm), against
+the -180 fs that mechanism would need at 3 mm. The delay only starts once the blade enters the
+beam, and it saturates (-750 fs, 13-16 mm) once the blade has passed it -> it is a property
+of position ACROSS the beam, not of stage position. If the Si does move with the stage, its
+normal motion is < ~5 fs/mm (< ~0.06 deg). Second check: the strip PHASE delay equals the strip
+GROUP delay (-65 to -72 vs -59 to -70 fs/mm at 1-2 THz; low f noisier) -> a true, non-dispersive
+wavefront tilt of ~1.1 deg (sin a = c g), not a pulse-front tilt from angular dispersion.
+Correction to point 4: a beam entering the final focusing optic off-axis or tilted is harmless
+ON ITS OWN, because the focus just moves and the probe follows it when the signal is optimised. A
+gradient means the probe point and the THz focus do not coincide: lateral offset ~ a x F_det
+(0.9 mm for F = 50.8 mm). That is large enough that its signal cost should be big at high f, which
+is itself a reason to test it before believing it. Test: steer the probe laterally on the EO crystal in
+~0.1 mm steps, recording the 1.5-2 THz amplitude and the half-beam arrival difference. If they
+respond, the fix is on the probe side (easy). If not, the tilt sits upstream and a knife edge
+at a second plane localises it. Also measured: the 0 mm purge run drifted 144 fs in 24 min
+(settling) before the scan began -- negligible against the ~1 ps gradient.
+
+### F43 — Magnet calibration (four wire-grid nulls): the nulls are clean and achromatic to +/-0.3 deg, but the bench tool's paired-background fit is degenerate and inflated the errors 10-300x; the grid's two orientations are ~2 deg from orthogonal; the p-passing channel is ~1.8x the s-passing one *(2026-10-06, `data_sync/diagnostics/2026-10-06_ellips-testing_balance-check`, 4 sweeps x 9 readings, 2-3 scans each, 3 ps record 102-105 ps; `thz_ellipsometry_bench_run_me.py null`, new figures `null_fits.png` / `null_traces.png`)*
+
+- **Labels.** Files were named `null=<magnet reading>` (064/156/244/336); the tool expects `null=<polarisation>` (grid passing s -> 0/180, passing p -> 90/270). Pairing still worked by coincidence (labels 180 apart), but the printed table maps the wrong keys.
+- **Fit.** `fit_wire_grid_nulls` on a pair gives each sweep its OWN amplitude and null plus one shared constant. Nothing in that model ties the two nulls 180 deg apart, so the shared background stays degenerate with opposite shifts of the two nulls -- the docstring's "the reversed sweep separates them" is not true of the implementation (the existing unit test passes only because its data are exactly 180 apart and noiseless). On real data: background 4-11%, nulls pushed +/-3-7 deg, errors 1.6-3 deg. Lone fits (no background): 64.77 +/- 0.05, 156.24 +/- 0.01, 244.54 +/- 0.06, 337.12 +/- 0.17 deg (band 0.8-3 THz, 3 ps window).
+- **Checks.** 180-deg pairs: 179.77 (grid s), 180.88 (grid p; the 336 sweep's four low readings were taken 40 min after the rest and sit visibly off in the residuals -- drift). Grid-p minus grid-s nulls: 91.47 and 92.58 -> the two grid placements are ~2 deg from orthogonal (or the magnet scale is non-uniform by that much; this data cannot separate them).
+- **Per frequency** (complex a sin b + c cos b fit per bin): real-part null flat to +/-0.3 deg over 0.5-2 THz. The null is not a true zero: a QUADRATURE residual of 3-6% (grid p) and 8-18% (grid s) of the full amplitude, rising with f. Quadrature does not move the null. Its product over the two orientations gives an amplitude leakage of ~5% at 1 THz and ~10% at 2 THz, and its ratio a channel imbalance of ~1.8-1.9 -- matching the directly measured |a_p|/|a_s| = 1.8 at 0.5-2 THz. Consistent with wire-grid leakage seen through a detector ~1.8x more sensitive to p than s (unconfirmed: two grids in series would square the leakage).
+- **Recommended table:** `{0: 244.54, 90: 337.12, 180: 64.77, 270: 156.24}` (readings must increase with polarisation, so Samuel's "S = 156" is -s here; signs cancel against gold).
+- Record of 3 ps truncates the pulse (signal still ~5 mV at 105 ps): harmless for a null (projection is linear) but not for spectra.
+
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
@@ -1236,7 +1321,7 @@ transmitted part, and probably explains point 4's non-zero high-frequency floor 
   divergence correction to help rather than hurt, and it settles what the 5 mm mask costs. [F36]
 - `OQ11` - How large a genuinely flat CNT area can we make? Sample size and incidence angle are
   ONE decision (footprint x blur is a diffraction invariant), and it sets the low-f edge. [F36]
-- `OQ12` - BENCH TEST: does removing the 5 mm aperture make the low-frequency spot SMALLER, as
+- `OQ12` - *(answered F42: the aperture confines high f only; low f spills past 15 mm)* BENCH TEST: does removing the 5 mm aperture make the low-frequency spot SMALLER, as
   F37 predicts? If yes, stop masking and start focusing. Knife-edge at the sample plane, with
   and without the mask, vs frequency. [F37]
 - `OQ13` - thz-core: `fit_noise_parameters` under-estimates sigma_alpha at 4-8 repeats
@@ -1250,3 +1335,6 @@ transmitted part, and probably explains point 4's non-zero high-frequency floor 
   uniform sample; yes once the sample is finite or non-flat). [F36, F37, F39]
   *2026-10-06: first data analysed in F41 -- the scan must be extended to ~20 mm before the
   low-frequency radii, which are the ones the blur correction needs, can be trusted.*
+  *2026-10-06 later: F42 -- erf radii are invalid here (arrival-time gradient); use strip
+  profiles |s(x,f)|. Blur correction waits until the gradient is fixed and the scan starts
+  outside the beam.*
