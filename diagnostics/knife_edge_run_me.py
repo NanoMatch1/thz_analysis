@@ -33,7 +33,7 @@ config: dict = {
 
     # Frequencies to trace. The nearest FFT bin is used; the table prints the bin actually taken.
     # Bins closer together than the printed resolution (1 / record length) are not independent.
-    "frequencies_thz": (0.7, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0),
+    "frequencies_thz": (0.7, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0),
 
     "transform": {
         # None = the whole record, unwindowed. A number = Tukey window of that half-width centred
@@ -63,7 +63,7 @@ config: dict = {
     # the traced frequencies marked.
     "fft_traces": {
         "enabled": True,
-        "spectrum_max_thz": 4.0,
+        "spectrum_max_thz": 6.0,
         "show_raw_traces": True,      # faint raw averaged trace behind each windowed one
     },
 
