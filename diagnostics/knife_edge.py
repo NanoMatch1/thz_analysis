@@ -43,7 +43,7 @@ __all__ = [
     "KnifeEdgeFile", "KnifeEdgeTable", "EdgeFit",
     "position_from_filename", "load_knife_edge_files", "build_knife_edge_table",
     "edge_model", "fit_knife_edge", "fit_all_frequencies", "write_table_csv",
-    "print_table", "print_fits", "plot_knife_edge",
+    "print_table", "print_fits", "plot_knife_edge", "plot_fft_traces",
 ]
 
 #: ``_<number>mm`` anywhere in the name, the number optionally signed and decimal. The match must
@@ -118,6 +118,22 @@ class KnifeEdgeTable:
     amplitude_error: np.ndarray         #: standard error from scan-to-scan scatter; nan if 1 scan
     scan_counts: np.ndarray             #: (n_files,)
     resolution_thz: float               #: 1 / record length: bins closer than this are not independent
+    # What was transformed, kept so the FFT and its window can be inspected (plot_fft_traces).
+    time_ps: np.ndarray                 #: (n_samples,)
+    raw_traces: np.ndarray              #: (n_files, n_samples) scan-averaged, as loaded
+    window: np.ndarray                  #: (n_samples,) the window applied; ones if none
+    spectrum_frequencies_thz: np.ndarray    #: (n_grid,) full FFT grid
+    mean_spectra: np.ndarray            #: (n_files, n_grid) complex, scan-averaged
+    padded_length: int                  #: FFT length
+
+    def transformed_traces(self):
+        """The time traces the FFT actually saw (baseline removed, windowed), per file.
+
+        Recovered by inverting ``mean_spectra``, not by re-applying the window, so a mistake in
+        the transform itself shows up here instead of being reproduced.
+        """
+        return np.fft.irfft(self.mean_spectra, n=self.padded_length,
+                            axis=1)[:, :self.time_ps.size]
 
     @property
     def intensity(self):
@@ -175,12 +191,14 @@ def build_knife_edge_table(knife_edge_files, frequencies_thz, *, window_half_wid
     bin_indices = np.array([int(np.argmin(np.abs(grid_thz - frequency)))
                             for frequency in requested])
 
-    amplitude_rows, error_rows, scan_counts = [], [], []
+    amplitude_rows, error_rows, scan_counts, mean_spectra = [], [], [], []
     first_row = 0
     for knife_edge_file in knife_edge_files:
         scan_count = knife_edge_file.scans.shape[0]
-        spectra = transformed.spectra[first_row:first_row + scan_count][:, bin_indices]
+        file_spectra = transformed.spectra[first_row:first_row + scan_count]
         first_row += scan_count
+        mean_spectra.append(file_spectra.mean(axis=0))
+        spectra = file_spectra[:, bin_indices]
         amplitude_rows.append(np.abs(spectra.mean(axis=0)))
         if scan_count > 1:
             error_rows.append(np.abs(spectra).std(axis=0, ddof=1) / np.sqrt(scan_count))
@@ -199,6 +217,13 @@ def build_knife_edge_table(knife_edge_files, frequencies_thz, *, window_half_wid
         amplitude_error=np.array(error_rows),
         scan_counts=np.array(scan_counts),
         resolution_thz=1.0 / record_length_ps,
+        time_ps=reference_time_ps,
+        raw_traces=np.array([knife_edge_file.scans.mean(axis=0)
+                             for knife_edge_file in knife_edge_files]),
+        window=transformed.window,
+        spectrum_frequencies_thz=grid_thz,
+        mean_spectra=np.array(mean_spectra),
+        padded_length=transformed.padded_length,
     )
 
 
@@ -404,5 +429,54 @@ def plot_knife_edge(table, edge_fits=None, *, quantities=("amplitude", "intensit
         axis.set(xlabel="frequency (THz)", ylabel="1/e^2 radius (mm)",
                  title="Fitted beam radius (x = untrusted)")
         axis.grid(alpha=0.3)
+    figure.tight_layout()
+    return figure
+
+
+def plot_fft_traces(table, *, spectrum_max_thz=4.0, show_raw_traces=True):
+    """Check the transform: time traces with the window, and the spectra with the traced bins.
+
+    Left: for every position, the trace the FFT saw (solid; baseline removed and windowed,
+    recovered from the spectrum) and optionally the raw averaged trace (faint), with the window
+    drawn scaled to the largest pulse. The pulse must sit in the window's flat top and the window
+    must reach zero before the record ends, or truncation ripple appears in the spectrum.
+    Right: |E(f)| on a log scale per position, with the traced frequencies marked.
+    """
+    import matplotlib.pyplot as plt
+
+    figure, (time_axis, spectrum_axis) = plt.subplots(1, 2, figsize=(12.0, 4.6))
+    colours = plt.cm.viridis(np.linspace(0.0, 0.9, table.positions_mm.size))
+    transformed = table.transformed_traces()
+
+    for row_index, position_mm in enumerate(table.positions_mm):
+        colour = colours[row_index]
+        if show_raw_traces:
+            time_axis.plot(table.time_ps, table.raw_traces[row_index], color=colour,
+                           linewidth=0.8, alpha=0.35)
+        time_axis.plot(table.time_ps, transformed[row_index], color=colour, linewidth=1.2,
+                       label=f"{position_mm:g} mm")
+        spectrum_axis.semilogy(table.spectrum_frequencies_thz,
+                               np.abs(table.mean_spectra[row_index]), color=colour,
+                               linewidth=1.0)
+
+    window_scale = np.max(np.abs(transformed))
+    time_axis.plot(table.time_ps, window_scale * table.window, "k--", linewidth=1.0,
+                   label="window (scaled)")
+    time_axis.set(xlabel="time (ps)", ylabel="signal",
+                  title="Time traces: as transformed (solid), raw (faint)"
+                  if show_raw_traces else "Time traces as transformed")
+    time_axis.legend(fontsize=7, ncol=2)
+    time_axis.grid(alpha=0.3)
+
+    for frequency_thz in table.frequencies_thz:
+        spectrum_axis.axvline(frequency_thz, color="grey", linestyle=":", linewidth=1.0)
+    in_range = table.spectrum_frequencies_thz <= spectrum_max_thz
+    shown = np.abs(table.mean_spectra[:, in_range])
+    spectrum_axis.set_ylim(max(shown[shown > 0].min(), shown.max() * 1e-5), shown.max() * 2.0)
+    spectrum_axis.set(xlim=(0.0, spectrum_max_thz), xlabel="frequency (THz)",
+                      ylabel="|E(f)|",
+                      title=f"Spectra (dotted = traced bins; resolution "
+                            f"{table.resolution_thz:.2f} THz)")
+    spectrum_axis.grid(alpha=0.3, which="both")
     figure.tight_layout()
     return figure

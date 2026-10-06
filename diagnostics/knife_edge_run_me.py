@@ -59,6 +59,14 @@ config: dict = {
         "normalise": True,                          # each frequency divided by its own max
     },
 
+    # Second figure to check the transform: time traces with the window, and the spectra with
+    # the traced frequencies marked.
+    "fft_traces": {
+        "enabled": True,
+        "spectrum_max_thz": 4.0,
+        "show_raw_traces": True,      # faint raw averaged trace behind each windowed one
+    },
+
     "export": {
         "save_csv": True,
         "export_directory": None,     # None = '<data_directory>/knife_edge_analysis'
@@ -121,14 +129,20 @@ def main(argv=None):
             matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         figure = knife_edge.plot_knife_edge(table, edge_fits, **configuration["display"])
+        figures = {"knife_edge.png": figure}
+        fft_config = dict(configuration["fft_traces"])
+        if fft_config.pop("enabled"):
+            figures["knife_edge_fft.png"] = knife_edge.plot_fft_traces(table, **fft_config)
         if export_config["save_figure"]:
             os.makedirs(export_directory, exist_ok=True)
-            figure_path = os.path.join(export_directory, "knife_edge.png")
-            figure.savefig(figure_path, dpi=130)
-            print(f"[knife_edge] figure written to {figure_path}")
+            for figure_name, each_figure in figures.items():
+                figure_path = os.path.join(export_directory, figure_name)
+                each_figure.savefig(figure_path, dpi=130)
+                print(f"[knife_edge] figure written to {figure_path}")
         if not arguments.no_graph:
             plt.show()
-        plt.close(figure)
+        for each_figure in figures.values():
+            plt.close(each_figure)
     return 0
 
 

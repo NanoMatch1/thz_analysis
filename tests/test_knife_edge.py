@@ -129,6 +129,42 @@ def test_table_rejects_mismatched_time_axes():
         knife_edge.build_knife_edge_table(files, (1.0,))
 
 
+def _single_file_table(**transform_options):
+    trace = _pulse(TIME_PS) + 0.01                        # DC offset the baseline must remove
+    files = [knife_edge.KnifeEdgeFile("blade_0mm.acc", 0.0, TIME_PS, np.atleast_2d(trace))]
+    return knife_edge.build_knife_edge_table(files, (1.0,), **transform_options), trace
+
+
+def test_transformed_traces_are_what_the_fft_saw_without_a_window():
+    table, trace = _single_file_table(window_half_width_ps=None)
+    np.testing.assert_allclose(table.window, 1.0)
+    baseline = trace[:int(0.1 * TIME_PS.size)].mean()
+    np.testing.assert_allclose(table.transformed_traces()[0], trace - baseline, atol=1e-12)
+    np.testing.assert_allclose(table.raw_traces[0], trace)
+
+
+def test_transformed_traces_show_the_window_applied():
+    table, trace = _single_file_table(window_half_width_ps=1.0)
+    outside = table.window == 0.0
+    assert outside.any() and not outside.all()
+    np.testing.assert_allclose(table.transformed_traces()[0][outside], 0.0, atol=1e-12)
+    baseline = trace[:int(0.1 * TIME_PS.size)].mean()
+    np.testing.assert_allclose(table.transformed_traces()[0],
+                               (trace - baseline) * table.window, atol=1e-12)
+
+
+def test_fft_trace_figure_has_time_and_spectrum_panels():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    table, _ = _single_file_table(window_half_width_ps=1.0)
+    figure = knife_edge.plot_fft_traces(table, spectrum_max_thz=3.0)
+    time_axis, spectrum_axis = figure.axes
+    assert time_axis.get_xlabel() == "time (ps)"
+    assert spectrum_axis.get_xlim() == (0.0, 3.0)
+    plt.close(figure)
+
+
 # ---------------------------------------------------------------------------
 # Workflow: real files through the run_me
 # ---------------------------------------------------------------------------
@@ -145,6 +181,7 @@ def test_run_me_end_to_end(tmp_path, capsys):
 
     output_directory = tmp_path / "knife_edge_analysis"
     assert (output_directory / "knife_edge.png").is_file()
+    assert (output_directory / "knife_edge_fft.png").is_file()
     written = np.genfromtxt(output_directory / "knife_edge_table.csv", delimiter=",", names=True)
     np.testing.assert_allclose(written["position_mm"], positions)
 
@@ -154,6 +191,15 @@ def test_run_me_end_to_end(tmp_path, capsys):
     for edge_fit in edge_fits:
         assert edge_fit.beam_radius_mm == pytest.approx(PLANTED_RADIUS_MM, rel=0.02)
         assert edge_fit.edge_centre_mm == pytest.approx(PLANTED_CENTRE_MM, abs=0.05)
+
+
+def test_run_me_fft_figure_can_be_switched_off(tmp_path, monkeypatch):
+    _write_scan_series(str(tmp_path), np.arange(0.0, 13.0, 1.0))
+    monkeypatch.setitem(knife_edge_run_me.config, "fft_traces",
+                        {**knife_edge_run_me.config["fft_traces"], "enabled": False})
+    assert knife_edge_run_me.main([str(tmp_path), "--no-graph"]) == 0
+    assert (tmp_path / "knife_edge_analysis" / "knife_edge.png").is_file()
+    assert not (tmp_path / "knife_edge_analysis" / "knife_edge_fft.png").exists()
 
 
 def test_run_me_reports_a_missing_directory(tmp_path):

@@ -1169,6 +1169,15 @@ rank-2-invisible, not bugs. The tilt is recovered by the fitted-tilt route on a 
 **Action:** extend the scan to ~20 mm (the 0.3 THz edge centre ~9 mm + 1.5 w ~ 9 mm), and record
 the geometry (what the stage carries, distance from the focus). Feeds OQ14.
 
+*Addendum 2026-10-06 (FFT-trace figure, `knife_edge_fft.png`):* (a) Radii above 1 THz are stable to
+<3% across window choices (none / Tukey half-width 2.5 / 1.5 ps); below 1 THz they move by up to
+40%, consistent with being extrapolated. Unwindowed is acceptable here: the trace is at 0.6% of
+the peak at the record ends. (b) At 9-11 mm the pulse changes SHAPE, not only size: a second lobe
+appears and the spectrum develops a dip near 1 THz with a recovery at 1.5 THz. That is two
+delayed contributions interfering, which fits the edge-diffracted wave adding to the
+transmitted part, and probably explains point 4's non-zero high-frequency floor and part of point
+5's walk. Tentative until the longer scan.
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].
