@@ -37,10 +37,16 @@ class SeriesNoise:
 
 
 def estimate_series_noise(series, transformed, *, minimum_scans=3):
-    """E|dS|^2 per acquisition and frequency for a PolarisationSeries, or None with a reason."""
+    """E|dS|^2 per row and frequency for a PolarisationSeries, or None with a reason.
+
+    For per-scan rows (``series.segment_ids`` set, see ``loader.expand_to_scan_rows``) each
+    acquisition's noise is measured from its scans as usual and given to every one of its scans
+    as the variance of a SINGLE scan, not of their mean.
+    """
+    per_scan = series.segment_ids is not None
     if not series.files:
         return SeriesNoise(None, (), "the series carries no per-scan data")
-    fewest = int(np.min(series.scan_counts))
+    fewest = int(min(file.scans.shape[0] for file in series.files))
     if fewest < minimum_scans:
         return SeriesNoise(None, (), f"only {fewest} repeat scans in the sparsest acquisition; "
                                      f"the noise model needs {minimum_scans}")
@@ -55,7 +61,7 @@ def estimate_series_noise(series, transformed, *, minimum_scans=3):
                                f"noise estimate failed on {file.path}: {error}")
         moments = core_noise.spectral_noise_moments(
             estimate.sigma_t, window=transformed.window, n_fft=transformed.padded_length,
-            n_averaged=file.scans.shape[0])
+            n_averaged=1 if per_scan else file.scans.shape[0])
         variance = moments.variance_real + moments.variance_imag
         if not np.any(variance > 0.0):
             return SeriesNoise(None, tuple(estimates),
@@ -63,4 +69,7 @@ def estimate_series_noise(series, transformed, *, minimum_scans=3):
                                "noise -- noise-free synthetic data?); weights would be infinite")
         variances.append(variance)
         estimates.append(estimate)
-    return SeriesNoise(np.vstack(variances), tuple(estimates), "ok")
+    variances = np.vstack(variances)
+    if per_scan:
+        variances = variances[np.asarray(series.segment_ids)]
+    return SeriesNoise(variances, tuple(estimates), "ok")

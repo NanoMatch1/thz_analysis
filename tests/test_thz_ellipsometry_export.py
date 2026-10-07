@@ -82,6 +82,7 @@ def finished_run(tmp_path):
     config = copy.deepcopy(thz_ellipsometry_run_me.config)
     config["data"]["directory"] = str(data)
     config["general"]["show_graph"] = False
+    config["acquisition"]["rows"] = "acquisition"     # staircase synthetic drift
     config["validation"].update(expect=None, cross_check_material=None,
                                 branch_reference_index=None)
     return run_ellipsometry(config), data
@@ -141,6 +142,7 @@ def test_findings_reach_the_catalogue_as_flags(tmp_path, monkeypatch):
     config = copy.deepcopy(thz_ellipsometry_run_me.config)
     config["data"]["directory"] = str(data)
     config["general"]["show_graph"] = False
+    config["acquisition"]["rows"] = "acquisition"     # staircase synthetic drift
     config["validation"].update(expect=None, cross_check_material=None,
                                 branch_reference_index=None)
     outcome = run_ellipsometry(config)

@@ -34,6 +34,9 @@ def _config(directory, *, expect=None, **sections):
     config["data"]["directory"] = directory
     config["general"]["show_graph"] = False
     config["validation"]["expect"] = expect
+    # Written for one row per file on staircase synthetic drift; the per-scan layout has its
+    # own tests with continuous drift (test_thz_ellipsometry_phase1_workflow.py, 'scan rows').
+    config["acquisition"]["rows"] = "acquisition"
     config["validation"]["cross_check_material"] = None
     if expect is None:
         config["validation"]["branch_reference_index"] = None
@@ -58,7 +61,9 @@ def _index_error(outcome, sample_name="doped_silicon"):
 
 def test_loader_groups_by_role_and_probe_and_orders_rows_in_time(tmp_path):
     _write(tmp_path, second_probe_azimuth_deg=15.0, angle_reference=True)
-    series = loader.load_measurement(str(tmp_path), default_probe_azimuth_deg=PRIMARY_PROBE)
+    series = loader.load_measurement(str(tmp_path), magnet_calibration=thz_ellipsometry_run_me.config["geometry"][
+                                          "magnet_calibration"],
+                                      default_probe_azimuth_deg=PRIMARY_PROBE)
     assert set(series) == {("sample", PRIMARY_PROBE), ("sample", 15.0),
                            ("channel_reference", PRIMARY_PROBE),
                            ("angle_reference", PRIMARY_PROBE)}
@@ -303,6 +308,8 @@ def test_a_measured_purge_transient_is_removed_from_a_palindrome_ten_minutes_aft
                   incidence_angle_rad=np.deg2rad(INCIDENCE_ANGLE_DEG),
                   crystal_orientation_rad=np.deg2rad(90.0), relative_noise=0.0,
                   probe_azimuth_deg=PRIMARY_PROBE, drift_span_s=delays - delays[0],
+                  magnet_calibration=thz_ellipsometry_run_me.config["geometry"][
+                      "magnet_calibration"],
                   tilt_profile=tilts - tilts[0])
     write_accumulation_files(str(tmp_path), sample_name="doped_silicon", seed=0,
                              index_sample_function=thz_ellipsometry_run_me.SIMULATED_SAMPLES[
@@ -326,3 +333,82 @@ def test_a_single_pass_with_c_near_minus_one_is_flagged_as_inseparable(tmp_path)
                        emitter_angles_deg=(0.0, 90.0, 180.0, 270.0))
     outcome = run_ellipsometry(_config(directory))
     assert "drift_separable_from_ratio" in _diagnostics(outcome)
+
+
+# ---------------------------------------------------------------------------
+# Per-scan rows (acquisition.rows = 'scan')
+# ---------------------------------------------------------------------------
+
+SINGLE_PASS_SCAN_OPTIONS = dict(cycles=1, scans_per_acquisition=8, seconds_per_scan=48.0,
+                                drift_span_fs=30.0, drift_within_acquisition=True)
+
+
+def test_scan_rows_keep_each_scan_with_its_own_time_and_file(tmp_path):
+    _write(tmp_path, **SINGLE_PASS_SCAN_OPTIONS)
+    config = _config(str(tmp_path))
+    series = loader.load_measurement(
+        str(tmp_path), magnet_calibration=config["geometry"]["magnet_calibration"],
+        default_probe_azimuth_deg=PRIMARY_PROBE)[("sample", PRIMARY_PROBE)]
+    rows = loader.expand_to_scan_rows(series)
+    assert len(rows) == int(series.scan_counts.sum()) == 4 * 8
+    assert np.array_equal(rows.segment_ids, np.repeat(np.arange(4), 8))
+    assert np.array_equal(rows.angles_deg, np.repeat(series.angles_deg, 8))
+    assert np.all(np.diff(rows.elapsed_seconds) > 0)
+    for index in range(4):     # each file's scans are centred on the file's own elapsed time
+        inside = rows.elapsed_seconds[rows.segment_ids == index]
+        assert inside.mean() == pytest.approx(series.elapsed_seconds[index])
+        assert np.diff(inside) == pytest.approx(48.0)
+    assert np.allclose(rows.traces[rows.segment_ids == 2].mean(axis=0), series.traces[2])
+
+
+def test_scan_rows_need_timestamps(tmp_path):
+    _write(tmp_path, **SINGLE_PASS_SCAN_OPTIONS)
+    series = loader.load_measurement(str(tmp_path))[("sample", None)]
+    from dataclasses import replace
+    with pytest.raises(ValueError, match="timestamp"):
+        loader.expand_to_scan_rows(replace(series, elapsed_seconds=None))
+
+
+def test_per_scan_noise_is_the_variance_of_one_scan_not_of_the_mean(tmp_path):
+    _write(tmp_path, relative_noise=0.01, **SINGLE_PASS_SCAN_OPTIONS)
+    series = loader.load_measurement(str(tmp_path))[("sample", None)]
+    rows = loader.expand_to_scan_rows(series)
+    transformed = preprocess.transform_traces(series.time_ps, rows.traces,
+                                              window_half_width_ps=3.0)
+    per_file = noise.estimate_series_noise(series, transformed)
+    per_scan = noise.estimate_series_noise(rows, transformed)
+    assert per_scan.spectral_variance.shape[0] == len(rows)
+    assert np.allclose(per_scan.spectral_variance[rows.segment_ids == 1],
+                       8 * per_file.spectral_variance[1])
+
+
+def test_single_pass_with_drift_inside_the_files_is_recovered_from_scan_rows(tmp_path):
+    """Continuous drift through a single pass: per-scan rows fix it; per-file rows cannot (F40)."""
+    _write(tmp_path, relative_noise=0.002, **SINGLE_PASS_SCAN_OPTIONS)
+    outcome = run_ellipsometry(_config(str(tmp_path), acquisition={"rows": "scan"}))
+    sample = outcome.fits[("sample", PRIMARY_PROBE)]
+    assert sample.drift_model == "segment_settling"
+    assert sample.segment_ids is not None and sample.delays_s.size == 4 * 8
+    assert _index_error(outcome) < 0.02
+    assert sample.reduced_chi_square == pytest.approx(1.0, abs=0.3)
+    # Measured 2026-10-07: 0.010 per scan vs 0.149 per file on this dataset.
+    per_file = run_ellipsometry(_config(str(tmp_path), acquisition={"rows": "acquisition"}))
+    assert per_file.fits[("sample", PRIMARY_PROBE)].segment_ids is None
+    assert _index_error(per_file) > 5 * _index_error(outcome)
+
+
+def test_a_permanent_step_at_each_opening_is_the_known_limit_of_scan_rows(tmp_path):
+    """The one assumption: an opening leaves no lasting step. A staircase drift breaks it, and
+    in a single pass nothing in the data can show it -- only a palindrome can. Kept as a test so
+    the limit stays documented and visible if the model changes."""
+    options = dict(SINGLE_PASS_SCAN_OPTIONS, drift_within_acquisition=False)
+    _write(tmp_path, relative_noise=0.002, **options)
+    outcome = run_ellipsometry(_config(str(tmp_path), acquisition={"rows": "scan"}))
+    assert _index_error(outcome) > 0.1
+    assert outcome.fits[("sample", PRIMARY_PROBE)].reduced_chi_square < 2.0   # looks fine
+
+
+def test_an_unknown_row_layout_is_explained(tmp_path):
+    _write(tmp_path, **SINGLE_PASS_SCAN_OPTIONS)
+    with pytest.raises(ValueError, match="acquisition.rows"):
+        run_ellipsometry(_config(str(tmp_path), acquisition={"rows": "per_file"}))

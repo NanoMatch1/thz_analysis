@@ -41,6 +41,7 @@ __all__ = [
     "DEFAULT_ROLE_VOCABULARY",
     "PolarisationSeries",
     "classify_role",
+    "expand_to_scan_rows",
     "load_measurement",
     "load_polarisation_series",
     "parse_key_value_tokens",
@@ -98,6 +99,9 @@ class PolarisationSeries:
     #: any file lacks timestamps (the drift ramp then runs over acquisition order).
     elapsed_seconds: np.ndarray | None = None
     files: tuple = ()              #: the AccumulationFile behind each row, for the noise model
+    #: (n_rows,) which acquisition each row came from, when rows are single scans
+    #: (expand_to_scan_rows); None when each row is a whole acquisition.
+    segment_ids: np.ndarray | None = None
 
     @property
     def angles_rad(self):
@@ -273,6 +277,35 @@ def load_measurement(directory, *, angle_token="mag", probe_token="probe", delim
             paths=[file.path for file in files],
             role=role, probe_azimuth_deg=probe, elapsed_seconds=elapsed, files=files)
     return series
+
+
+def expand_to_scan_rows(series):
+    """The same series with one row per repeat SCAN instead of per acquisition.
+
+    Each scan keeps its acquisition's angle, gets its own elapsed time (same origin as the
+    series) and the acquisition's index as its ``segment_id``. Inside one acquisition nothing
+    but drift changes, so these rows let the harmonic fit measure the drift directly. Needs a
+    timestamp on every scan: without them there is nothing to place the scans in time.
+    """
+    if series.elapsed_seconds is None or not series.files:
+        raise ValueError(f"{series.label}: per-scan rows need a timestamp on every scan, and "
+                         "these files lack them; use config['acquisition']['rows'] = "
+                         "'acquisition'")
+    angles, elapsed, segments, traces, paths = [], [], [], [], []
+    for index, file in enumerate(series.files):
+        middle = file.mean_timestamp
+        for scan, stamp in zip(file.scans, file.scan_timestamps):
+            angles.append(series.angles_deg[index])
+            elapsed.append(series.elapsed_seconds[index] + (stamp - middle).total_seconds())
+            segments.append(index)
+            traces.append(scan)
+            paths.append(file.path)
+    return PolarisationSeries(
+        label=series.label, angles_deg=np.array(angles, dtype=float), time_ps=series.time_ps,
+        traces=np.vstack(traces), scan_counts=np.ones(len(traces), dtype=int), paths=paths,
+        role=series.role, probe_azimuth_deg=series.probe_azimuth_deg,
+        elapsed_seconds=np.array(elapsed), files=series.files,
+        segment_ids=np.array(segments, dtype=int))
 
 
 def load_polarisation_series(directory, *, angle_token="pol", delimiter="_",

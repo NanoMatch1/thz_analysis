@@ -435,3 +435,113 @@ def test_settling_profile_spans_zero_to_one_and_is_the_exact_exponential():
         assert profile[0] == pytest.approx(0.0) and profile[-1] == pytest.approx(1.0)
         exponential = 1.0 - np.exp(-rate * abscissa)
         assert np.allclose(profile, exponential / exponential[-1])
+
+
+# ---------------------------------------------------------------------------
+# Per-scan rows: drift measured inside each acquisition (segment_settling)
+# ---------------------------------------------------------------------------
+
+SCAN_SECONDS = 48.0
+SCANS_PER_STATE = 12
+SINGLE_PASS_DEG = (270.0, 180.0, 90.0, 0.0)
+
+
+def _single_pass_scan_rows(gap_seconds=120.0):
+    """One pass through the four states, a scan every 48 s, a gap (box open) between states."""
+    angles, elapsed, segments = [], [], []
+    start = 0.0
+    for segment, angle in enumerate(SINGLE_PASS_DEG):
+        times = start + SCAN_SECONDS * np.arange(SCANS_PER_STATE)
+        angles += [np.deg2rad(angle)] * SCANS_PER_STATE
+        elapsed += list(times)
+        segments += [segment] * SCANS_PER_STATE
+        start = times[-1] + SCAN_SECONDS + gap_seconds
+    return np.array(angles), np.array(elapsed), np.array(segments)
+
+
+def _bench_like_delays(elapsed, segments):
+    """The 2026-10-07 shape: a purge settling over the block plus a short settle per opening."""
+    trend = -25e-15 * harmonic.settling_profile(elapsed / np.ptp(elapsed), 2.0)
+    transients = harmonic.segment_transients([-6.0, -5.0, -8.0, -10.0], 0.5, elapsed, segments)
+    return trend + transients
+
+
+def test_segment_settling_is_exact_where_a_file_average_is_not():
+    """Single pass, per-scan rows: the in-file drift pins the model; per-file averages cannot."""
+    angles, elapsed, segments = _single_pass_scan_rows()
+    delays = _bench_like_delays(elapsed, segments)
+    measured = _series(DOPED, emitter_angles_rad=angles, elapsed_seconds=elapsed,
+                       drift_span_s=delays, background_relative=0.1)
+    clean = _series(DOPED, emitter_angles_rad=angles)
+    truth = harmonic.fit_emitter_harmonic(angles, clean.spectra, FREQUENCIES,
+                                          drift_model="none").channel_ratio
+
+    per_scan = harmonic.fit_emitter_harmonic(angles, measured.spectra, FREQUENCIES,
+                                             drift_model="segment_settling",
+                                             elapsed_seconds=elapsed, segment_ids=segments,
+                                             background_term=True)
+    averaged = np.vstack([measured.spectra[segments == k].mean(axis=0) for k in range(4)])
+    file_times = np.array([elapsed[segments == k].mean() for k in range(4)])
+    per_file = harmonic.fit_emitter_harmonic(np.deg2rad(SINGLE_PASS_DEG), averaged, FREQUENCIES,
+                                             drift_model="linear_ramp",
+                                             elapsed_seconds=file_times, background_term=True)
+
+    assert np.max(np.abs(per_scan.channel_ratio / truth - 1.0)) < 1e-8
+    assert np.max(np.abs(per_file.channel_ratio / truth - 1.0)) > 1e-3
+    assert np.array_equal(per_scan.segment_ids, segments)
+
+
+def test_segment_settling_recovers_the_planted_drift_through_noise():
+    angles, elapsed, segments = _single_pass_scan_rows()
+    measured = _series(DOPED, emitter_angles_rad=angles, elapsed_seconds=elapsed,
+                       drift_span_s=_bench_like_delays(elapsed, segments),
+                       relative_noise=1e-3, background_relative=0.1)
+    fit = harmonic.fit_emitter_harmonic(angles, measured.spectra, FREQUENCIES,
+                                        drift_model="segment_settling", elapsed_seconds=elapsed,
+                                        segment_ids=segments, background_term=True)
+    values = dict(zip(fit.nuisance_parameter_names, fit.nuisance_parameters))
+    assert values["delay_span_fs"] == pytest.approx(-25.0, abs=0.2)
+    assert values["settling_rate"] == pytest.approx(2.0, abs=0.1)
+    assert values["transient_decay_minutes"] == pytest.approx(0.5, abs=0.05)
+    assert [values[f"transient_{k}_fs"] for k in range(4)] == pytest.approx(
+        [-6.0, -5.0, -8.0, -10.0], abs=0.2)
+
+
+def test_segment_settling_needs_segments_and_times():
+    angles, elapsed, segments = _single_pass_scan_rows()
+    measured = _series(DOPED, emitter_angles_rad=angles)
+    for missing in ({"elapsed_seconds": elapsed}, {"segment_ids": segments}):
+        with pytest.raises(ValueError, match="per-scan rows"):
+            harmonic.fit_emitter_harmonic(angles, measured.spectra, FREQUENCIES,
+                                          drift_model="segment_settling", **missing)
+
+
+def test_segment_ids_must_be_contiguous_numbers():
+    angles, elapsed, segments = _single_pass_scan_rows()
+    measured = _series(DOPED, emitter_angles_rad=angles)
+    with pytest.raises(ValueError, match="0..n-1"):
+        harmonic.fit_emitter_harmonic(angles, measured.spectra, FREQUENCIES,
+                                      drift_model="segment_settling", elapsed_seconds=elapsed,
+                                      segment_ids=segments * 2)
+
+
+def test_revisit_lever_arm_ignores_repeats_inside_one_acquisition():
+    """Scans of one file repeat each other trivially; only a return visit pins a jump."""
+    # 0 and 90 deg on doped Si are opposite in sign (rho ~ -0.6), so never "the same signal".
+    angles = np.deg2rad([0.0, 0.0, 90.0, 90.0])
+    elapsed = np.arange(angles.size) * 60.0
+    measured = _series(DOPED, emitter_angles_rad=angles)
+    fits = {layout: harmonic.fit_emitter_harmonic(angles, measured.spectra, FREQUENCIES,
+                                                  drift_model="none", elapsed_seconds=elapsed,
+                                                  segment_ids=ids)
+            for layout, ids in (("rows", None), ("scans", np.arange(angles.size) // 2))}
+    assert fits["rows"].segment_ids is None
+    assert harmonic.revisit_lever_arm(fits["rows"]) == pytest.approx(1.0 / 3.0)
+    assert harmonic.revisit_lever_arm(fits["scans"]) == 0.0
+
+
+def test_existing_drift_models_still_take_the_row_count_alone():
+    """The registry gained a segment count; the models without segments ignore it."""
+    for name, names_for in harmonic.DRIFT_MODELS.items():
+        if name not in harmonic.SEGMENTED_DRIFT_MODELS:
+            assert names_for(5) == names_for(5, 3)

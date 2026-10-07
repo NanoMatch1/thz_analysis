@@ -29,6 +29,17 @@ between them does not, so it gets the same treatment: an optional one-parameter 
 g x_k (or a free value per acquisition), fitted alongside the delay. It is well determined even
 for four magnet states (a planted 2% ramp is recovered as 2.01%).
 
+Per-scan rows and box openings. A row need not be a whole acquisition: each repeat scan can be
+its own row (``segment_ids`` then says which acquisition, i.e. which magnet state between two
+openings of the box, each row belongs to). Inside one acquisition the polarisation is fixed, so
+scan-to-scan change there is drift and nothing else -- the drift is measured directly instead of
+being inferred from a handful of averages. 'segment_settling' is the model for that layout: a
+settling trend over the block (as 'settling') plus, after each opening, a transient A_j exp(-(t - t_j)/T) with its
+own amplitude per acquisition and one shared decay time. Its one assumption: after each opening
+the delay settles back onto the same trend, so the level jump AT an opening is the transient and
+not a permanent step. A palindrome needs no such assumption; the revisit diagnostic still says
+whether one was recorded.
+
 What CANNOT be fitted here: an error in the polarisation angle of individual states. With four
 states and a background, each frequency has one complex number of redundancy, and per-state
 angle errors have no distinct signature in it -- singular-value ratio ~1e-8 on gold AND on doped
@@ -50,8 +61,9 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-__all__ = ["AMPLITUDE_MODELS", "DRIFT_MODELS", "HarmonicFit", "fit_emitter_harmonic",
-           "harmonic_residual_norm", "revisit_lever_arm", "settling_profile"]
+__all__ = ["AMPLITUDE_MODELS", "DRIFT_MODELS", "HarmonicFit", "SEGMENTED_DRIFT_MODELS",
+           "fit_emitter_harmonic", "harmonic_residual_norm", "revisit_lever_arm",
+           "segment_transients", "settling_profile"]
 
 
 @dataclass(frozen=True)
@@ -82,6 +94,11 @@ class HarmonicFit:
     #: amplitude terms); None when there are none. Large = not separable from P/Q.
     nuisance_parameter_errors: np.ndarray | None = None
     nuisance_parameter_names: tuple = ()
+    #: Fitted values of those parameters, same order and units; None when there are none.
+    nuisance_parameters: np.ndarray | None = None
+    #: (n_rows,) acquisition (between box openings) of each row, for per-scan rows; None when
+    #: every row is its own acquisition.
+    segment_ids: np.ndarray | None = None
 
     @property
     def channel_ratio(self):
@@ -143,7 +160,8 @@ def _ramp_abscissa(acquisition_count, elapsed_seconds):
     return (elapsed - elapsed.min()) / span if span > 0 else np.zeros_like(elapsed)
 
 
-def _delays_from_parameters(parameters, drift_model, acquisition_count, elapsed_seconds=None):
+def _delays_from_parameters(parameters, drift_model, acquisition_count, elapsed_seconds=None,
+                            segment_ids=None):
     """Map the nuisance parameters onto a per-acquisition delay vector.
 
     A delay common to every acquisition is degenerate -- it multiplies P and Q by the same
@@ -157,6 +175,13 @@ def _delays_from_parameters(parameters, drift_model, acquisition_count, elapsed_
     if drift_model == "settling":
         return parameters[0] * 1e-15 * settling_profile(
             _ramp_abscissa(acquisition_count, elapsed_seconds), parameters[1])
+    if drift_model == "segment_settling":
+        trend = settling_profile(_ramp_abscissa(acquisition_count, elapsed_seconds),
+                                 parameters[1])
+        delays = (parameters[0] * 1e-15 * trend
+                  + segment_transients(parameters[3:], parameters[2], elapsed_seconds,
+                                       segment_ids))
+        return delays - delays[0]
     if drift_model == "per_acquisition":
         delays = np.zeros(acquisition_count)
         delays[1:] = np.asarray(parameters, dtype=float) * 1e-15
@@ -179,17 +204,56 @@ def settling_profile(abscissa, rate):
     return np.expm1(-rate * abscissa) / np.expm1(-rate)
 
 
-#: drift model -> the names of its parameters for a given number of acquisitions. The one place
-#: a drift model is declared; its parameter count is len(names).
+def segment_transients(amplitudes_fs, decay_minutes, elapsed_seconds, segment_ids):
+    """Delay (s) of a settling transient after each opening: A_j exp(-(t - t_j)/T) per row.
+
+    t_j is the first row of segment j (the opening itself is not timestamped, so A_j is the
+    transient's size at the first scan, not at the opening). Rows of a segment must be contiguous
+    in time; ``segment_ids`` are 0..n_segments-1.
+    """
+    elapsed = np.asarray(elapsed_seconds, dtype=float)
+    segments = np.asarray(segment_ids, dtype=int)
+    starts = np.array([elapsed[segments == segment].min()
+                       for segment in range(segments.max() + 1)])
+    since_opening_minutes = (elapsed - starts[segments]) / 60.0
+    return (np.asarray(amplitudes_fs, dtype=float)[segments] * 1e-15
+            * np.exp(-since_opening_minutes / decay_minutes))
+
+
+#: drift model -> the names of its parameters for a given number of rows and of segments
+#: (acquisitions between box openings). The one place a drift model is declared; its parameter
+#: count is len(names).
 DRIFT_MODELS = {
-    "none": lambda count: (),
-    "linear_ramp": lambda count: ("delay_span_fs",),
+    "none": lambda count, segments=1: (),
+    "linear_ramp": lambda count, segments=1: ("delay_span_fs",),
     # A purge settling after a disturbance is an exponential with a tau that depends on the
     # disturbance (13-40 min measured); the rate is fitted. Not a quadratic: its small misfit
     # leaks into P/Q through the background when C ~ -1 (F40). purge_spectral_template.py.
-    "settling": lambda count: ("delay_span_fs", "settling_rate"),
-    "per_acquisition": lambda count: tuple(f"delay_{k}_fs" for k in range(1, count)),
+    "settling": lambda count, segments=1: ("delay_span_fs", "settling_rate"),
+    "per_acquisition": lambda count, segments=1: tuple(f"delay_{k}_fs"
+                                                       for k in range(1, count)),
+    # Per-scan rows only: the block's purge settle (same exponential trend as 'settling') + one
+    # transient per opening, shared decay time (2026-10-07: the first single-pass block measured
+    # -0.15 to -0.4 fs/min inside every file and 1-20 fs settles after each opening; per-file
+    # averages could not tell that drift from P/Q).
+    "segment_settling": lambda count, segments=1: (
+        ("delay_span_fs", "settling_rate", "transient_decay_minutes")
+        + tuple(f"transient_{k}_fs" for k in range(segments))),
 }
+
+#: Drift models that need segment_ids and a timestamp per row.
+SEGMENTED_DRIFT_MODELS = frozenset({"segment_settling"})
+
+#: Bounds and starting value of the shared transient decay time, minutes. The cap is what keeps
+#: the model identifiable: a transient much longer than its curvature can be seen inside one
+#: file is a straight line there, and its amplitude -- the level jump at the opening -- then
+#: trades one-for-one with P/Q. Measured 2026-10-07: with a 30 min cap the gold fit wandered
+#: between a 0.5 min and a 30 min solution with 6 vs 44 fs transients (n moved 0.6), and on the
+#: 10-scan trimmed files the transients came out 100 +/- 140 fs. Capped at ~4 scans (48 s each),
+#: a transient can only describe the first scans after an opening; the slow purge belongs to the
+#: block-wide trend.
+TRANSIENT_DECAY_MINUTES_BOUNDS = (0.25, 3.0)
+TRANSIENT_DECAY_MINUTES_START = 1.0
 
 
 #: Frequency about which the spectral tilt is defined, so the gain term means "scale at 1 THz".
@@ -247,21 +311,44 @@ def _solve_linear(design, spectra, frequencies_hz, delays_s, weights, amplitudes
         # Divide out the scale; the noise is divided with it, so the weights scale by a^2.
         derotated = derotated / amplitudes
         weights = weights * amplitudes**2
-    # normal[f] = A^T diag(w_f) A ; right_hand_side[f] = A^T diag(w_f) b_f
-    normal = np.einsum("kf,ki,kj->fij", weights, design, design)
-    right_hand_side = np.einsum("kf,ki,kf->fi", weights, design, derotated)
+    # normal[f] = A^T diag(w_f) A ; right_hand_side[f] = A^T diag(w_f) b_f. Written as matrix
+    # products (not einsum): with one row per scan this runs ~800 times per fit.
+    column_count = design.shape[1]
+    outer = (design[:, :, None] * design[:, None, :]).reshape(design.shape[0], -1)
+    normal = (weights.T @ outer).reshape(-1, column_count, column_count)
+    right_hand_side = (design.T @ (weights * derotated)).T
     inverse_normal = np.linalg.inv(normal)
-    solution = np.einsum("fij,fj->if", inverse_normal, right_hand_side)
+    solution = np.matmul(inverse_normal, right_hand_side[:, :, None])[:, :, 0].T
     residual = derotated - design @ solution
     if amplitudes is not None:
         residual = residual * amplitudes            # back in measured units
     return solution, residual, inverse_normal
 
 
+#: A bin enters the nuisance (drift) search only if its mean per-row signal-to-noise power is
+#: above this; for an unweighted fit, if its amplitude is above this fraction of the largest.
+#: Noise-only bins carry no drift information (their phase is random), only cost: with one row
+#: per scan the search runs ~800 times, and a synthetic record has ~1000 bins, most above the
+#: emitter's bandwidth. The final P, Q, B solve still uses every bin.
+INFORMATIVE_SIGNAL_TO_NOISE_POWER = 1.0
+INFORMATIVE_RELATIVE_AMPLITUDE = 1e-3
+
+
+def _informative_frequencies(spectra, weights, weighted):
+    """Boolean mask of the bins worth searching the drift on (never fewer than all if empty)."""
+    power = np.abs(spectra) ** 2
+    if weighted:
+        keep = np.mean(power * weights, axis=0) > INFORMATIVE_SIGNAL_TO_NOISE_POWER
+    else:
+        amplitude = np.sqrt(np.mean(power, axis=0))
+        keep = amplitude > INFORMATIVE_RELATIVE_AMPLITUDE * amplitude.max()
+    return keep if keep.any() else np.ones(spectra.shape[1], dtype=bool)
+
+
 def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
                          drift_model="linear_ramp", maximum_drift_fs=500.0, *,
                          elapsed_seconds=None, background_term=False, spectral_variance=None,
-                         amplitude_model="none"):
+                         amplitude_model="none", segment_ids=None):
     """Fit P and Q (plus an optional background and a drift nuisance) to a polarisation series.
 
     Parameters
@@ -283,6 +370,10 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         the returned covariance the propagated measurement noise.
     amplitude_model : {'none', 'linear_ramp', 'per_acquisition'}
         Nuisance scale per acquisition (laser power, broadband purge loss).
+    segment_ids : (n_rows,) int array, optional
+        When each row is one repeat scan: the acquisition (magnet state between two openings
+        of the box) it belongs to, numbered 0..n-1 in time order. Required by
+        'segment_settling'; also restricts the revisit diagnostic to repeats ACROSS openings.
 
     Returns
     -------
@@ -319,7 +410,19 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
 
     if drift_model not in DRIFT_MODELS:
         raise ValueError(f"unknown drift_model {drift_model!r}; known: {sorted(DRIFT_MODELS)}")
-    delay_parameter_count = len(DRIFT_MODELS[drift_model](acquisition_count))
+    segment_count = 1
+    if segment_ids is not None:
+        segment_ids = np.asarray(segment_ids, dtype=int)
+        if segment_ids.size != acquisition_count:
+            raise ValueError("segment_ids needs one entry per row")
+        if set(np.unique(segment_ids)) != set(range(int(segment_ids.max()) + 1)):
+            raise ValueError("segment_ids must number the segments 0..n-1 with none missing")
+        segment_count = int(segment_ids.max()) + 1
+    if drift_model in SEGMENTED_DRIFT_MODELS and (segment_ids is None or elapsed_seconds is None):
+        raise ValueError(f"drift_model={drift_model!r} fits a transient after each opening of "
+                         "the box, so it needs per-scan rows: segment_ids AND elapsed_seconds")
+    drift_parameter_names = DRIFT_MODELS[drift_model](acquisition_count, segment_count)
+    delay_parameter_count = len(drift_parameter_names)
     if amplitude_model not in AMPLITUDE_MODELS:
         raise ValueError(f"unknown amplitude_model {amplitude_model!r}; known: "
                          f"{sorted(AMPLITUDE_MODELS)}")
@@ -354,22 +457,32 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
 
     def nuisance(parameters):
         delays = _delays_from_parameters(parameters[:delay_parameter_count], drift_model,
-                                         acquisition_count, elapsed_seconds)
+                                         acquisition_count, elapsed_seconds, segment_ids)
         amplitudes = _amplitudes_from_parameters(parameters[delay_parameter_count:],
                                                  amplitude_model, acquisition_count,
                                                  elapsed_seconds, frequencies_hz)
         return delays, amplitudes
 
     nuisance_errors = None
+    nuisance_values = None
     if parameter_count == 0:
         delays = np.zeros(acquisition_count)
         amplitudes = np.ones((acquisition_count, frequency_count))
     else:
+        informative = _informative_frequencies(spectra, weights,
+                                               spectral_variance is not None)
+        search_spectra = spectra[:, informative]
+        search_frequencies = frequencies_hz[informative]
+        search_weights = weights[:, informative]
+        search_root_weights = root_weights[:, informative]
+
         def residual_vector(parameters):
             trial_delays, trial_amplitudes = nuisance(parameters)
-            _, residual, _ = _solve_linear(design, spectra, frequencies_hz, trial_delays,
-                                           weights, trial_amplitudes)
-            weighted = residual * root_weights
+            if trial_amplitudes.shape[1] > 1:
+                trial_amplitudes = trial_amplitudes[:, informative]
+            _, residual, _ = _solve_linear(design, search_spectra, search_frequencies,
+                                           trial_delays, search_weights, trial_amplitudes)
+            weighted = residual * search_root_weights
             return np.concatenate([weighted.real.ravel(), weighted.imag.ravel()])
 
         # Delays in fs within +/- maximum_drift_fs; amplitude parameters within +/- 0.5 (a
@@ -377,17 +490,21 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         bound = np.concatenate([maximum_drift_fs * np.ones(delay_parameter_count),
                                 0.5 * np.ones(amplitude_parameter_count)])
         start = np.zeros(parameter_count)
-        names = (DRIFT_MODELS[drift_model](acquisition_count)
-                 + AMPLITUDE_MODELS[amplitude_model](acquisition_count))
+        names = drift_parameter_names + AMPLITUDE_MODELS[amplitude_model](acquisition_count)
+        lower = -bound
         for position, name in enumerate(names):
+            if name == "transient_decay_minutes":
+                lower[position], bound[position] = TRANSIENT_DECAY_MINUTES_BOUNDS
+                start[position] = TRANSIENT_DECAY_MINUTES_START
             if name.endswith("settling_rate"):
                 # The rate is block length / tau: +/-10 spans tau from a tenth of the block to
                 # infinity. Start at a moderate settle; at rate 0 its gradient vanishes.
                 bound[position] = 10.0
                 start[position] = 1.0
         result = least_squares(residual_vector, start,
-                               bounds=(-bound, bound), xtol=1e-12, ftol=1e-12)
+                               bounds=(lower, bound), xtol=1e-12, ftol=1e-12)
         delays, amplitudes = nuisance(result.x)
+        nuisance_values = np.asarray(result.x, dtype=float)
         nuisance_errors = _nuisance_standard_errors(result, spectral_variance is not None)
 
     solution, residual, inverse_normal = _solve_linear(design, spectra, frequencies_hz, delays,
@@ -437,8 +554,10 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
             frequencies_hz / 1e12, np.log(amplitudes).T, 1)[0]),
         amplitude_model=amplitude_model,
         nuisance_parameter_errors=nuisance_errors,
-        nuisance_parameter_names=(DRIFT_MODELS[drift_model](acquisition_count)
+        nuisance_parameters=nuisance_values,
+        nuisance_parameter_names=(drift_parameter_names
                                   + AMPLITUDE_MODELS[amplitude_model](acquisition_count)),
+        segment_ids=segment_ids,
     )
 
 
@@ -476,7 +595,9 @@ def revisit_lever_arm(fit, band=None, similarity_threshold=0.95):
     pair repeats -- the drift then rests on the frequency structure alone.
 
     Independent of the noise level, unlike a parameter error, so it reads the same on a quiet
-    and a noisy run.
+    and a noisy run. With per-scan rows (``fit.segment_ids``) only pairs from DIFFERENT
+    acquisitions count: repeats inside one acquisition pin the drift rate, not a jump at an
+    opening of the box.
     """
     angles = np.asarray(fit.emitter_angles_rad, dtype=float)
     band = slice(None) if band is None else np.asarray(band, dtype=bool)
@@ -488,9 +609,13 @@ def revisit_lever_arm(fit, band=None, similarity_threshold=0.95):
     times = (np.arange(angles.size, dtype=float) if fit.elapsed_seconds is None
              else np.asarray(fit.elapsed_seconds, dtype=float))
     span = np.ptp(times) or 1.0
+    segments = (np.arange(angles.size) if fit.segment_ids is None
+                else np.asarray(fit.segment_ids))
     lever = 0.0
     for first in range(angles.size):
         for second in range(first + 1, angles.size):
+            if segments[first] == segments[second]:
+                continue
             similarity = np.real(np.vdot(signals[first], signals[second])) / (
                 norms[first] * norms[second] or 1.0)
             if similarity >= similarity_threshold:

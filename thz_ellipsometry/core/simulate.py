@@ -265,7 +265,8 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
                             multiplicative_noise=0.0, drift_span_s=0.0, amplitude_drift=0.0,
                             tilt_drift_per_thz=0.0, tilt_profile=None,
                             background_relative=0.0, background_delay_ps=0.4,
-                            background_width_ps=0.3, out_of_plane_tilt_rad=0.0, seed=0):
+                            background_width_ps=0.3, out_of_plane_tilt_rad=0.0, seed=0,
+                            drift_within_acquisition=False):
     """Repeat-scan time traces for each acquisition of a polarisation series.
 
     The default pulse width puts the spectral peak near 1.4 THz with usable content to beyond
@@ -279,6 +280,11 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
     what lets the repeat-scan noise model be exercised. The background is a broader pulse,
     ``background_delay_ps`` after the main one, identical at every polarisation (it does not
     reverse with the magnet) and on the same delay line, so it drifts with everything else.
+
+    ``drift_within_acquisition``: by default every scan of an acquisition has its acquisition's
+    delay (a staircase in time). True makes a scalar ``drift_span_s`` run continuously through
+    the scans too, at each scan's own time -- as on the bench, and what per-scan fit rows need.
+    ``true_delays_s`` stays per acquisition (its first scan).
     """
     angles = np.asarray(polarization_angles_rad, dtype=float)
     acquisition_count = angles.size
@@ -300,32 +306,47 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
                                      index_incident, detection, out_of_plane_tilt_rad, 0.0)
 
     delays = _drift_delays(acquisition_count, elapsed_seconds, drift_span_s)
+    scan_delays = np.repeat(delays[:, None], scans_per_acquisition, axis=1)
+    if drift_within_acquisition:
+        if np.ndim(drift_span_s) or elapsed_seconds is None:
+            raise ValueError("drift_within_acquisition needs a scalar drift_span_s and "
+                             "elapsed_seconds")
+        elapsed = np.asarray(elapsed_seconds, dtype=float)
+        rate = float(drift_span_s) / (np.ptp(elapsed) or 1.0)
+        scan_times = (elapsed[:, None] - elapsed.min()
+                      + seconds_per_scan * np.arange(scans_per_acquisition)[None, :])
+        scan_delays = rate * scan_times
     true_angles = angles + emitter_angle_offset_rad
-    clean = np.zeros((acquisition_count, sample_count))
-    for position, (angle, delay) in enumerate(zip(true_angles, delays)):
+    clean = np.zeros((acquisition_count, scans_per_acquisition, sample_count))
+    for position, angle in enumerate(true_angles):
         response = channel_p * np.cos(angle) + channel_s * np.sin(angle)
-        shift = np.exp(1j * 2.0 * np.pi * frequencies_hz * delay)
-        clean[position] = np.fft.irfft(incident_spectrum * response * shift, n=sample_count)
+        for scan_index, delay in enumerate(scan_delays[position]):
+            shift = np.exp(1j * 2.0 * np.pi * frequencies_hz * delay)
+            clean[position, scan_index] = np.fft.irfft(incident_spectrum * response * shift,
+                                                       n=sample_count)
     peak = np.abs(clean).max()
     if background_relative:
         background_peak = np.abs(background).max()
-        for position, delay in enumerate(delays):
-            shift = np.exp(1j * 2.0 * np.pi * frequencies_hz * delay)
-            clean[position] += (background_relative * peak / background_peak
-                                * np.fft.irfft(background_spectrum * shift, n=sample_count))
+        for position in range(acquisition_count):
+            for scan_index, delay in enumerate(scan_delays[position]):
+                shift = np.exp(1j * 2.0 * np.pi * frequencies_hz * delay)
+                clean[position, scan_index] += (
+                    background_relative * peak / background_peak
+                    * np.fft.irfft(background_spectrum * shift, n=sample_count))
 
     if amplitude_drift:
         clean = clean * _amplitude_factors(acquisition_count, elapsed_seconds,
-                                           amplitude_drift)[:, None]
+                                           amplitude_drift)[:, None, None]
     if tilt_drift_per_thz or tilt_profile is not None:
         # The purge tilt acts on the spectrum; apply it there and come back.
         tilt = _tilt_factors(acquisition_count, elapsed_seconds,
                              np.where(frequencies_hz > 0, frequencies_hz, 1.0e12),
                              tilt_drift_per_thz, tilt_profile)
-        clean = np.fft.irfft(np.fft.rfft(clean, axis=1) * tilt, n=sample_count, axis=1)
+        clean = np.fft.irfft(np.fft.rfft(clean, axis=2) * tilt[:, None, :], n=sample_count,
+                             axis=2)
 
     generator = np.random.default_rng(seed)
-    scans = np.repeat(clean[:, None, :], scans_per_acquisition, axis=1)
+    scans = clean.copy()
     if multiplicative_noise:
         scans = scans * (1.0 + multiplicative_noise
                          * generator.normal(size=scans.shape[:2])[..., None])

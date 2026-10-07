@@ -394,4 +394,12 @@ Design deviations only (progress lives in `~/.claude/global_projects.md`, not he
   Model parameter names are declared once, in `DRIFT_MODELS` / `AMPLITUDE_MODELS`.
 - **Acquisition order is part of the method:** palindromic blocks, because a single pass cannot
   separate drift from C when C ~ -1; `revisit_lever_arm` + `drift_separable_from_ratio` detect it.
+- **Per-scan fit rows** (`acquisition.rows = 'scan'`, F44): each repeat scan is a row
+  (`loader.expand_to_scan_rows`, per-scan noise = one scan's variance), grouped into segments =
+  files. Drift `segment_settling` = block-wide exponential trend + a short transient after each
+  box opening (decay capped at 3 min: longer transients trade with P/Q). Measures the drift
+  inside every file, so a single pass with continuous drift is recovered (synthetic: 0.010 vs
+  0.149 per file). Blind to a lasting STEP at an opening (synthetic staircase: error 6.6), which
+  only a palindrome reveals. `ROW_LAYOUTS` registry in `stages.py`; the drift search uses only bins
+  above noise (`_informative_frequencies`).
 

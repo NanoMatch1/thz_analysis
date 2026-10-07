@@ -28,7 +28,7 @@ from ..core.materials import reference_index
 from ..core.pipeline import analyse_calibrated_series, band_mask
 from ..core.preprocess import transform_traces
 from ..core.validation import validate_index_against_reference
-from .loader import SAMPLE_ROLE, load_measurement
+from .loader import SAMPLE_ROLE, expand_to_scan_rows, load_measurement
 from .noise import estimate_series_noise
 
 __all__ = [
@@ -93,7 +93,9 @@ class RunOutcome:
     frequencies_hz: np.ndarray
     result: object
     fits: dict = field(default_factory=dict)          #: (role, probe_deg) -> HarmonicFit
-    transformed: dict = field(default_factory=dict)   #: (role, probe_deg) -> TransformedSeries
+    #: (role, probe_deg) -> TransformedSeries, one spectrum per FIT ROW (per scan when
+    #: acquisition.rows = 'scan'); ``series`` stays one row per file.
+    transformed: dict = field(default_factory=dict)
     noise: dict = field(default_factory=dict)         #: (role, probe_deg) -> SeriesNoise
     primary_probe_deg: float | None = None
     calibration_source: str = ""
@@ -142,6 +144,23 @@ def load_series(config):
     )
 
 
+#: config['acquisition']['rows'] -> how a loaded series becomes the rows of the fit.
+ROW_LAYOUTS = {
+    "acquisition": lambda series: series,     # one row per file: its repeat-averaged trace
+    "scan": expand_to_scan_rows,              # one row per repeat scan, grouped by file
+}
+
+
+@ellipsometry_stage
+def arrange_rows(config, series):
+    """Lay the series out as fit rows: one per acquisition, or one per repeat scan."""
+    layout = _section(config, "acquisition").get("rows", "acquisition")
+    if layout not in ROW_LAYOUTS:
+        raise ValueError(f"acquisition.rows must be one of {sorted(ROW_LAYOUTS)}, not "
+                         f"{layout!r}")
+    return ROW_LAYOUTS[layout](series)
+
+
 @ellipsometry_stage
 def transform_to_spectra(config, series):
     """Baseline, window and FFT a polarisation series onto a common frequency axis."""
@@ -173,8 +192,11 @@ def estimate_noise(config, series, transformed):
 CURVED_DRIFT_MINIMUM_ACQUISITIONS = 8
 
 
-def resolve_nuisance_models(drift_model, amplitude_model, acquisition_count):
+def resolve_nuisance_models(drift_model, amplitude_model, acquisition_count, per_scan=False):
     """Turn 'auto' into concrete models for a series of this length.
+
+    Per-scan rows: the delay is 'segment_settling' (trend + a transient after each opening),
+    measured inside every acquisition, and the gain + tilt a ramp over real time.
 
     Measured on the August purge transient (purge_spectral_template.py + simulation, F40): a
     palindrome of eight or more takes an exponential 'settling' delay and an exponentially
@@ -182,6 +204,9 @@ def resolve_nuisance_models(drift_model, amplitude_model, acquisition_count):
     10 min after closing the box, at any channel ratio. A single pass of four cannot carry the curved delay,
     and its drift is only separable from C when C ~ +1 -- hence the identifiability diagnostic.
     """
+    if per_scan:
+        return (("segment_settling" if drift_model == "auto" else drift_model),
+                ("tilt_ramp" if amplitude_model == "auto" else amplitude_model))
     curved = acquisition_count >= CURVED_DRIFT_MINIMUM_ACQUISITIONS
     if drift_model == "auto":
         drift_model = "settling" if curved else "linear_ramp"
@@ -194,16 +219,18 @@ def resolve_nuisance_models(drift_model, amplitude_model, acquisition_count):
 def fit_harmonic(config, series, transformed, noise):
     """Fit P, Q (and background, drift) to one series, weighted by its noise when known."""
     acquisition = _section(config, "acquisition")
+    per_scan = series.segment_ids is not None
     drift_model, amplitude_model = resolve_nuisance_models(
         acquisition.get("drift_model", "auto"), acquisition.get("amplitude_model", "auto"),
-        len(series))
+        len(series) if not per_scan else int(series.segment_ids.max()) + 1, per_scan)
     return fit_emitter_harmonic(
         series.angles_rad, transformed.spectra, transformed.frequencies_hz,
         drift_model=drift_model,
         elapsed_seconds=series.elapsed_seconds,
         background_term=acquisition.get("background_term", True),
         spectral_variance=noise.spectral_variance,
-        amplitude_model=amplitude_model)
+        amplitude_model=amplitude_model,
+        segment_ids=series.segment_ids)
 
 
 @ellipsometry_stage
@@ -378,9 +405,10 @@ def isotropic(config):
 
     transformed, noise, fits = {}, {}, {}
     for key, entry in series.items():
-        transformed[key] = transform_to_spectra(config, entry)
-        noise[key] = estimate_noise(config, entry, transformed[key])
-        fits[key] = fit_harmonic(config, entry, transformed[key], noise[key])
+        rows = arrange_rows(config, entry)
+        transformed[key] = transform_to_spectra(config, rows)
+        noise[key] = estimate_noise(config, rows, transformed[key])
+        fits[key] = fit_harmonic(config, rows, transformed[key], noise[key])
 
     axes = [item.frequencies_hz for item in transformed.values()]
     if any(axis.shape != axes[0].shape or not np.allclose(axis, axes[0]) for axis in axes):

@@ -35,6 +35,9 @@ def _base_config(directory, expect="hr_silicon"):
     config["data"]["directory"] = directory
     config["general"]["show_graph"] = False
     config["validation"]["expect"] = expect
+    # Written for one row per file on staircase synthetic drift; the per-scan layout has its
+    # own tests with continuous drift (test_thz_ellipsometry_phase1_workflow.py, 'scan rows').
+    config["acquisition"]["rows"] = "acquisition"
     return config
 
 
@@ -77,7 +80,9 @@ def test_accumulation_file_round_trips_through_the_writer_and_reader(tmp_path):
 
 def test_loader_splits_sample_from_reference(tmp_path):
     _write_dataset(tmp_path, "hr_silicon")
-    series = loader.load_measurement(str(tmp_path), default_probe_azimuth_deg=_primary_probe())
+    series = loader.load_measurement(str(tmp_path), magnet_calibration=thz_ellipsometry_run_me.config["geometry"][
+                                          "magnet_calibration"],
+                                      default_probe_azimuth_deg=_primary_probe())
     sample = series[("sample", _primary_probe())]
     reference = series[("channel_reference", _primary_probe())]
     assert len(sample) == len(reference) == len(EMITTER_ANGLES_DEG) * CYCLES

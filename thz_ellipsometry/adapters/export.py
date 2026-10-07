@@ -155,6 +155,12 @@ def _arrays(outcome):
             arrays[prefix + "tilts_per_thz"] = fit.amplitude_tilts_per_thz
         if fit.elapsed_seconds is not None:
             arrays[prefix + "elapsed_seconds"] = fit.elapsed_seconds
+        if fit.segment_ids is not None:
+            arrays[prefix + "segment_ids"] = fit.segment_ids
+        if fit.nuisance_parameters is not None:
+            arrays[prefix + "nuisance_parameters"] = fit.nuisance_parameters
+            arrays[prefix + "nuisance_parameter_errors"] = fit.nuisance_parameter_errors
+            arrays[prefix + "nuisance_parameter_names"] = np.array(fit.nuisance_parameter_names)
     return arrays
 
 

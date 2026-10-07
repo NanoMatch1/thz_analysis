@@ -87,6 +87,14 @@ config: dict = {
         # Fit a polarisation-independent background: equivalent to the plan's +/-M
         # differencing for 0/90/180/270, and valid for unpaired angle sets too.
         "background_term": True,
+        # Rows of the harmonic fit: 'acquisition' = one per file (its averaged trace), 'scan' =
+        # one per repeat scan. With 'scan' the drift INSIDE each file -- where the polarisation
+        # is fixed, so any change is drift -- is measured directly, and 'auto' below becomes a
+        # purge-settling trend over the block + a short transient after each opening of the
+        # box ('segment_settling') with a gain + tilt ramp. First real block (2026-10-07):
+        # reduced chi-square 11.8/3.5 -> 1.3/1.2. Its one assumption is that an opening leaves
+        # no lasting timing STEP; only a palindrome checks that.
+        "rows": "scan",
         # Purge drift between magnet states does not cancel, so it is modelled over the REAL
         # elapsed time (F35, F40): a delay (gas exchange) plus a gain and a spectral TILT (water;
         # unresolved lines on a short record look like a log-amplitude tilt, linear in f).
@@ -96,7 +104,8 @@ config: dict = {
         # after closing the box.
         # USE THE PALINDROME: a single pass can only separate drift from the channel ratio when
         # C ~ +1 (F40); the drift_separable diagnostic reports when it could not.
-        # Explicit choices: drift 'none'|'linear_ramp'|'settling'|'per_acquisition';
+        # Explicit choices: drift 'none'|'linear_ramp'|'settling'|'per_acquisition'|
+        # 'segment_settling' (rows='scan' only);
         # amplitude 'none'|'linear_ramp'|'tilt_ramp'|'tilt_settling'|'per_acquisition'.
         "drift_model": "auto",
         "amplitude_model": "auto",
@@ -207,7 +216,7 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
                             background_relative=0.05, out_of_plane_tilt_deg=0.0,
                             magnet_calibration=None, probe_azimuth_deg=None,
                             second_probe_azimuth_deg=None, crystal_001_from_p_deg=90.0,
-                            angle_reference=False):
+                            angle_reference=False, drift_within_acquisition=False):
     """Write a synthetic sample + gold reference measurement, in the real .acc format.
 
     This is how the whole driver gets exercised without beam time: the files go through the
@@ -219,6 +228,10 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
     """
     probe_deg = (config["detection"]["probe_azimuth_deg"] if probe_azimuth_deg is None
                  else probe_azimuth_deg)
+    if magnet_calibration is None:
+        # Write the readings the configured table expects, so the analysis -- which applies that
+        # table -- recovers the planted polarisations.
+        magnet_calibration = config["geometry"].get("magnet_calibration")
     schedule = interleaved_schedule(
         emitter_angles_deg, cycles=cycles,
         seconds_per_acquisition=scans_per_acquisition * seconds_per_scan)
@@ -230,7 +243,8 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
                   crystal_orientation_rad=np.deg2rad(crystal_001_from_p_deg),
                   relative_noise=relative_noise, drift_span_s=drift_span_fs * 1e-15,
                   amplitude_drift=amplitude_drift,
-                  background_relative=background_relative)
+                  background_relative=background_relative,
+                  drift_within_acquisition=drift_within_acquisition)
     write_accumulation_files(directory, index_sample_function=SIMULATED_SAMPLES[sample_name],
                              sample_name=sample_name, probe_azimuth_deg=probe_deg,
                              out_of_plane_tilt_rad=np.deg2rad(out_of_plane_tilt_deg), seed=0,
@@ -271,7 +285,10 @@ def main(argv=None):
         build_simulated_dataset(
             temporary, arguments.simulate,
             incidence_angle_deg=config["geometry"]["incidence_angle_deg"],
-            crystal_001_from_p_deg=config["detection"]["crystal_001_from_p_deg"])
+            crystal_001_from_p_deg=config["detection"]["crystal_001_from_p_deg"],
+            # Drift runs through the scans as on the bench; a staircase (constant per file)
+            # is exactly the lasting step at each opening that per-scan rows cannot see.
+            drift_within_acquisition=True)
         config["data"]["directory"] = temporary
         config["validation"]["expect"] = (
             arguments.simulate if arguments.simulate in ("hr_silicon",) else None)

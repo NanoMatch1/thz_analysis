@@ -169,10 +169,14 @@ def drift_separable_from_ratio(outcome, config):
             continue
         lever = revisit_lever_arm(fit, outcome.result.band)
         if 0.0 < lever < 0.5:
+            caveat = ("drift trades with P/Q -- a palindrome order fixes this"
+                      if fit.segment_ids is None else
+                      "per-scan rows remove the drift that runs THROUGH the files, but a lasting "
+                      "step at an opening of the box is invisible and goes into P/Q -- only a "
+                      "return visit (palindrome) can check that")
             yield Problem(f"{key[0]} @ probe {key[1]}: the same signal was only seen again "
                           f"{lever:.0%} of the block later (neighbouring acquisitions), so "
-                          "drift trades with P/Q -- a palindrome order fixes this",
-                          detail={"revisit_lever_arm": lever})
+                          f"{caveat}", detail={"revisit_lever_arm": lever})
             continue
         poorly = {name: float(error) for name, error in zip(fit.nuisance_parameter_names,
                                                              fit.nuisance_parameter_errors)
