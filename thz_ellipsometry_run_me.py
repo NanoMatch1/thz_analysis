@@ -71,7 +71,7 @@ config: dict = {
         # per-state errors of the scale. These cannot be fitted from the sample data (one
         # complex redundancy per frequency), and an error left in MIXES the channels (a Moebius
         # map of rho) rather than scaling them, so the gold calibration does not absorb it.
-        "magnet_calibration": {0.0: 0.0},
+        "magnet_calibration": {0.0: 244.54, 90.0: 337.12, 180.0: 64.77, 270.0: 156.24},
         "index_incident": 1.0,
     },
     "acquisition": {
