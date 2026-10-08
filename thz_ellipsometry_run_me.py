@@ -12,6 +12,9 @@ Run it against real data:
 
     .venv/bin/python thz_ellipsometry_run_me.py
 
+Each processing step's figures open as the run reaches it (config['general']['inspect']), and
+every bundle keeps them; reopen a finished run with ``thz_ellipsometry_view.py <bundle>``.
+
 Or against a synthetic dataset, with no bench and no files, to check the chain end to end:
 
     .venv/bin/python thz_ellipsometry_run_me.py --simulate hr_silicon
@@ -35,6 +38,7 @@ import tempfile
 import numpy as np
 
 from thz_ellipsometry.adapters.export import save_run
+from thz_ellipsometry.adapters.inspection import StepwiseInspector
 from thz_ellipsometry.adapters.report import format_run_report, plot_run
 from thz_ellipsometry.adapters.stages import run_ellipsometry
 from thz_ellipsometry.adapters.synthetic_files import write_accumulation_files
@@ -187,6 +191,12 @@ config: dict = {
     "general": {
         "show_graph": True,
         "save_figure": None,
+        # Show each processing step's figures as the run reaches it (needs show_graph), and wait
+        # for them to be closed before going on: "all", None, or a list of checkpoints from
+        # raw_traces, windowing, spectra, harmonic_fit, calibration, result. Every run saves all
+        # of them in its bundle regardless; view a bundle again with thz_ellipsometry_view.py.
+        # How to read them: docs/ELLIPSOMETRY_HARMONIC_FIT_TUTORIAL.md
+        "inspect": "all",
     },
     "save": {
         # At the END of the run, write a .thzbundle next to the data (recipe + report + results
@@ -306,7 +316,10 @@ def main(argv=None):
               f"or run with --simulate hr_silicon.", file=sys.stderr)
         return 2
 
-    outcome = run_ellipsometry(config)
+    general = config["general"]
+    inspector = (StepwiseInspector(general.get("inspect"))
+                 if general.get("show_graph") and general.get("inspect") else None)
+    outcome = run_ellipsometry(config, observer=inspector)
     print(format_run_report(outcome))
 
     if config["general"]["show_graph"] or config["general"]["save_figure"]:

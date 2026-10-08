@@ -10,6 +10,8 @@ format the catalogue already indexes (``recipe.json`` + ``report.md``), so
     arrays.npz    everything numeric: full-axis rho and its variance, calibration per frequency,
                   every series' fitted P, Q, background, delays, amplitudes, tilts
     figure.png    the run figure
+    inspection.npz  the arrays every processing-step figure draws (``inspection``)
+    figures/      those figures, one or two per step (``thz_ellipsometry_view.py`` redraws them)
 
 Load it back with :func:`load_saved_run`. Nothing here recomputes anything: the bundle is a
 record of what this run produced, with enough provenance (code commits and whether the tree was
@@ -31,6 +33,7 @@ import numpy as np
 from dataset_core.adapters.run_notes import collect_run_notes
 from dataset_core.services.provenance import code_versions, file_sha256
 
+from . import inspection
 from .report import format_run_report, plot_run
 
 __all__ = ["BUNDLE_KIND", "SavedRun", "build_prefilled_summary", "load_saved_run", "save_run"]
@@ -205,12 +208,18 @@ def _report_markdown(outcome, notes, bundle_name):
               "from thz_ellipsometry.adapters.export import load_saved_run",
               f"run = load_saved_run(r\"{bundle_name}\")   # path to this bundle directory",
               "run.results['n'], run.results['k']     # band arrays; run.arrays has the rest",
-              "```", ""]
+              "```", "",
+              "## Every processing step", "",
+              "`figures/` holds the step-by-step figures (raw traces, windowing, spectra, the "
+              "harmonic fit, the channel calibration, the result); redraw or browse them with "
+              "`thz_ellipsometry_view.py <this bundle>`. How to read them: "
+              "`docs/ELLIPSOMETRY_HARMONIC_FIT_TUTORIAL.md`.", ""]
     return "\n".join(lines)
 
 
 def save_run(outcome, *, directory=None, notes_mode="auto", config_notes="", figure=True,
-             producer=None, input_function=input, output_function=print, input_stream=None):
+             producer=None, input_function=input, output_function=print, input_stream=None,
+             inspection_figures=True):
     """Write the bundle for a finished run; ask for notes first (see ``run_notes``).
 
     ``directory`` defaults to the run's data directory, so results sit beside the raw files.
@@ -259,6 +268,11 @@ def save_run(outcome, *, directory=None, notes_mode="auto", config_notes="", fig
     np.savez_compressed(os.path.join(bundle_dir, "arrays.npz"), **_arrays(outcome))
     if figure:
         plot_run(outcome, show=False, save_path=os.path.join(bundle_dir, "figure.png"))
+    record = inspection.record_from_outcome(outcome)
+    inspection.save_inspection(record, os.path.join(bundle_dir, inspection.INSPECTION_FILENAME))
+    if inspection_figures:
+        inspection.save_figures(inspection.make_inspection_figures(record),
+                                os.path.join(bundle_dir, inspection.FIGURE_DIRECTORY))
     output_function(f"[save_run] wrote {bundle_dir}"
                     + ("" if notes.text else "  (no notes: add later with catalog_browse.py "
                                              "--annotate)"))

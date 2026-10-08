@@ -92,6 +92,20 @@ def test_padded_bins_do_not_shrink_the_drift_error():
         as_independent.degrees_of_freedom / 4.0)
 
 
+def test_the_fit_predicts_noise_free_data_exactly_with_its_drift_and_scale():
+    """predicted_spectra uses the fit's own sign convention: on exact data it IS the data."""
+    elapsed = np.arange(12) * 60.0
+    measured = _series(DOPED, elapsed_seconds=elapsed, drift_span_s=40e-15,
+                       background_relative=0.05, amplitude_drift=0.03)
+    fit = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                        elapsed_seconds=elapsed, background_term=True,
+                                        amplitude_model="linear_ramp")
+    scale = np.max(np.abs(measured.spectra))
+    np.testing.assert_allclose(fit.predicted_spectra(FREQUENCIES) / scale,
+                               measured.spectra / scale, atol=1e-8)
+    assert fit.undrifted_spectra().shape == measured.spectra.shape
+
+
 def test_drift_ramp_runs_over_real_elapsed_time_not_acquisition_order():
     """An acquisition with a long pause: the ramp in time is right, the ramp in order is not."""
     elapsed = np.concatenate([np.arange(6) * 60.0, 3600.0 + np.arange(6) * 60.0])

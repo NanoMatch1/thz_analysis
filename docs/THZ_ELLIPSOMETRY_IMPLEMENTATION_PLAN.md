@@ -371,6 +371,15 @@ Design deviations only (progress lives in `~/.claude/global_projects.md`, not he
   not resized, and the record ends are tapered (`preprocess.edge_taper_ps`); bench records
   start ~2.4 ps before the pulse, so this happens on every real run (diagnostic
   `window_inside_record`).
+- **Every step is inspectable** (`adapters/inspection.py` + `inspection_plots.py`): the run
+  passes `stages.CHECKPOINTS` (raw_traces, windowing, spectra, harmonic_fit, calibration,
+  result) to an optional observer; figures are registered per checkpoint with
+  `@inspection_figure` and draw only an `InspectionRecord` (plain arrays), so the same figure is
+  shown stepwise during a run (`general.inspect`), saved in the bundle (`inspection.npz` +
+  `figures/`), and redrawn later by `thz_ellipsometry_view.py`. Reading guide:
+  `docs/ELLIPSOMETRY_HARMONIC_FIT_TUTORIAL.md`. Window sweep tool:
+  `thz_ellipsometry_window_sweep.py`. The fit's model convention is S = [...] exp(+i2 pi f tau)
+  (`HarmonicFit.predicted_spectra`); figures show arrival delay, later = positive.
 - **Statistics count independent frequencies, not padded bins.** The band is oversampled
   ~5x by zero padding; the drift/amplitude nuisance errors are scaled by sqrt(oversampling)
   (`fit_emitter_harmonic(frequency_oversampling=...)`), n/k are plotted with markers on the

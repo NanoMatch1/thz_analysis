@@ -97,6 +97,28 @@ class HarmonicFit:
     #: FFT bins per independent frequency point (zero padding interpolates). The nuisance
     #: errors are already scaled by its square root; ``independent_degrees_of_freedom`` uses it.
     frequency_oversampling: float = 1.0
+    #: (n_rows, n_frequencies) the fitted per-row scale (amplitude model), ones without one
+    row_scales: np.ndarray | None = None
+
+    def undrifted_spectra(self):
+        """(n_rows, n_frequencies) [P cos a + Q sin a (+ B)] x scale: the model without delay."""
+        design = _design_matrix(self.emitter_angles_rad, self.background is not None)
+        columns = [self.channel_p, self.channel_s] + (
+            [] if self.background is None else [self.background])
+        scales = 1.0 if self.row_scales is None else self.row_scales
+        return (design @ np.vstack(columns)) * scales
+
+    def predicted_spectra(self, frequencies_hz):
+        """(n_rows, n_frequencies) what the fitted model says each row should have measured.
+
+        ``undrifted_spectra() x exp(+i 2 pi f tau)``, the convention of the fit itself (it
+        derotates each row by exp(-i 2 pi f tau)); with numpy's FFT a positive tau is an EARLIER
+        arrival. The measured spectra minus this are the fit residuals. ``frequencies_hz`` must
+        be the axis the fit was made on.
+        """
+        frequencies_hz = np.asarray(frequencies_hz, dtype=float)
+        return self.undrifted_spectra() * np.exp(2j * np.pi * frequencies_hz[None, :]
+                                                 * np.asarray(self.delays_s)[:, None])
     #: Fitted values of those parameters, same order and units; None when there are none.
     nuisance_parameters: np.ndarray | None = None
     #: (n_rows,) acquisition (between box openings) of each row, for per-scan rows; None when
@@ -577,6 +599,7 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
                                   + AMPLITUDE_MODELS[amplitude_model](acquisition_count)),
         segment_ids=segment_ids,
         frequency_oversampling=max(float(frequency_oversampling), 1.0),
+        row_scales=np.broadcast_to(amplitudes, spectra.shape).copy(),
     )
 
 

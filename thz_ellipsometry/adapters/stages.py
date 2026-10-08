@@ -34,6 +34,7 @@ from .noise import estimate_series_noise
 
 __all__ = [
     "ACQUISITION_MODES",
+    "CHECKPOINTS",
     "ELLIPSOMETRY_STAGES",
     "RunOutcome",
     "acquisition_mode",
@@ -98,6 +99,8 @@ class RunOutcome:
     #: acquisition.rows = 'scan'); ``series`` stays one row per file.
     transformed: dict = field(default_factory=dict)
     noise: dict = field(default_factory=dict)         #: (role, probe_deg) -> SeriesNoise
+    #: (role, probe_deg) -> the PolarisationSeries as fitted (one row per scan or per file)
+    rows: dict = field(default_factory=dict)
     primary_probe_deg: float | None = None
     calibration_source: str = ""
     report: object = None
@@ -420,34 +423,58 @@ def _collect_warnings(config, series, primary_probe_deg):
 # Acquisition modes
 # ---------------------------------------------------------------------------
 
+#: The points in a run where its state is complete enough to inspect, in run order. An
+#: observer passed to ``run_ellipsometry`` is called at each with (name, state so far); the
+#: inspection figures are registered against these names.
+CHECKPOINTS = ("raw_traces", "windowing", "spectra", "harmonic_fit", "calibration", "result")
+
+
+def _checkpoint(observer, name, state):
+    if observer is not None:
+        observer(name, state)
+
+
 @acquisition_mode
-def isotropic(config):
+def isotropic(config, observer=None):
     """Magnet states at one probe setting (plus optional probe-rotation pairs): rho -> n, k."""
     primary_probe_deg = _primary_probe_deg(config)
     series = load_series(config)
     warnings = _collect_warnings(config, series, primary_probe_deg)
+    state = {"config": config, "series": series, "primary_probe_deg": primary_probe_deg}
 
-    transformed, noise, fits = {}, {}, {}
-    for key, entry in series.items():
-        rows = arrange_rows(config, entry)
-        transformed[key] = transform_to_spectra(config, rows)
-        noise[key] = estimate_noise(config, rows, transformed[key])
-        fits[key] = fit_harmonic(config, rows, transformed[key], noise[key])
+    # Stage by stage across every series (not series by series), so each checkpoint sees the
+    # whole run at that step.
+    rows = {key: arrange_rows(config, entry) for key, entry in series.items()}
+    state["rows"] = rows
+    _checkpoint(observer, "raw_traces", state)
+    transformed = {key: transform_to_spectra(config, entry) for key, entry in rows.items()}
+    state["transformed"] = transformed
+    _checkpoint(observer, "windowing", state)
+    noise = {key: estimate_noise(config, rows[key], transformed[key]) for key in rows}
+    state["noise"] = noise
+    _checkpoint(observer, "spectra", state)
+    fits = {key: fit_harmonic(config, rows[key], transformed[key], noise[key]) for key in rows}
+    state["fits"] = fits
 
     axes = [item.frequencies_hz for item in transformed.values()]
     if any(axis.shape != axes[0].shape or not np.allclose(axis, axes[0]) for axis in axes):
         raise ValueError("the series were transformed onto different frequency axes; they "
                          "must share a time axis and padding")
     frequencies_hz = axes[0]
+    state["frequencies_hz"] = frequencies_hz
 
     sample_key = (SAMPLE_ROLE, primary_probe_deg)
     if sample_key not in fits:
         raise ValueError(f"no sample series at the primary probe setting {primary_probe_deg}; "
                          f"loaded: {sorted(series)}")
     band = select_band(config, fits, transformed, primary_probe_deg)
+    state["band"] = band
+    _checkpoint(observer, "harmonic_fit", state)
     channel_calibration = calibrate(config, fits, frequencies_hz, band, primary_probe_deg)
     angle_rad, angle_source, angle_fit = determine_incidence_angle(
         config, fits, channel_calibration, frequencies_hz, band, primary_probe_deg)
+    state.update(calibration=channel_calibration, incidence_angle_rad=angle_rad)
+    _checkpoint(observer, "calibration", state)
     result = analyse(config, fits[sample_key],
                      fits.get((CHANNEL_REFERENCE_ROLE, primary_probe_deg)),
                      channel_calibration, frequencies_hz, band, angle_rad, angle_source)
@@ -458,19 +485,26 @@ def isotropic(config):
 
     outcome = RunOutcome(
         config=config, series=series, frequencies_hz=frequencies_hz, result=result,
-        fits=fits, transformed=transformed, noise=noise, primary_probe_deg=primary_probe_deg,
+        fits=fits, transformed=transformed, noise=noise, rows=rows,
+        primary_probe_deg=primary_probe_deg,
         calibration_source=_section(config, "calibration").get("channel", "gold_reference"),
         report=report, warnings=warnings)
     outcome.findings = check_assumptions(outcome)
+    state.update(result=result, outcome=outcome)
+    _checkpoint(observer, "result", state)
     return outcome
 
 
-def run_ellipsometry(config):
-    """Drive the whole chain from a config dict, in the mode it names. Returns a RunOutcome."""
+def run_ellipsometry(config, observer=None):
+    """Drive the whole chain from a config dict, in the mode it names. Returns a RunOutcome.
+
+    ``observer(checkpoint_name, state)``, if given, is called at each of ``CHECKPOINTS`` with
+    the run's state so far (a dict); it is how the stepwise inspection figures see the run.
+    """
     mode = config.get("mode", "isotropic")
     try:
         entry = ACQUISITION_MODES[mode]
     except KeyError:
         raise KeyError(f"unknown acquisition mode {mode!r}; registered: {mode_names()}") \
             from None
-    return entry.function(config)
+    return entry.function(config, observer=observer)
