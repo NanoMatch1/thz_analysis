@@ -38,8 +38,14 @@ def format_run_report(outcome):
         if (role, probe) == ("sample", outcome.primary_probe_deg):
             continue
         lines.append(f"   {role:<12}: {len(series)} acquisitions, probe {probe} deg")
+    resolution = outcome.resolution
+    resolution_text = ("" if resolution is None else
+                       f" ({int(np.count_nonzero(outcome.independent_band_points()))} independent:"
+                       f" resolution {resolution.df_resolution_hz / 1e12:.3f} THz from a "
+                       f"{resolution.t_resolution_s * 1e12:.2f} ps record, "
+                       f"{resolution.oversampling:.1f}x oversampled)")
     lines.append(f"   band        : {band.min()/1e12:.2f} to {band.max()/1e12:.2f} THz, "
-                 f"{band.size} points")
+                 f"{band.size} points{resolution_text}")
     lines.append(f"   geometry    : {np.rad2deg(inversion.incidence_angle_rad):.2f} deg "
                  f"incidence, blur "
                  f"{np.rad2deg(inversion.angular_spread_rad):.2f} deg")
@@ -116,14 +122,16 @@ def plot_run(outcome, show=True, save_path=None):
     axes[0, 0].set_xlabel("frequency [THz]")
     axes[0, 0].set_title("ellipsometric parameters")
 
+    # Faint line through every (interpolated) bin; markers and bars on the independent points.
+    independent = outcome.independent_band_points()
     for values, name in ((inversion.refractive_index, "n"), (inversion.extinction, "k")):
-        line, = axes[0, 1].plot(band_thz, values, label=name)
-        if result.index_standard_error is not None:
-            axes[0, 1].fill_between(band_thz, values - result.index_standard_error,
-                                    values + result.index_standard_error,
-                                    color=line.get_color(), alpha=0.25, linewidth=0)
+        line, = axes[0, 1].plot(band_thz, values, alpha=0.45, linewidth=1.0)
+        error = (None if result.index_standard_error is None
+                 else result.index_standard_error[independent])
+        axes[0, 1].errorbar(band_thz[independent], values[independent], yerr=error, fmt="o",
+                            markersize=3.5, capsize=2, color=line.get_color(), label=name)
     axes[0, 1].set_xlabel("frequency [THz]")
-    axes[0, 1].set_title("optical constants")
+    axes[0, 1].set_title("optical constants (markers: independent points)")
     axes[0, 1].legend()
 
     axes[1, 0].semilogy(all_thz, np.maximum(result.sample_fit.residual_per_frequency, 1e-12),

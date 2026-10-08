@@ -103,6 +103,13 @@ def test_saved_bundle_round_trips_and_carries_its_provenance(finished_run, monke
     assert np.allclose(saved.results["n"], band.refractive_index, rtol=1e-8)
     assert np.allclose(saved.results["k"], band.extinction, rtol=1e-8, atol=1e-12)
     assert np.allclose(saved.arrays["ratio"], outcome.result.ratio)
+    # One row in every ~oversampling is an independent point; the rest are padding interpolation.
+    independent = outcome.independent_band_points()
+    np.testing.assert_array_equal(saved.results["independent"].astype(bool), independent)
+    np.testing.assert_array_equal(saved.arrays["band_independent_points"], independent)
+    assert 2 <= independent.sum() < independent.size
+    assert independent.sum() == pytest.approx(
+        independent.size / outcome.resolution.decimation_factor, abs=1)
 
     recipe = saved.recipe
     assert recipe["producer"] == "test" and recipe["notes"] == "doped wafer, bench day 1"

@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+from thz_core.thz_core import conditioning
 
 from ..core.calibration_sources import CalibrationInputs, compute_channel_calibration
 from ..core.calibration import ellipsometric_ratio_from_channels, fit_incidence_angle
@@ -111,6 +112,26 @@ class RunOutcome:
     def reference_series(self):
         return self.series.get((CHANNEL_REFERENCE_ROLE, self.primary_probe_deg))
 
+    @property
+    def resolution(self):
+        """The sample spectra's InstrumentResolution (true resolution vs FFT bins), or None."""
+        transformed = self.transformed.get((SAMPLE_ROLE, self.primary_probe_deg))
+        return None if transformed is None else transformed.resolution
+
+    def independent_band_points(self):
+        """Over the band: True at one frequency per resolution element (all True if unknown).
+
+        The band is oversampled by the zero padding, so statistics or a fit over its points
+        should use these; the others are interpolation between them.
+        """
+        count = self.result.inversion.frequencies_hz.size
+        resolution = self.resolution
+        mask = np.zeros(count, dtype=bool)
+        mask[conditioning.independent_bin_indices(
+            np.ones(count, dtype=bool),
+            1 if resolution is None else resolution.decimation_factor)] = True
+        return mask
+
 
 # ---------------------------------------------------------------------------
 # Config access, with the defaults in one place
@@ -173,6 +194,7 @@ def transform_to_spectra(config, series):
         window_centre_ps=preprocess.get("window_centre_ps"),
         window_shape=preprocess.get("window_shape", "tukey"),
         taper_fraction=preprocess.get("taper_fraction", 0.5),
+        edge_taper_ps=preprocess.get("edge_taper_ps", 0.5),
     )
 
 
@@ -230,7 +252,9 @@ def fit_harmonic(config, series, transformed, noise):
         background_term=acquisition.get("background_term", True),
         spectral_variance=noise.spectral_variance,
         amplitude_model=amplitude_model,
-        segment_ids=series.segment_ids)
+        segment_ids=series.segment_ids,
+        frequency_oversampling=(1.0 if transformed.resolution is None
+                                else transformed.resolution.oversampling))
 
 
 @ellipsometry_stage

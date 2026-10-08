@@ -74,6 +74,24 @@ def test_two_angles_with_a_background_are_rejected_as_degenerate():
                                       drift_model="none", background_term=True)
 
 
+def test_padded_bins_do_not_shrink_the_drift_error():
+    """Neighbouring padded bins carry the same information: the shared drift's error must
+    not fall by sqrt(oversampling) just because the FFT interpolated between them."""
+    elapsed = np.arange(12) * 60.0
+    measured = _series(DOPED, elapsed_seconds=elapsed, drift_span_s=20e-15, relative_noise=0.01,
+                       seed=3)
+    as_independent = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                                   elapsed_seconds=elapsed)
+    oversampled = harmonic.fit_emitter_harmonic(MAGNET_STATES, measured.spectra, FREQUENCIES,
+                                                elapsed_seconds=elapsed,
+                                                frequency_oversampling=4.0)
+    assert oversampled.fitted_drift_fs == pytest.approx(as_independent.fitted_drift_fs)
+    np.testing.assert_allclose(oversampled.nuisance_parameter_errors,
+                               2.0 * as_independent.nuisance_parameter_errors)
+    assert oversampled.independent_degrees_of_freedom == pytest.approx(
+        as_independent.degrees_of_freedom / 4.0)
+
+
 def test_drift_ramp_runs_over_real_elapsed_time_not_acquisition_order():
     """An acquisition with a long pause: the ramp in time is right, the ramp in order is not."""
     elapsed = np.concatenate([np.arange(6) * 60.0, 3600.0 + np.arange(6) * 60.0])
@@ -361,6 +379,33 @@ def test_preprocessing_returns_the_window_it_applied():
     assert transformed.window.max() == pytest.approx(1.0, abs=0.01)
     assert transformed.window[0] == 0.0
     assert transformed.padded_length == 4 * 512
+    assert not transformed.window_placement.clipped
+    # A ~4 ps window in a 4 x 25.6 ps FFT: one independent point per ~26 bins.
+    assert transformed.resolution.t_resolution_s == pytest.approx(4.0e-12, rel=0.03)
+    assert transformed.resolution.oversampling == pytest.approx(
+        4 * 25.6e-12 / transformed.resolution.t_resolution_s)
+
+
+def test_a_window_past_the_record_start_is_truncated_not_resized():
+    """Short pre-pulse record (the bench default): the flat top must stay on the pulse."""
+    short_record = np.arange(141) * 0.05                # 7 ps, pulse 2.35 ps in
+    long_record = np.arange(201) * 0.05                 # 10 ps, pulse 4.35 ps in
+    clipped = preprocess.transform_traces(
+        short_record, np.exp(-((short_record - 2.35) / 0.15) ** 2)[None, :],
+        window_half_width_ps=3.0, window_centre_ps=2.35)
+    roomy = preprocess.transform_traces(
+        long_record, np.exp(-((long_record - 4.35) / 0.15) ** 2)[None, :],
+        window_half_width_ps=3.0, window_centre_ps=4.35)
+    assert clipped.window_placement.clipped_before == 13
+    assert not roomy.window_placement.clipped
+    # The same weights relative to the centre (index 47 vs 87), past the edge taper...
+    offset = 87 - 47
+    np.testing.assert_allclose(clipped.window[10:131], roomy.window[10 + offset:131 + offset])
+    # ...the flat top on the pulse, and the record's own start ramped to zero.
+    assert clipped.window[47] == pytest.approx(1.0)
+    assert clipped.window[0] == 0.0
+    # Shorter support -> coarser true resolution than the unclipped window.
+    assert clipped.resolution.df_resolution_hz > roomy.resolution.df_resolution_hz
 
 
 # ---------------------------------------------------------------------------

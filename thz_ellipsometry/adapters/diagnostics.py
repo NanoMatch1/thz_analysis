@@ -227,6 +227,31 @@ def noise_model_available(outcome, config):
             yield Problem(f"{key[0]} @ probe {key[1]}: {entry.reason}")
 
 
+@diagnostic(
+    stage=ACQUISITION,
+    assumption="the fixed-width window fits inside the recorded trace",
+    why="Where the window runs past the record it is truncated (its weights stay put, the "
+        "record's ends are tapered), so the spectra stay consistent -- but whatever arrives in "
+        "the cut-off part (a pre-pulse, the start of the p/s pulse pair) is not measured, and "
+        "the true resolution is set by the shorter, truncated record.",
+    remedy="Start the scan earlier (or end it later) by the reported amount, or shrink "
+           "config['preprocess']['window_half_width_ps'].",
+    severity=Severity.INFO)
+def window_inside_record(outcome, config):
+    if not _is_outcome(outcome):
+        return
+    for key, transformed in outcome.transformed.items():
+        placement = transformed.window_placement
+        if placement is None or not placement.clipped:
+            continue
+        step_ps = transformed.time_step_s * 1e12
+        yield Problem(f"{key[0]} @ probe {key[1]}: window truncated by "
+                      f"{placement.clipped_before * step_ps:.2f} ps before and "
+                      f"{placement.clipped_after * step_ps:.2f} ps after the record",
+                      detail={"clipped_before_samples": placement.clipped_before,
+                              "clipped_after_samples": placement.clipped_after})
+
+
 # ---------------------------------------------------------------------------
 # Calibration
 # ---------------------------------------------------------------------------

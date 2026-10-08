@@ -82,6 +82,7 @@ def _summary(outcome):
         "channel_ratio": result.calibration.ratio,
         "calibration_source": outcome.calibration_source,
         "quality_flags": result.quality_flags,
+        "independent_band_points": int(np.count_nonzero(outcome.independent_band_points())),
     }
     if result.tilt_fit is not None:
         summary["tilt_fit"] = {"tilt_deg": result.tilt_fit.tilt_deg,
@@ -136,6 +137,7 @@ def _arrays(outcome):
         "calibration_ratio_per_frequency": result.calibration.ratio_per_frequency,
         "band_frequencies_hz": result.inversion.frequencies_hz,
         "index": result.inversion.index,
+        "band_independent_points": outcome.independent_band_points(),
     }
     if result.ratio_variance is not None:
         arrays["ratio_variance"] = result.ratio_variance
@@ -164,8 +166,10 @@ def _arrays(outcome):
     return arrays
 
 
+#: ``independent`` is 1 at one frequency per resolution element; the rows between are the
+#: zero-padding interpolation (see thz_core.conditioning.instrument_resolution).
 RESULT_COLUMNS = ("frequency_thz", "n", "k", "index_standard_error", "eps_real", "eps_imag",
-                  "sigma1_s_per_m", "rho_real", "rho_imag")
+                  "sigma1_s_per_m", "rho_real", "rho_imag", "independent")
 
 
 def _write_results_csv(path, outcome):
@@ -180,7 +184,7 @@ def _write_results_csv(path, outcome):
         for row in zip(inversion.frequencies_hz / 1e12, inversion.refractive_index,
                        inversion.extinction, error, permittivity.real, permittivity.imag,
                        inversion.conductivity_real_si, inversion.ratio.real,
-                       inversion.ratio.imag):
+                       inversion.ratio.imag, outcome.independent_band_points().astype(int)):
             writer.writerow([f"{value:.10g}" for value in row])
 
 

@@ -109,6 +109,12 @@ The TILT is what identifies water specifically: a laser power drift scales the w
 - **Why it matters:** Without the noise model the fit is unweighted and its error bars come from the residual scatter, which is fine for the values but makes the bars themselves rough and loses the chi-square test of the harmonic model.
 - **If it fails:** Record at least three scans per acquisition (config['noise']['minimum_scans']).
 
+### the fixed-width window fits inside the recorded trace
+
+- **Check:** `window_inside_record` (severity when broken: **info**)
+- **Why it matters:** Where the window runs past the record it is truncated (its weights stay put, the record's ends are tapered), so the spectra stay consistent -- but whatever arrives in the cut-off part (a pre-pulse, the start of the p/s pulse pair) is not measured, and the true resolution is set by the shorter, truncated record.
+- **If it fails:** Start the scan earlier (or end it later) by the reported amount, or shrink config['preprocess']['window_half_width_ps'].
+
 ## Stage: `ellipsometry.calibration`
 
 ### the channel ratio C = d_p/d_s is frequency-flat

@@ -44,7 +44,7 @@ from (with tests) where useful, never imported.
 | §5.1 | Gold → κ | Done | — |
 | §5.2 | HR-Si → θ_eff | Done as *cross-check* (`fit_incidence_angle`) | Make it a selectable calibration source |
 | §5.3 | Tilt test (θ_eff vs in-plane tilt) | Missing | Multi-dataset stage: θ fit per tilt, report slope |
-| §6.2 | Common window, band by SNR | Done (common-centre Hann, amplitude floor) | Swap to repo preprocess + noise-model SNR |
+| §6.2 | Common window, band by SNR | Done (common-centre flat-top Tukey on `thz_core.conditioning`; resolution-aware; amplitude floor) | Noise-model SNR for the band edge |
 | §6.4 | Closed-form isotropic inversion | Done | — |
 | §6.5 | Si flat 11.68, branch check, sign-flip signature | Partial (V-gates) | Register as `@diagnostic`s |
 | §7.2 | Aligned-axis anisotropic closed forms; aligned-azimuth pair route | Missing | New inversion route |
@@ -364,6 +364,17 @@ Design deviations only (progress lives in `~/.claude/global_projects.md`, not he
   Under a sloped window a drifting pulse also changes amplitude, so the drift is not a pure phase
   ramp for any pulse off the window centre. Hann + strong background gave harmonic reduced
   chi-square 9.1; Tukey 1.11. Lab notebook F38.
+- **Conditioning arithmetic is thz-core's** (`thz_core.conditioning`, 0.4.0): baseline,
+  block-edge taper, window shapes and placement, instrument resolution -- shared with the
+  DataSet pipeline's adapters. `core/preprocess.py` keeps only this pipeline's decisions (one
+  common centre for every row, flat-top Tukey). A window running past the record is TRUNCATED,
+  not resized, and the record ends are tapered (`preprocess.edge_taper_ps`); bench records
+  start ~2.4 ps before the pulse, so this happens on every real run (diagnostic
+  `window_inside_record`).
+- **Statistics count independent frequencies, not padded bins.** The band is oversampled
+  ~5x by zero padding; the drift/amplitude nuisance errors are scaled by sqrt(oversampling)
+  (`fit_emitter_harmonic(frequency_oversampling=...)`), n/k are plotted with markers on the
+  independent points, and results.csv carries an `independent` column.
 - **Noise from `drift_corrected_scatter`, not the three-term `fit_noise_parameters`.** The latter
   under-reports sigma_alpha at 4–8 repeats (0.30–0.65x). F38, OQ13.
 - **A known magnet offset is removed in the loader** (`geometry.magnet_angle_for_p_deg`), which is

@@ -27,6 +27,7 @@ config: dict = {
     "preprocess": {
         "window_shape": "tukey",
         "taper_fraction": 0.5,
+        "edge_taper_ps": 0.5,
         "window_half_width_ps": 3.0,
         "baseline_fraction": 0.1,
         "pad_factor": 4,

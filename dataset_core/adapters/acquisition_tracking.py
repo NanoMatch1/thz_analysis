@@ -55,6 +55,7 @@ from typing import Callable, Sequence
 import numpy as np
 import matplotlib.pyplot as plt
 
+from thz_core.thz_core import conditioning as core_conditioning
 from thz_core.thz_core import transfer as core_transfer
 
 from .thz_adapter import _build_symmetric_window
@@ -447,12 +448,7 @@ def extract_acquisition_series(
     window_length = 2 * half_width_samples + 1
     window_core = _build_symmetric_window(window_length, window_type, window_alpha)
 
-    low = peak_index - half_width_samples
-    high = peak_index + half_width_samples + 1
-    data_low, data_high = max(low, 0), min(high, n_time)
-    core_low = data_low - low
-    window_function = np.zeros(n_time)
-    window_function[data_low:data_high] = window_core[core_low:core_low + (data_high - data_low)]
+    window_function = core_conditioning.place_window(window_core, n_time, peak_index).weights
 
     # --- 4. one shared FFT grid ---
     if n_fft < n_time:

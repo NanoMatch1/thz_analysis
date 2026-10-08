@@ -147,6 +147,9 @@ config: dict = {
         "window_shape": "tukey",
         "taper_fraction": 0.5,          # central half flat
         "window_half_width_ps": 3.0,
+        # Where the window runs past the record (records start ~2.4 ps before the pulse), it is
+        # truncated, not resized, and the record's own ends are ramped to zero over this.
+        "edge_taper_ps": 0.5,
         "baseline_fraction": 0.1,
         "pad_factor": 4,
         "window_centre_ps": None,       # None = common centre from the mean trace

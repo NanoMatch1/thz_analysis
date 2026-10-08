@@ -94,11 +94,23 @@ class HarmonicFit:
     #: amplitude terms); None when there are none. Large = not separable from P/Q.
     nuisance_parameter_errors: np.ndarray | None = None
     nuisance_parameter_names: tuple = ()
+    #: FFT bins per independent frequency point (zero padding interpolates). The nuisance
+    #: errors are already scaled by its square root; ``independent_degrees_of_freedom`` uses it.
+    frequency_oversampling: float = 1.0
     #: Fitted values of those parameters, same order and units; None when there are none.
     nuisance_parameters: np.ndarray | None = None
     #: (n_rows,) acquisition (between box openings) of each row, for per-scan rows; None when
     #: every row is its own acquisition.
     segment_ids: np.ndarray | None = None
+
+    @property
+    def independent_degrees_of_freedom(self):
+        """Degrees of freedom counted over independent frequency points, not padded bins.
+
+        The reduced chi-square is unaffected (residual and count shrink together), but its
+        spread is set by this: about sqrt(2 / independent_degrees_of_freedom).
+        """
+        return self.degrees_of_freedom / max(self.frequency_oversampling, 1.0)
 
     @property
     def channel_ratio(self):
@@ -348,7 +360,7 @@ def _informative_frequencies(spectra, weights, weighted):
 def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
                          drift_model="linear_ramp", maximum_drift_fs=500.0, *,
                          elapsed_seconds=None, background_term=False, spectral_variance=None,
-                         amplitude_model="none", segment_ids=None):
+                         amplitude_model="none", segment_ids=None, frequency_oversampling=1.0):
     """Fit P and Q (plus an optional background and a drift nuisance) to a polarisation series.
 
     Parameters
@@ -374,6 +386,11 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         When each row is one repeat scan: the acquisition (magnet state between two openings
         of the box) it belongs to, numbered 0..n-1 in time order. Required by
         'segment_settling'; also restricts the revisit diagnostic to repeats ACROSS openings.
+    frequency_oversampling : float
+        FFT bins per independent frequency point (``resolution.oversampling`` from the
+        preprocessing; 1 for an unpadded record). The drift and amplitude parameters are shared
+        across frequencies, so neighbouring padded bins -- which carry the same information --
+        would otherwise shrink their errors by its square root.
 
     Returns
     -------
@@ -505,7 +522,8 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
                                bounds=(lower, bound), xtol=1e-12, ftol=1e-12)
         delays, amplitudes = nuisance(result.x)
         nuisance_values = np.asarray(result.x, dtype=float)
-        nuisance_errors = _nuisance_standard_errors(result, spectral_variance is not None)
+        nuisance_errors = (_nuisance_standard_errors(result, spectral_variance is not None)
+                           * np.sqrt(max(float(frequency_oversampling), 1.0)))
 
     solution, residual, inverse_normal = _solve_linear(design, spectra, frequencies_hz, delays,
                                                        weights, amplitudes)
@@ -558,6 +576,7 @@ def fit_emitter_harmonic(emitter_angles_rad, spectra, frequencies_hz,
         nuisance_parameter_names=(drift_parameter_names
                                   + AMPLITUDE_MODELS[amplitude_model](acquisition_count)),
         segment_ids=segment_ids,
+        frequency_oversampling=max(float(frequency_oversampling), 1.0),
     )
 
 

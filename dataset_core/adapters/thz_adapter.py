@@ -22,7 +22,7 @@ from dataset_core.data_structures.thz import THzDataReflection, THzData, BaseTHz
 #
 # So: check the resolved location and version at import, and if it is wrong, say
 # exactly what is wrong and how to fix it on this platform.
-_MINIMUM_THZ_CORE_VERSION = (0, 3, 0)
+_MINIMUM_THZ_CORE_VERSION = (0, 4, 0)
 
 
 def _verify_thz_core_resolution() -> None:
@@ -1139,21 +1139,10 @@ def _plot_isolate_windowing(graph_records: dict) -> None:
 def _build_symmetric_window(length_samples: int, window_type: str, alpha: float) -> np.ndarray:
     """One symmetric apodization window of exactly ``length_samples`` samples.
 
-    Mirrors the window shapes thz_core.window_time offers (hann / tukey / boxcar)
-    so the prototype path stays consistent with the rest of the pipeline, but the
-    LENGTH is fixed by the caller (not the gate). 'hann' is the default and the
-    expression below is identical to ``scipy.signal.windows.hann(length_samples)``.
+    Delegates to ``thz_core.apodization_window`` (hann / tukey / boxcar), the one place the
+    window shapes are defined. 'hann' equals ``scipy.signal.windows.hann(length_samples)``.
     """
-    window_type = str(window_type).lower()
-    if window_type == 'boxcar':
-        return np.ones(length_samples)
-    if window_type == 'tukey':
-        from scipy.signal.windows import tukey
-        return tukey(length_samples, alpha=alpha)
-    if window_type != 'hann':
-        raise ValueError("window type must be 'hann', 'tukey', or 'boxcar'.")
-    sample_index = np.arange(length_samples)
-    return 0.5 * (1.0 - np.cos(2.0 * np.pi * sample_index / (length_samples - 1)))
+    return core.apodization_window(length_samples, window_type, alpha)
 
 
 def window_pulses_fixed_width(
@@ -1267,15 +1256,8 @@ def window_pulses_fixed_width(
 
             # Drop the identical window_core at [peak-N, peak+N]; clip to the axis
             # but keep matching window weights on the bins that do exist.
-            lo = peak_index - half_width_samples
-            hi = peak_index + half_width_samples + 1
-            data_lo, data_hi = max(lo, 0), min(hi, n_samples)
-            core_lo = data_lo - lo
-            core_hi = core_lo + (data_hi - data_lo)
-            window_function = np.zeros(n_samples)
-            window_function[data_lo:data_hi] = window_core[core_lo:core_hi]
-            windowed = amplitude * window_function
-            clipped = (lo < 0) or (hi > n_samples)
+            windowed, window_function, clipped = _apply_fixed_window_at(
+                amplitude, peak_index, half_width_samples, window_core)
 
             holder.processing_dict['pre_fixed_window'] = holder.data.copy()
             holder.processing_dict['fixed_window'] = dict(
@@ -1428,15 +1410,8 @@ def window_single_pulse_fixed_width(
 
         # Drop the identical window_core at [peak-N, peak+N]; clip to the axis but keep
         # matching window weights on the bins that do exist. Data is NOT shifted.
-        lo = peak_index - half_width_samples
-        hi = peak_index + half_width_samples + 1
-        data_lo, data_hi = max(lo, 0), min(hi, n_samples)
-        core_lo = data_lo - lo
-        core_hi = core_lo + (data_hi - data_lo)
-        window_function = np.zeros(n_samples)
-        window_function[data_lo:data_hi] = window_core[core_lo:core_hi]
-        windowed = amplitude * window_function
-        clipped = (lo < 0) or (hi > n_samples)
+        windowed, window_function, clipped = _apply_fixed_window_at(
+            amplitude, peak_index, half_width_samples, window_core)
 
         data_obj.processing_dict['pre_fixed_window'] = data_obj.data.copy()
         data_obj.processing_dict['fixed_window'] = dict(
@@ -1690,16 +1665,16 @@ def _center_peak_by_extending_axis(time_seconds, amplitude, extra_columns, peak_
 
 
 def _apply_fixed_window_at(amplitude, peak_index, half_width_samples, window_core) -> tuple:
-    """Multiply by the fixed window centred on ``peak_index``; return (windowed, window, clipped)."""
-    n_samples = amplitude.size
-    lo = peak_index - half_width_samples
-    hi = peak_index + half_width_samples + 1
-    data_lo, data_hi = max(lo, 0), min(hi, n_samples)
-    core_lo = data_lo - lo
-    core_hi = core_lo + (data_hi - data_lo)
-    window_function = np.zeros(n_samples)
-    window_function[data_lo:data_hi] = window_core[core_lo:core_hi]
-    return amplitude * window_function, window_function, (lo < 0) or (hi > n_samples)
+    """Multiply by the fixed window centred on ``peak_index``; return (windowed, window, clipped).
+
+    The placement (identical weights, truncated at the record ends, data never shifted) is
+    ``thz_core.place_window``; ``half_width_samples`` must match ``window_core``.
+    """
+    placed = core.place_window(window_core, amplitude.size, peak_index)
+    if placed.half_width_samples != half_width_samples:
+        raise ValueError(f"window_core has half-width {placed.half_width_samples} samples, "
+                         f"not {half_width_samples}")
+    return amplitude * placed.weights, placed.weights, placed.clipped
 
 
 def window_time_fixed_width(
@@ -2167,12 +2142,11 @@ def measured_support_mask(amplitude: np.ndarray, min_zero_run: int = 2) -> np.nd
 
 
 def measured_blocks(support_mask: np.ndarray) -> list[tuple[int, int]]:
-    """Contiguous ``(start, stop)`` index ranges (stop exclusive) of measured data."""
-    padded_mask = np.concatenate(([False], np.asarray(support_mask, dtype=bool), [False])).astype(int)
-    transitions = np.diff(padded_mask)
-    block_starts = np.nonzero(transitions == 1)[0]
-    block_stops = np.nonzero(transitions == -1)[0]
-    return [(int(start), int(stop)) for start, stop in zip(block_starts, block_stops)]
+    """Contiguous ``(start, stop)`` index ranges (stop exclusive) of measured data.
+
+    Delegates to ``thz_core.measured_blocks``.
+    """
+    return core.measured_blocks(support_mask)
 
 
 def _baseline_row_groups(support_mask: np.ndarray, per_block: bool) -> list[np.ndarray]:
@@ -2867,7 +2841,7 @@ def _apply_center_pad(t: np.ndarray, y: np.ndarray, plan: dict) -> tuple:
     return t_new, y_new
 
 
-TAPER_EDGE_OPTIONS = ('both', 'leading', 'trailing', 'none')
+TAPER_EDGE_OPTIONS = core.TAPER_EDGE_OPTIONS
 
 
 def taper_measured_block_edges(
@@ -2878,33 +2852,10 @@ def taper_measured_block_edges(
 ) -> tuple[np.ndarray, list[tuple[int, int]]]:
     """Half-cosine taper the edges of every contiguous block of measured data.
 
-    A block edge is wherever measured data meets zero-fill or the end of the array
-    (the FFT wraps the array end round to its start, so that is an edge too). Each
-    edge is ramped to zero over ``taper_samples`` samples INSIDE the block, so the
-    trace reaches zero smoothly before the window is applied. The ramp is clamped to
-    half the block length so the rising and falling ramps never overlap.
-
-    ``edges`` picks which side of each block is tapered: ``'both'`` (default),
-    ``'leading'`` (early-time edge only), ``'trailing'`` (late-time edge only) or
-    ``'none'``.
-
-    Pure and linear in ``amplitude``. Returns ``(tapered, blocks)`` where ``blocks``
-    lists the measured ``(start, stop)`` index ranges (stop exclusive).
+    Delegates to ``thz_core.taper_measured_block_edges`` (see there for the rules); kept here
+    under its established name for the pipeline stages and ``thz`` re-export.
     """
-    if edges not in TAPER_EDGE_OPTIONS:
-        raise ValueError(f"edges must be one of {TAPER_EDGE_OPTIONS}, got {edges!r}")
-    tapered = np.asarray(amplitude, dtype=float).copy()
-    blocks = measured_blocks(support_mask)
-    for block_start, block_stop in blocks:
-        ramp_length = min(int(taper_samples), (block_stop - block_start) // 2)
-        if ramp_length <= 0:
-            continue
-        rising_ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, ramp_length, endpoint=False)))
-        if edges in ('both', 'leading'):
-            tapered[block_start:block_start + ramp_length] *= rising_ramp
-        if edges in ('both', 'trailing'):
-            tapered[block_stop - ramp_length:block_stop] *= rising_ramp[::-1]
-    return tapered, blocks
+    return core.taper_measured_block_edges(amplitude, support_mask, taper_samples, edges)
 
 
 def _center_pulse_trace(
@@ -3977,11 +3928,7 @@ def _windowed_record_duration_seconds(holder) -> float | None:
     if prefft is None:
         return None
     array = np.asarray(prefft, dtype=float)
-    time_axis, amplitude = array[:, 0], array[:, 1]
-    nonzero_indices = np.nonzero(np.abs(amplitude) > 0)[0]
-    if nonzero_indices.size < 2:
-        return None
-    return float(time_axis[nonzero_indices[-1]] - time_axis[nonzero_indices[0]])
+    return core.support_duration(array[:, 0], array[:, 1])
 
 
 def compute_instrument_resolution(
@@ -4055,7 +4002,6 @@ def compute_instrument_resolution(
         )
         return resolution_cfg
     t_resolution_s = float(min(record_durations))
-    df_resolution_hz = broadening_factor / t_resolution_s
 
     # Current bin spacing: read it from any available FFT frequency axis.
     df_fft_hz = None
@@ -4080,7 +4026,9 @@ def compute_instrument_resolution(
             "(this stage reads the current bin spacing from the frequency axis)."
         )
 
-    decimation_factor = max(1, int(round(df_resolution_hz / df_fft_hz)))
+    resolution = core.instrument_resolution(t_resolution_s, df_fft_hz, broadening_factor)
+    df_resolution_hz = resolution.df_resolution_hz
+    decimation_factor = resolution.decimation_factor
 
     resolution_cfg.update({
         't_resolution_s': t_resolution_s,

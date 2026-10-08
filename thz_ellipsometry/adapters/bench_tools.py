@@ -109,7 +109,8 @@ def _transform(time_ps, traces, config, window_centre_ps=None):
         pad_factor=preprocess.get("pad_factor", 4),
         window_centre_ps=preprocess.get("window_centre_ps"),
         window_shape=preprocess.get("window_shape", "tukey"),
-        taper_fraction=preprocess.get("taper_fraction", 0.5))
+        taper_fraction=preprocess.get("taper_fraction", 0.5),
+        edge_taper_ps=preprocess.get("edge_taper_ps", 0.5))
 
 
 def _common_window_centre_ps(files):
