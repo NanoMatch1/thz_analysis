@@ -22,8 +22,9 @@ from ..core.preprocess import transform_traces
 from .loader import parse_key_value_tokens, polarisation_angle_deg_from_filename, \
     read_accumulation_file
 
-__all__ = ["BENCH_TOOLS", "NullSweep", "NullSweepCollection", "bench_figures", "bench_tool",
-           "bench_tool_names", "collect_null_sweeps", "make_bench_figures", "run_bench_tool"]
+__all__ = ["BENCH_TOOLS", "NullSweep", "NullSweepCollection", "SettlingGroup", "bench_figures",
+           "bench_tool", "bench_tool_names", "collect_null_sweeps", "collect_settling_groups",
+           "make_bench_figures", "run_bench_tool"]
 
 
 @dataclass(frozen=True)
@@ -327,46 +328,123 @@ def null_figures(directory, config):
             "null_traces.png": bench_plots.plot_null_traces(sweeps)}
 
 
-@bench_tool
-def live(directory, config):
-    """Purge settling: per-scan delay and amplitude drift for each magnet state, and its rate now."""
+@dataclass(frozen=True)
+class SettlingGroup:
+    """Every scan of one magnet state in time order, its settling trend and the fitted plateau.
+
+    Everything the ``live`` report and its figure need, so both read the same numbers.
+    """
+    state: float | None             #: the angle-token value (None if absent)
+    label: str
+    filenames: tuple
+    trend: bench.SettlingTrend
+    #: per scan: False for the leading scans of each file left out of the settle fits
+    fitted: np.ndarray
+    #: plateau + step * exp(-t/tau) through the delays and the amplitudes; None below 4 scans
+    delay_settle: bench.ExponentialSettle | None
+    amplitude_settle: bench.ExponentialSettle | None
+    file_start_minutes: np.ndarray  #: where each file's first scan falls on the trend's time axis
+    timestamps_known: bool          #: False: one minute per scan was assumed
+
+
+def _optional_settle(minutes, values, fitted):
+    if np.count_nonzero(fitted) < 4:
+        return None
+    return bench.fit_exponential_settle(minutes[fitted], values[fitted])
+
+
+def collect_settling_groups(directory, config):
+    """Read every file, group the scans by magnet state, trend and fit each group.
+
+    Shared by the ``live`` tool's report and its figure. Returns (groups, file_count).
+    """
     settings = config.get("live", {})
     angle_token = settings.get("angle_token", "mag")
-    limit = settings.get("rate_limit_fs_per_minute", 1.0)
     window = settings.get("window_scans", 3)
+    skipped_per_file = int(settings.get("fit_skips_first_scans_per_file", 0))
     paths = _acc_files(directory, contains=settings.get("filename_contains"))
     files = [read_accumulation_file(path) for path in paths]
 
-    groups = {}
+    by_state = {}
     for file in files:
-        groups.setdefault(_token(file.path, angle_token), []).append(file)
+        by_state.setdefault(_token(file.path, angle_token), []).append(file)
 
-    results, lines = {}, [f"[live] {len(files)} files in {directory}"]
-    for state, members in sorted(groups.items(), key=lambda item: (item[0] is None, item[0])):
-        stamps_known = all(file.mean_timestamp is not None for file in members)
-        if stamps_known:
+    groups = []
+    for state, members in sorted(by_state.items(), key=lambda item: (item[0] is None, item[0])):
+        if all(file.mean_timestamp is not None for file in members):
             members = sorted(members, key=lambda file: file.mean_timestamp)
         scans = np.vstack([file.scans for file in members])
         stamps = [stamp for file in members for stamp in file.scan_timestamps]
-        if any(stamp is None for stamp in stamps):
-            elapsed = np.arange(scans.shape[0], dtype=float) * 60.0
-        else:
+        timestamps_known = not any(stamp is None for stamp in stamps)
+        if timestamps_known:
             elapsed = np.array([(stamp - stamps[0]).total_seconds() for stamp in stamps])
+        else:
+            elapsed = np.arange(scans.shape[0], dtype=float) * 60.0
         transformed = _transform(members[0].time_ps, scans, config,
                                  _common_window_centre_ps(members))
         band = _band(transformed.frequencies_hz, config)
         trend = bench.settling_trend(transformed.spectra, elapsed, transformed.frequencies_hz,
                                      band, window_scans=window)
-        results[state] = trend
-        label = "no angle token" if state is None else f"{angle_token}={state:g}"
+        first_rows = np.cumsum([0] + [file.scans.shape[0] for file in members[:-1]])
+        fitted = np.ones(scans.shape[0], dtype=bool)
+        for first_row in first_rows:
+            fitted[first_row:first_row + skipped_per_file] = False
+        groups.append(SettlingGroup(
+            state=state,
+            label="no angle token" if state is None else f"{angle_token}={state:g}",
+            filenames=tuple(os.path.basename(file.path) for file in members),
+            trend=trend, fitted=fitted,
+            delay_settle=_optional_settle(trend.elapsed_minutes, trend.delays_fs, fitted),
+            amplitude_settle=_optional_settle(trend.elapsed_minutes, trend.amplitudes, fitted),
+            file_start_minutes=trend.elapsed_minutes[first_rows],
+            timestamps_known=timestamps_known))
+    return groups, len(files)
+
+
+def _plateau_text(settle, tolerance_fs):
+    if settle is None:
+        return "plateau: need 4+ scans"
+    if settle.tau_at_bound:
+        return "plateau: no bend yet (tau at the search limit), cannot tell where it is going"
+    if settle.plateau_extrapolated:
+        return (f"plateau not reached yet: tau {settle.tau_minutes:.0f} min > the "
+                f"{settle.span_minutes:.0f} min of data; extrapolated {settle.plateau:+.1f} +/- "
+                f"{settle.plateau_standard_error:.1f} fs")
+    return (f"plateau {settle.plateau:+.1f} +/- {settle.plateau_standard_error:.1f} fs, "
+            f"tau {settle.tau_minutes:.1f} +/- {settle.tau_standard_error_minutes:.1f} min, "
+            f"within {tolerance_fs:g} fs of it at {settle.minutes_to_within(tolerance_fs):.1f} "
+            "min")
+
+
+@bench_tool
+def live(directory, config):
+    """Purge settling: per-scan delay and amplitude drift for each magnet state, and its rate now."""
+    settings = config.get("live", {})
+    limit = settings.get("rate_limit_fs_per_minute", 1.0)
+    tolerance = settings.get("plateau_tolerance_fs", 1.0)
+    groups, file_count = collect_settling_groups(directory, config)
+
+    results, lines = {}, [f"[live] {file_count} files in {directory}"]
+    for group in groups:
+        trend = group.trend
+        results[group.state] = trend
         verdict = ("SETTLED" if trend.is_settled(limit) else "still drifting") if np.isfinite(
             trend.recent_rate_fs_per_minute) else "need more scans"
-        lines.append(f"   {label}: {scans.shape[0]} scans over "
+        lines.append(f"   {group.label}: {trend.delays_fs.size} scans over "
                      f"{trend.elapsed_minutes[-1]:.1f} min; total delay change "
                      f"{trend.delays_fs[-1]:+.1f} fs, amplitude {trend.amplitudes[-1] - 1:+.2%}; "
                      f"last {trend.window_scans} scans {trend.recent_rate_fs_per_minute:+.2f} "
                      f"fs/min -> {verdict} (limit {limit} fs/min)")
+        lines.append(f"      {_plateau_text(group.delay_settle, tolerance)}")
     return results, "\n".join(lines)
+
+
+@bench_figures("live")
+def live_figures(directory, config):
+    """Delay and amplitude against time per magnet state, with the fitted settle and plateau."""
+    from . import bench_plots
+    groups, _ = collect_settling_groups(directory, config)
+    return {"live_settling.png": bench_plots.plot_settling(groups)}
 
 
 @bench_tool

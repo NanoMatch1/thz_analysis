@@ -1274,6 +1274,17 @@ at a second plane localises it. Also measured: the 0 mm purge run drifted 144 fs
 - **Sensitivities at 45 deg on this sample:** n moves ~0.16 per deg of incidence angle and ~0.045 per deg of emitter-zero offset (my earlier 0.02/deg was low).
 - **Verdict / next.** Record a return pass (palindrome) in every block -- the only check on steps at openings. Cheap direct test of the step: within ONE state, open and close the box mid-file (no rotation) and see if the timing returns to its trend. Doped-Si resistivity wanted for a Drude reference. Mask reflection to measure (Samuel, later).
 
+### F45 — HR-Si palindrome (full N2 flow): the drift is now small and well behaved, an opening is a decaying transient (no large lasting step), and HR-Si gives a STABLE channel calibration -- which disagrees with the single-pass gold. The morning gold block is the weak link *(2026-10-07, `data_sync/2026_10_07_elips_silicon-HR`: 0,90,180,270 (_0) then 180,90,0 (_1, 6-7 scans) + `box-open/` 270 file with the lid open for scan 22; gold = the morning single pass; scratch `si_hr/`)*
+
+- **Drift.** Per scan against each state's first visit: each file starts ~+2-3 fs and decays ~-0.1 fs/min; return visits land within -1.9..+1.5 fs of the first visit; amplitudes within 0.5% (180, 0).
+- **Box open (one scan).** During: delay -4 fs, amplitude -3.5% (humid air). After closing: +3 fs above the pre-open level, decaying over several minutes (+1.8 fs still 3 min later). A transient, not a step -- but slower than the 0.25-3 min cap of `segment_settling`.
+- **90 return visit 2.7% low in amplitude with unchanged timing.** For HR-Si near p (P/Q ~ -0.54) that is a ~0.8 deg magnet re-setting error on that visit. Magnet reproducibility is ~1 deg-level.
+- **HR-Si validation with gold C: FAILS.** k rises linearly 0.26 -> 1.08 (1 -> 2.5 THz), n 3.58-3.69, i.e. a linear-in-f phase error in rho = a p/s delay error in C.
+- **C from HR-Si** (rho real for a lossless sample at any angle below Brewster, so arg C is theta-independent): |C| 0.848, p/s delay -7.9 to -8.8 fs, offset -1.25 deg -- the same in every layout and subset (scan/acquisition rows, without the odd 90 visit, first pass only). **C from gold**: delay -3.7 fs (scan rows) vs +9.4 fs (acquisition rows) -> undetermined.
+- **Doped Si re-calibrated on HR-Si:** k comes out NEGATIVE (-0.3); its own block is a single pass, so its drift is the next weak link. No doped-Si number yet.
+- **Theta** cannot be pinned until gold is good (|C|_HRSi vs |C|_gold carries it: 1 deg ~ 2.4% in |rho_Si|).
+- **Next:** recollect gold as a palindrome at full flow; then (a) arg C_gold must equal arg C_HRSi (instrument consistency), (b) |C| ratio pins theta, (c) gold + HR-Si fit (C, emitter offset) jointly. Open: |C|_HRSi rises 3%/THz (gold-derived does not) -- beam-size/diffraction?
+
 ## Diagnostics & tools built for this work
 - **`acquisition_tracking`** — per-acquisition drift: `amplitude_ratio` / `cumulative_deviation`
   metrics on a registry, and `fitted_delay_seconds` for sub-sample timing walk [F31].

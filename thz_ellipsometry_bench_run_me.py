@@ -2,13 +2,13 @@
 
     .venv/bin/python thz_ellipsometry_bench_run_me.py null  <dir>   # wire-grid magnet zero
     .venv/bin/python thz_ellipsometry_bench_run_me.py null  <dir> --no-graph   # save, don't show
-    .venv/bin/python thz_ellipsometry_bench_run_me.py live  <dir>   # has the purge settled?
+    .venv/bin/python thz_ellipsometry_bench_run_me.py live  <dir>   # has the purge settled? + plot
     .venv/bin/python thz_ellipsometry_bench_run_me.py live  <dir> --watch 60
     .venv/bin/python thz_ellipsometry_bench_run_me.py hwp   <dir>   # half-wave-plate beam walk
 
 The subcommands are generated from the tool registry in thz_ellipsometry.adapters.bench_tools;
 the order of work on the bench is in reports/ellipsometry_bench_plan_2026-10-06.md.
-Tools with figures (``null``) save them to ``<dir>/bench_analysis/`` and show them unless
+Tools with figures (``null``, ``live``) save them to ``<dir>/bench_analysis/`` and show them unless
 ``--no-graph``; ``--watch`` never opens figures.
 """
 
@@ -51,6 +51,12 @@ config: dict = {
         # (F35). 1 fs/min over a 10 min step is 10 fs; the drift-ramp fit removes the linear
         # part of that, so the limit guards against what is not linear (the fast transient).
         "rate_limit_fs_per_minute": 1.0,
+        # The fitted plateau + step*exp(-t/tau): the report says when the fit comes within this
+        # of its plateau (the figure shows the whole curve).
+        "plateau_tolerance_fs": 1.0,
+        # Leading scans of each file left out of the plateau fit (hollow in the figure): the
+        # first scan of every file on 2026-10-07 was off by several fs and 1-2% in amplitude.
+        "fit_skips_first_scans_per_file": 1,
     },
     # For tools that have figures (see BENCH_TOOLS[...].figures).
     "figures": {

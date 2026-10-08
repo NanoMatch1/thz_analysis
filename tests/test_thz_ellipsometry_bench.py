@@ -123,6 +123,45 @@ def test_settling_trend_follows_a_decaying_transient_and_calls_it_settled_late()
     assert late.is_settled(1.0)
 
 
+def test_exponential_settle_recovers_plateau_and_tau_through_noise():
+    minutes = np.arange(20) * 1.5
+    generator = np.random.default_rng(4)
+    values = 3.0 - 8.0 * np.exp(-minutes / 6.0) + 0.05 * generator.normal(size=minutes.size)
+    settle = bench.fit_exponential_settle(minutes, values)
+    assert not settle.tau_at_bound and not settle.plateau_extrapolated
+    assert settle.plateau == pytest.approx(3.0, abs=4 * settle.plateau_standard_error + 1e-3)
+    assert settle.tau_minutes == pytest.approx(6.0, rel=0.1)
+    assert settle.step == pytest.approx(-8.0, rel=0.05)
+    assert 0 < settle.plateau_standard_error < 0.1
+    assert settle.minutes_to_within(1.0) == pytest.approx(6.0 * np.log(8.0), rel=0.1)
+
+
+def test_exponential_settle_flags_a_curve_that_has_not_bent_yet():
+    minutes = np.arange(10, dtype=float)
+    settle = bench.fit_exponential_settle(minutes, 0.4 * minutes)
+    assert settle.tau_at_bound and settle.plateau_extrapolated
+
+
+def test_exponential_settle_calls_a_plateau_beyond_the_data_extrapolated():
+    minutes = np.arange(10, dtype=float)
+    settle = bench.fit_exponential_settle(minutes, 5.0 - 5.0 * np.exp(-minutes / 30.0))
+    assert not settle.tau_at_bound and settle.plateau_extrapolated
+    assert settle.tau_minutes == pytest.approx(30.0, rel=0.02)   # log-grid step ~1%
+
+
+def test_exponential_settle_ignores_scans_left_out_at_the_start():
+    minutes = np.arange(1, 15) * 1.0
+    settle = bench.fit_exponential_settle(minutes, 2.0 + 3.0 * np.exp(-minutes / 3.0))
+    assert settle.step == pytest.approx(3.0, rel=1e-3)
+    np.testing.assert_allclose(settle.model(minutes), 2.0 + 3.0 * np.exp(-minutes / 3.0),
+                               atol=1e-3)
+
+
+def test_exponential_settle_needs_four_points():
+    with pytest.raises(ValueError, match="at least four"):
+        bench.fit_exponential_settle([0.0, 1.0, 2.0], [0.0, 1.0, 1.5])
+
+
 def _plate_spectra(plate_angles_deg, wedge_per_thz=0.0, wedge_direction_deg=30.0, seed=0):
     """Gold at several HWP angles: a 90-deg polarisation factor and a 360-deg wedge roll-off."""
     generator = np.random.default_rng(seed)
@@ -253,9 +292,9 @@ def test_null_report_checks_the_180_degree_separation(tmp_path):
     assert results[180.0].null_deg - results[0.0].null_deg == pytest.approx(180.0, abs=1e-9)
 
 
-def test_only_the_null_tool_registers_figures():
-    assert BENCH_TOOLS["null"].figures is not None
-    assert BENCH_TOOLS["live"].figures is None and BENCH_TOOLS["hwp"].figures is None
+def test_the_null_and_live_tools_register_figures():
+    assert BENCH_TOOLS["null"].figures is not None and BENCH_TOOLS["live"].figures is not None
+    assert BENCH_TOOLS["hwp"].figures is None
 
 
 def test_bench_driver_saves_the_null_figures_headlessly(tmp_path):
@@ -286,6 +325,33 @@ def test_live_tool_tracks_settling_per_magnet_state(tmp_path):
     trend = results[0.0]
     assert trend.delays_fs[-1] == pytest.approx(-(delays[-1] - delays[0]) * 1e15, abs=2.0)
     assert "SETTLED" in report
+    assert "plateau" in report
+
+
+def test_bench_driver_saves_the_live_settling_figure_headlessly(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from thz_ellipsometry.adapters.bench_tools import collect_settling_groups, make_bench_figures
+    elapsed = np.arange(10) * 130.0
+    delays = -40e-15 * np.exp(-elapsed / 300.0)
+    schedule = simulate.AcquisitionSchedule(np.zeros(10), elapsed, np.arange(1, 11))
+    write_accumulation_files(str(tmp_path), index_sample_function=materials.gold_index,
+                             schedule=schedule, sample_name="ref-gold", scans_per_angle=2,
+                             angle_token="mag", incidence_angle_rad=np.deg2rad(45.0),
+                             relative_noise=0.002, drift_span_s=delays, seconds_per_scan=60.0)
+    assert thz_ellipsometry_bench_run_me.main(["live", str(tmp_path), "--no-graph"]) == 0
+    assert (tmp_path / "bench_analysis" / "live_settling.png").is_file()
+
+    groups, _ = collect_settling_groups(str(tmp_path), thz_ellipsometry_bench_run_me.config)
+    settle = groups[0].delay_settle
+    # The tool reports minus the planted delay change (as in the test above); the planted drift
+    # decays to 0, so the plateau relative to the first scan is the planted first-scan value.
+    assert settle.plateau == pytest.approx(delays[0] * 1e15, abs=3.0)
+    figures = make_bench_figures("live", str(tmp_path), thz_ellipsometry_bench_run_me.config)
+    assert len(figures["live_settling.png"].axes) == 2
+    for figure in figures.values():
+        plt.close(figure)
 
 
 def _write_plate_files(directory, plates, wedge_per_thz):

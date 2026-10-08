@@ -1,14 +1,15 @@
 """Bench-setup analyses: the magnet zero, purge settling, and half-wave-plate beam deviation.
 
-Three small, pure analyses that run on the bench while a measurement is being set up, each
+Small, pure analyses that run on the bench while a measurement is being set up, each
 answering one question with a number:
 
 ``fit_wire_grid_null``        At what magnet reading is the emission exactly p? (plan sec. 4.4)
 ``settling_trend``            Has the purge settled after the box was closed? (fs/min)
+``fit_exponential_settle``    Where is it settling TO? (plateau + step * exp(-t/tau))
 ``analyse_half_wave_plate``   Does rotating the probe half-wave plate walk the probe off the THz
                               focus? (plan sec. 7.8)
 
-All three work on complex spectra and a few scalar settings, with no file I/O.
+All work on complex spectra and a few scalar settings, with no file I/O.
 """
 
 from __future__ import annotations
@@ -18,10 +19,12 @@ from dataclasses import dataclass
 import numpy as np
 
 __all__ = [
+    "ExponentialSettle",
     "HalfWavePlateAnalysis",
     "SettlingTrend",
     "WireGridNull",
     "analyse_half_wave_plate",
+    "fit_exponential_settle",
     "fit_wire_grid_null",
     "fit_wire_grid_nulls",
     "relative_delay_and_amplitude",
@@ -234,6 +237,82 @@ def settling_trend(scan_spectra, elapsed_seconds, frequencies_hz, band, window_s
     return SettlingTrend(elapsed_minutes=minutes, delays_fs=delays_fs, amplitudes=amplitudes,
                          recent_rate_fs_per_minute=rate,
                          recent_amplitude_rate_per_minute=amplitude_rate, window_scans=count)
+
+
+@dataclass(frozen=True)
+class ExponentialSettle:
+    """value(t) = plateau + step * exp(-t / tau_minutes), fitted to one settling curve."""
+
+    plateau: float
+    plateau_standard_error: float
+    step: float                     #: departure from the plateau at t = 0
+    tau_minutes: float
+    tau_standard_error_minutes: float
+    residual_rms: float
+    #: True when the best tau sits at the top of the search range: the curve shows no bend
+    #: yet, so the plateau is an extrapolation, not a measurement.
+    tau_at_bound: bool
+    span_minutes: float             #: time covered by the fitted points
+
+    @property
+    def plateau_extrapolated(self):
+        """True unless the data cover at least one tau: the plateau is then a guess, not seen."""
+        return self.tau_at_bound or self.tau_minutes > self.span_minutes
+
+    def model(self, minutes):
+        return self.plateau + self.step * np.exp(-np.asarray(minutes, dtype=float)
+                                                 / self.tau_minutes)
+
+    def minutes_to_within(self, tolerance):
+        """When the fitted curve comes within ``tolerance`` of its plateau (0 if it starts so)."""
+        if abs(self.step) <= tolerance:
+            return 0.0
+        return float(self.tau_minutes * np.log(abs(self.step) / tolerance))
+
+
+def fit_exponential_settle(minutes, values, *, tau_count=400):
+    """Fit plateau + step * exp(-t / tau) to a settling curve; the plateau is where it is going.
+
+    For a fixed tau the model is linear in (plateau, step), so tau is searched on a log grid
+    from the median scan spacing (a faster "settle" is one point, not a curve) to ten times the
+    time span, and the linear part solved exactly at each -- no starting guess, no local
+    minimum. ``step`` is the departure at minutes = 0 of the axis given, which need not be a
+    fitted point (leading scans may have been left out). The standard errors are from
+    the full three-parameter Jacobian at the best fit, so the plateau's error includes what tau's
+    uncertainty does to it (large while the curve has not yet bent over).
+    """
+    minutes = np.asarray(minutes, dtype=float)
+    values = np.asarray(values, dtype=float)
+    if minutes.size < 4:
+        raise ValueError(f"need at least four points to fit a settle, got {minutes.size}")
+    span = float(np.ptp(minutes))
+    spacing = np.diff(np.unique(minutes))
+    if span <= 0 or spacing.size == 0:
+        raise ValueError("the points must span a time interval")
+    taus = np.geomspace(float(np.median(spacing)), 10.0 * span, tau_count)
+
+    def solve(tau):
+        design = np.column_stack([np.ones_like(minutes), np.exp(-minutes / tau)])
+        coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
+        return coefficients, float(np.sum((values - design @ coefficients) ** 2))
+
+    errors = [solve(tau)[1] for tau in taus]
+    best = int(np.argmin(errors))
+    tau = float(taus[best])
+    (plateau, step), squared_error = solve(tau)
+
+    decay = np.exp(-minutes / tau)
+    jacobian = np.column_stack([np.ones_like(minutes), decay, step * minutes / tau**2 * decay])
+    degrees_of_freedom = max(minutes.size - 3, 1)
+    variance = squared_error / degrees_of_freedom
+    covariance = variance * np.linalg.pinv(jacobian.T @ jacobian)
+    return ExponentialSettle(plateau=float(plateau),
+                             plateau_standard_error=float(np.sqrt(max(covariance[0, 0], 0.0))),
+                             step=float(step), tau_minutes=tau,
+                             tau_standard_error_minutes=float(np.sqrt(max(covariance[2, 2],
+                                                                          0.0))),
+                             residual_rms=float(np.sqrt(squared_error / minutes.size)),
+                             tau_at_bound=best == tau_count - 1, span_minutes=span)
 
 
 # ---------------------------------------------------------------------------

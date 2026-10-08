@@ -8,13 +8,15 @@ matplotlib Figure without showing or saving it.
                        coloured by acquisition time so drift during a sweep stands out.
 ``plot_null_traces``   per sweep: the time traces behind the points, coloured by reading, with
                        the window, so the sign reversal through the null can be seen directly.
+``plot_settling``      per magnet state: delay and amplitude against time with the fitted
+                       exponential settle, its plateau (+/- error) and the file boundaries.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["plot_null_fits", "plot_null_traces"]
+__all__ = ["plot_null_fits", "plot_null_traces", "plot_settling"]
 
 
 def _null_label(prefix, fit):
@@ -117,3 +119,69 @@ def plot_null_traces(sweeps):
         axis.legend(fontsize=6, title="reading [deg]", title_fontsize=6, ncol=2, loc="best")
     figure.suptitle("Null sweeps in time: blue below the reported null, red above")
     return figure
+
+
+def _draw_settle(axis, minutes, values, fitted, settle, scale, unit):
+    """Points (hollow if left out of the fit), the fitted curve, and the plateau band."""
+    axis.plot(minutes[fitted], values[fitted] * scale, "o", color="k", markersize=3.5,
+              label="scans", zorder=3)
+    if not np.all(fitted):
+        axis.plot(minutes[~fitted], values[~fitted] * scale, "o", markerfacecolor="none",
+                  markeredgecolor="k", markersize=4.5, label="not fitted (file start)",
+                  zorder=3)
+    if settle is None:
+        return
+    dense = np.linspace(0.0, max(minutes[-1], 1e-9) * 1.25, 400)
+    if settle.tau_at_bound:
+        axis.plot(dense, settle.model(dense) * scale, color="tab:red", linestyle="--",
+                  label="exp fit: no bend yet, plateau unknown")
+        return
+    if settle.plateau_extrapolated:
+        axis.plot(dense, settle.model(dense) * scale, color="tab:orange", linestyle="--",
+                  label=f"exp fit, tau {settle.tau_minutes:.0f} min > data: plateau "
+                        f"~{settle.plateau * scale:+.1f} {unit}, not reached")
+        return
+    axis.plot(dense, settle.model(dense) * scale, color="tab:blue",
+              label=f"exp fit, tau {settle.tau_minutes:.1f} +/- "
+                    f"{settle.tau_standard_error_minutes:.1f} min")
+    plateau, error = settle.plateau * scale, settle.plateau_standard_error * scale
+    axis.axhline(plateau, color="tab:green", linestyle="--", linewidth=1.0,
+                 label=f"plateau {plateau:+.2f} +/- {error:.2f} {unit}")
+    axis.axhspan(plateau - error, plateau + error, color="tab:green", alpha=0.15, linewidth=0)
+
+
+def plot_settling(groups):
+    """One column per magnet state: delay on top, amplitude below, both with the fitted settle."""
+    import matplotlib.pyplot as plt
+
+    if not groups:
+        raise ValueError("no settling groups to plot")
+    column_count = len(groups)
+    figure, axes = plt.subplots(2, column_count, figsize=(4.6 * column_count, 6.5),
+                                squeeze=False, sharex="col", constrained_layout=True)
+    for column, group in enumerate(groups):
+        trend = group.trend
+        delay_axis, amplitude_axis = axes[0, column], axes[1, column]
+        _draw_settle(delay_axis, trend.elapsed_minutes, trend.delays_fs, group.fitted,
+                     group.delay_settle,
+                     1.0, "fs")
+        _draw_settle(amplitude_axis, trend.elapsed_minutes, trend.amplitudes - 1.0, group.fitted,
+                     None if group.amplitude_settle is None else
+                     _shifted(group.amplitude_settle, -1.0), 100.0, "%")
+        for axis in (delay_axis, amplitude_axis):
+            for start in group.file_start_minutes[1:]:
+                axis.axvline(start, color="0.6", linestyle=":", linewidth=1.0)
+            axis.legend(fontsize=7, loc="best")
+        delay_axis.set_title(f"{group.label} ({len(group.filenames)} file(s))", fontsize=10)
+        delay_axis.set_ylabel("delay vs first scan [fs]")
+        amplitude_axis.set_ylabel("amplitude vs first scan [%]")
+        amplitude_axis.set_xlabel("minutes since first scan"
+                                  + ("" if group.timestamps_known else " (1 min/scan assumed)"))
+    figure.suptitle("Purge settling per magnet state\n(dotted line = new file)", fontsize=11)
+    return figure
+
+
+def _shifted(settle, offset):
+    """The same settle with its plateau moved by ``offset`` (amplitude ratio -> fractional change)."""
+    from dataclasses import replace
+    return replace(settle, plateau=settle.plateau + offset)
