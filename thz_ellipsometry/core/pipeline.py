@@ -16,6 +16,7 @@ import numpy as np
 
 from .calibration import (
     ChannelCalibration,
+    apply_calibration_model,
     channel_ratio_from_reference,
     ellipsometric_ratio_from_channels,
     fit_incidence_angle,
@@ -155,11 +156,12 @@ def analyse_calibrated_series(*, frequencies_hz, sample_fit, calibration, incide
         raise ValueError("the tilt fit and the blur correction are not combined yet; enable one")
 
     measured = sample_fit.channel_ratio
+    applied = calibration.applied_ratio
     ratio = ellipsometric_ratio_from_channels(measured, calibration)
     measured_variance = sample_fit.channel_ratio_variance
     ratio_variance = None
     if measured_variance is not None:
-        derivative = ratio_derivative_wrt_measured(measured, calibration.ratio,
+        derivative = ratio_derivative_wrt_measured(measured, applied,
                                                    calibration.emitter_offset_rad)
         ratio_variance = np.abs(derivative) ** 2 * measured_variance
 
@@ -169,11 +171,11 @@ def analyse_calibrated_series(*, frequencies_hz, sample_fit, calibration, incide
         offset_variance = (None if measured_variance is None
                            else measured_variance[mask])
         tilt_fit = fit_tilt_with_dispersion_model(
-            offset_removed[mask], calibration.ratio, frequencies_hz[mask], incidence_angle_rad,
+            offset_removed[mask], applied[mask], frequencies_hz[mask], incidence_angle_rad,
             model_name=tilt_model, fixed=tilt_fixed_parameters,
             initial=tilt_initial_parameters, index_incident=index_incident,
             ratio_variance=offset_variance)
-        index = invert_with_known_tilt(offset_removed[mask], calibration.ratio,
+        index = invert_with_known_tilt(offset_removed[mask], applied[mask],
                                        tilt_fit.tilt_rad, incidence_angle_rad,
                                        index_incident=index_incident,
                                        reference_index=branch_reference_index)
@@ -182,7 +184,7 @@ def analyse_calibrated_series(*, frequencies_hz, sample_fit, calibration, incide
                                     angular_spread_rad=0.0)
         index_standard_error = (
             None if offset_variance is None else _numerical_index_error_with_tilt(
-                offset_removed[mask], offset_variance, calibration.ratio, tilt_fit.tilt_rad,
+                offset_removed[mask], offset_variance, applied[mask], tilt_fit.tilt_rad,
                 incidence_angle_rad, index_incident, index))
     else:
         inversion = invert_ratio(ratio[mask], frequencies_hz[mask], incidence_angle_rad,
@@ -254,12 +256,14 @@ def analyse_polarisation_series(
     tilt_fixed_parameters=None,
     incidence_angle_uncertainty_deg=0.0,
     amplitude_model="none",
+    calibration_model="constant",
 ):
     """Run the whole chain on arrays: harmonic fit -> channel calibration -> rho -> n, k.
 
     Exactly one of ``reference_spectra`` (with ``reference_index``) or ``channel_ratio`` must be
     supplied. The first is the normal path -- a gold mirror measured in the same geometry. The
-    second exists for replaying a stored calibration, and for tests.
+    second exists for replaying a stored calibration, and for tests. ``calibration_model`` names
+    the registered model fitted to the reference's C(f) (``calibration_models``).
     """
     frequencies_hz = np.asarray(frequencies_hz, dtype=float)
     fit_options = dict(drift_model=drift_model, background_term=background_term,
@@ -303,7 +307,10 @@ def analyse_polarisation_series(
         calibration = channel_ratio_from_reference(
             reference_fit.channel_ratio, reference_index, incidence_angle_rad,
             index_incident=index_incident, reference_name=reference_name,
-            frequency_mask=mask, emitter_offset_rad=emitter_offset_rad)
+            frequency_mask=mask, emitter_offset_rad=emitter_offset_rad,
+            reference_channel_ratio_variance=reference_fit.channel_ratio_variance)
+        calibration = apply_calibration_model(calibration, calibration_model, frequencies_hz,
+                                              mask)
     else:
         calibration = (channel_ratio if isinstance(channel_ratio, ChannelCalibration)
                        else ChannelCalibration(

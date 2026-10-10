@@ -7,7 +7,9 @@ with ``@calibration_source`` and nothing else: the driver dispatches on the regi
 help text and the "what does this need" error messages are read from the same entries.
 
 Every source receives the same :class:`CalibrationInputs` and returns a
-:class:`~thz_ellipsometry.core.calibration.ChannelCalibration`.
+:class:`~thz_ellipsometry.core.calibration.ChannelCalibration` holding the C(f) it measured; the
+calibration MODEL named in the inputs (``calibration_models``: constant, constant + delay, ...)
+is then fitted to that, the same way for every source.
 """
 
 from __future__ import annotations
@@ -16,7 +18,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .calibration import ChannelCalibration, channel_ratio_from_reference
+from .calibration import (
+    ChannelCalibration,
+    apply_calibration_model,
+    channel_ratio_from_reference,
+)
 from .detection import channel_ratio_for_probe, crystal_orientation_from_probe_settings
 from .harmonic import HarmonicFit
 
@@ -51,6 +57,8 @@ class CalibrationInputs:
     fit_probe_offset: bool = False
     #: A previously measured channel ratio, for replay.
     stored_channel_ratio: complex | None = None
+    #: The registered calibration model fitted to the source's C(f) (calibration_models).
+    model: str = "constant"
 
 
 @dataclass(frozen=True)
@@ -103,7 +111,8 @@ def compute_channel_calibration(name, inputs):
     if missing:
         raise ValueError(f"calibration source {name!r} ({entry.summary}) cannot run: missing "
                          f"{', '.join(missing)}")
-    return entry.function(inputs)
+    return apply_calibration_model(entry.function(inputs), inputs.model, inputs.frequencies_hz,
+                                   inputs.band)
 
 
 @calibration_source(requires=("channel_reference_fit", "channel_reference_index"))
@@ -113,7 +122,8 @@ def gold_reference(inputs):
         inputs.channel_reference_fit.channel_ratio, inputs.channel_reference_index,
         inputs.incidence_angle_rad, index_incident=inputs.index_incident,
         reference_name=inputs.channel_reference_name, frequency_mask=inputs.band,
-        emitter_offset_rad=inputs.emitter_offset_rad)
+        emitter_offset_rad=inputs.emitter_offset_rad,
+        reference_channel_ratio_variance=inputs.channel_reference_fit.channel_ratio_variance)
 
 
 @calibration_source(requires=("stored_channel_ratio",))

@@ -126,7 +126,11 @@ class InspectionRecord:
     incidence_angle_deg: float = np.nan
     calibration_name: str = ""
     calibration_per_frequency: np.ndarray | None = None  #: (n_frequencies,) from its source
-    calibration_applied: complex = np.nan                 #: the value divided out
+    calibration_applied: complex = np.nan                 #: the model at its reference frequency
+    #: (n_frequencies,) complex: the model curve actually divided out
+    calibration_applied_per_frequency: np.ndarray | None = None
+    calibration_model: str = ""
+    calibration_model_description: str = ""
     #: name -> (n_frequencies,) complex: C implied by each series of KNOWN material (gold
     #: reference, a validated sample), side by side
     calibration_by_material: dict = field(default_factory=dict)
@@ -247,6 +251,9 @@ def build_inspection_record(state):
         record.calibration_name = str(calibration.reference_name)
         record.calibration_per_frequency = calibration.ratio_per_frequency
         record.calibration_applied = complex(calibration.ratio)
+        record.calibration_applied_per_frequency = calibration.applied_ratio
+        record.calibration_model = calibration.model_name
+        record.calibration_model_description = calibration.model_description
         frequencies = state["frequencies_hz"]
         reference_fit = fits.get((CHANNEL_REFERENCE_ROLE, state.get("primary_probe_deg")))
         if reference_fit is not None:

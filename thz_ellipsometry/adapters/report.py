@@ -53,6 +53,7 @@ def format_run_report(outcome):
     if result.calibration is not None:
         lines.append(f"   calibration : {outcome.calibration_source}: d_p/d_s = "
                      f"{result.calibration.ratio:.4f} ({result.calibration.reference_name})")
+        lines.append(f"   C model     : {result.calibration.model_description}")
     lines.append(f"   angle       : {np.rad2deg(inversion.incidence_angle_rad):.3f} deg "
                  f"({result.incidence_angle_source})")
     if result.tilt_fit is not None:
@@ -147,8 +148,8 @@ def plot_run(outcome, show=True, save_path=None):
     if result.calibration is not None:
         axes[1, 1].plot(all_thz, np.abs(result.calibration.ratio_per_frequency),
                         label="|d_p/d_s|")
-        axes[1, 1].axhline(abs(result.calibration.ratio), color="k", linestyle="--",
-                           label="applied")
+        axes[1, 1].plot(all_thz, np.abs(result.calibration.applied_ratio), color="k",
+                        linestyle="--", label=f"applied ({result.calibration.model_name})")
         axes[1, 1].set_title("channel ratio (should be flat)")
         axes[1, 1].set_xlabel("frequency [THz]")
         axes[1, 1].legend()

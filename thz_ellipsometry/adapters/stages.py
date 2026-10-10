@@ -321,6 +321,7 @@ def calibrate(config, fits, frequencies_hz, band, primary_probe_deg):
         crystal_orientation_rad=np.deg2rad(detection.get("crystal_001_from_p_deg", 0.0)),
         fit_probe_offset=detection.get("fit_probe_offset", False),
         stored_channel_ratio=calibration.get("stored_channel_ratio"),
+        model=calibration.get("model", "constant"),
     )
     return compute_channel_calibration(calibration.get("channel", "gold_reference"), inputs)
 

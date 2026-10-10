@@ -84,6 +84,9 @@ def _summary(outcome):
         "incidence_angle_source": result.incidence_angle_source,
         "channel_ratio": result.calibration.ratio,
         "calibration_source": outcome.calibration_source,
+        "calibration_model": result.calibration.model_name,
+        "calibration_model_parameters": result.calibration.model_parameters,
+        "calibration_model_standard_errors": result.calibration.model_standard_errors,
         "quality_flags": result.quality_flags,
         "independent_band_points": int(np.count_nonzero(outcome.independent_band_points())),
     }
@@ -107,7 +110,8 @@ def build_prefilled_summary(outcome):
     lines.append(f"result      : n = {summary['median_n']:.4f}, k = {summary['median_k']:.4f}"
                  + ("" if error is None else f" (+/- {error:.4f})")
                  + f" over {summary['band_thz'][0]:.2f}-{summary['band_thz'][1]:.2f} THz")
-    lines.append(f"calibration : {summary['calibration_source']}; angle "
+    lines.append(f"calibration : {summary['calibration_source']}, model "
+                 f"{summary['calibration_model']}; angle "
                  f"{summary['incidence_angle_deg']:.2f} deg ({summary['incidence_angle_source']})")
     findings = outcome.findings or []
     lines.append("findings    : " + (", ".join(sorted({finding.diagnostic for finding in findings}))
@@ -138,6 +142,7 @@ def _arrays(outcome):
         "band": result.band,
         "ratio": result.ratio,
         "calibration_ratio_per_frequency": result.calibration.ratio_per_frequency,
+        "calibration_applied_per_frequency": result.calibration.applied_ratio,
         "band_frequencies_hz": result.inversion.frequencies_hz,
         "index": result.inversion.index,
         "band_independent_points": outcome.independent_band_points(),

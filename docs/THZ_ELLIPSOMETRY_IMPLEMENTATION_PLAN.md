@@ -116,6 +116,9 @@ thz_ellipsometry/
     calibration.py            kappa (gold), theta fit, Moebius emitter offset          [exists]
     calibration_sources.py    @calibration_source registry: gold_reference, probe_rotation,
                               magnet_sweep_gold (D + Ep/Es), stored
+    calibration_models.py     @calibration_model registry: constant, constant_plus_delay,
+                              constant_plus_delay_and_slope, per_frequency -- what is believed
+                              about C(f); fitted to whatever C(f) the source measured
     jones.py                  M = D^-1 S, normalized Jones ratios (rpp/rss, rps/rss, rsp/rss)
     anisotropic.py            Berreman 4x4 semi-infinite J(eps_tensor, theta); tensor rotation;
                               §7.2 aligned closed forms                              [lift from prototype]
@@ -169,6 +172,7 @@ S_k(w) = c(w) * [ d(phi_k)^T  J(w)  P(beta_k - beta_0)  E(w) ] * exp(i w tau(t_k
 |---|---|---|
 | `@acquisition_mode` | `isotropic`, `generalized` | required filename tokens, required probe settings, which design rows |
 | `@calibration_source` | `gold_reference`, `probe_rotation`, `magnet_sweep_gold`, `stored` | what it produces (κ / D / E_p/E_s / θ), what data it needs |
+| `@calibration_model` | `constant`, `constant_plus_delay`, `constant_plus_delay_and_slope`, `per_frequency` | how a measured C(f) becomes the applied C(f); parameters + standard errors |
 | `@inversion_route` | `isotropic_closed_form`, `aligned_azimuth_pair` (§7.2), `in_plane_uniaxial` (§7.6), `out_of_plane_with_transmission` (§7.2/7.9) | required observables, unknowns, initial-guess strategy, which mode(s) it accepts |
 | `@ellipsometry_stage` | load → spectra → fit → calibrate → invert → validate → export | (exists) |
 | `@diagnostic` (repo's) | see §5 | stage, assumption, why, remedy |

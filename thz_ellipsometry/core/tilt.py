@@ -149,7 +149,7 @@ def fit_tilt_with_dispersion_model(measured_channel_ratio, channel_ratio, freque
     Parameters
     ----------
     measured_channel_ratio : (n,) complex   P/Q of the sample, already restricted to the band
-    channel_ratio : complex                 C from the calibration
+    channel_ratio : complex or (n,)         C from the calibration (its model curve)
     fixed : dict, optional                  model parameters to hold at a given value
     ratio_variance : (n,) array, optional   Var(P/Q), to weight the fit and scale the errors
     """
@@ -229,15 +229,16 @@ def invert_with_known_tilt(measured_channel_ratio, channel_ratio, tilt_rad,
     tilt-free closed form, which is within O(psi) of the answer.
     """
     measured = np.asarray(measured_channel_ratio, dtype=complex)
+    channel_ratio = np.broadcast_to(np.asarray(channel_ratio, dtype=complex), measured.shape)
     starting = index_from_ellipsometric_ratio(measured / channel_ratio, incidence_angle_rad,
                                               index_incident, reference_index=reference_index)
     if tilt_rad == 0.0:
         return starting
     recovered = np.empty_like(starting)
-    for position, (value, start) in enumerate(zip(measured, starting)):
-        def residual(vector, value=value):
+    for position, (value, start, channel) in enumerate(zip(measured, starting, channel_ratio)):
+        def residual(vector, value=value, channel=channel):
             trial = vector[0] - 1j * vector[1]
-            difference = tilted_channel_ratio(trial, tilt_rad, channel_ratio,
+            difference = tilted_channel_ratio(trial, tilt_rad, channel,
                                               incidence_angle_rad, index_incident) - value
             return [difference.real, difference.imag]
         result = least_squares(residual, [start.real, -start.imag], xtol=1e-14, ftol=1e-14)

@@ -390,17 +390,22 @@ def harmonic_drift_and_residuals(record):
 
 @inspection_figure("calibration")
 def channel_calibration(record):
-    """The channel ratio C = d_p/d_s from every known material, against the value applied."""
+    """The channel ratio C = d_p/d_s from every known material, the model applied, and what it leaves."""
     import matplotlib.pyplot as plt
-    figure, axes = plt.subplots(1, 3, figsize=(16, 4.6), constrained_layout=True)
-    magnitude_axis, phase_axis, ratio_axis = axes
+    figure, axes = plt.subplots(2, 3, figsize=(16, 8.4), constrained_layout=True)
+    magnitude_axis, phase_axis, ratio_axis = axes[0]
+    residual_magnitude_axis, residual_phase_axis, text_axis = axes[1]
     if record.band is None or not record.series:
         return figure
     frequencies = record.series[0].frequencies_hz
     band = record.band
     band_thz = frequencies[band] / 1e12
+    applied = _applied_calibration(record)
+    applied_phase = None if applied is None else np.rad2deg(np.unwrap(np.angle(applied[band])))
+    model_name = record.calibration_model or "constant"
     colours = iter(("tab:orange", "tab:green", "tab:purple", "tab:brown"))
     derived = {}
+    first_phase = None
     for name, ratio in record.calibration_by_material.items():
         colour = next(colours)
         values = np.asarray(ratio)[band]
@@ -412,19 +417,39 @@ def channel_calibration(record):
         phase = np.rad2deg(np.unwrap(np.angle(values)))
         phase_axis.plot(band_thz, phase, color=colour, alpha=0.5, label=label)
         _mark_independent(phase_axis, record, band_thz, phase, colour)
-    applied = record.calibration_applied
-    if np.isfinite(applied):
-        magnitude_axis.axhline(abs(applied), color="k", linestyle="--",
-                               label=f"applied ({record.calibration_name}): one constant")
-        phase_axis.axhline(np.rad2deg(np.angle(applied)), color="k", linestyle="--",
-                           label="applied: one constant")
+        if first_phase is None:
+            first_phase = phase
+        if applied is None:
+            continue
+        residual = values / applied[band]
+        residual_magnitude_axis.plot(band_thz, 100.0 * (np.abs(residual) - 1.0), color=colour,
+                                     alpha=0.7, label=name)
+        residual_degrees = np.rad2deg(np.unwrap(np.angle(residual)))
+        residual_degrees -= 360.0 * np.round(np.mean(residual_degrees) / 360.0)
+        residual_phase_axis.plot(band_thz, residual_degrees, color=colour, alpha=0.7, label=name)
+    if applied is not None:
+        if first_phase is not None:
+            # Put the applied curve on the same 360-degree branch as the first material's.
+            applied_phase += 360.0 * np.round(np.mean(first_phase - applied_phase) / 360.0)
+        magnitude_axis.plot(band_thz, np.abs(applied[band]), color="k", linestyle="--",
+                            label=f"applied ({record.calibration_name}, {model_name})")
+        phase_axis.plot(band_thz, applied_phase, color="k", linestyle="--",
+                        label=f"applied ({model_name})")
     magnitude_axis.set_ylabel("|C|")
     magnitude_axis.set_title("magnitude", fontsize=9)
     phase_axis.set_ylabel("arg C [deg]")
     phase_axis.set_title("phase: a slope is a p/s delay in the instrument", fontsize=9)
-    for axis in (magnitude_axis, phase_axis):
+    for axis in (residual_magnitude_axis, residual_phase_axis):
+        axis.axhline(0.0, color="k", linewidth=0.8)
+    residual_magnitude_axis.set_ylabel("|C / C_applied| - 1 [%]")
+    residual_magnitude_axis.set_title("what the applied model leaves in |rho|", fontsize=9)
+    residual_phase_axis.set_ylabel("arg(C / C_applied) [deg]")
+    residual_phase_axis.set_title("what it leaves in Delta (1 deg ~ 0.13 in k, Si at 45 deg)",
+                                  fontsize=9)
+    for axis in (magnitude_axis, phase_axis, residual_magnitude_axis, residual_phase_axis):
         axis.set_xlabel("frequency [THz]")
-        axis.legend(fontsize=7)
+        if axis.get_legend_handles_labels()[0]:
+            axis.legend(fontsize=7)
     names = list(derived)
     if len(names) >= 2:
         ratio = derived[names[1]] / derived[names[0]]
@@ -444,9 +469,27 @@ def channel_calibration(record):
                         "nothing to cross-check C against", ha="center", va="center",
                         transform=ratio_axis.transAxes, fontsize=9)
         ratio_axis.set_axis_off()
+    description = record.calibration_model_description or f"{model_name} (no parameters stored)"
+    text_axis.text(0.0, 1.0, "applied calibration model\n\n" + description.replace(", ", "\n")
+                   + "\n\nThe residual panels show each known material divided by the\n"
+                   "applied curve: the reference should sit on zero, a validated\n"
+                   "sample should too. A slope left in the sample's phase is a\n"
+                   "p/s delay the reference did not see.",
+                   va="top", ha="left", transform=text_axis.transAxes, fontsize=9,
+                   family="monospace")
+    text_axis.set_axis_off()
     figure.suptitle(f"5. Channel calibration at {record.incidence_angle_deg:.2f} deg incidence "
                     "(C should agree between materials; it is the instrument, not the sample)")
     return figure
+
+
+def _applied_calibration(record):
+    """(n_frequencies,) complex C divided out, or None; old bundles stored only the constant."""
+    if record.calibration_applied_per_frequency is not None:
+        return np.asarray(record.calibration_applied_per_frequency, dtype=complex)
+    if np.isfinite(record.calibration_applied):
+        return np.full(record.series[0].frequencies_hz.shape, record.calibration_applied)
+    return None
 
 
 # ---------------------------------------------------------------------------

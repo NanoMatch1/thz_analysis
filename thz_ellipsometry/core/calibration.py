@@ -35,16 +35,18 @@ The tolerance, if the offset is simply left uncorrected: |dN| is about 0.009 per
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy.optimize import least_squares
 
+from .calibration_models import fit_calibration_model
 from .model import ellipsometric_ratio
 
 __all__ = [
     "ChannelCalibration",
     "IncidenceAngleFit",
+    "apply_calibration_model",
     "apply_instrument_to_ratio",
     "channel_ratio_from_reference",
     "ellipsometric_ratio_from_channels",
@@ -83,22 +85,62 @@ def ratio_derivative_wrt_measured(measured, channel_ratio, emitter_offset_rad=0.
 
 @dataclass(frozen=True)
 class ChannelCalibration:
-    """The detection channel ratio d_p/d_s, with its own quality diagnostics."""
+    """The detection channel ratio d_p/d_s, with its own quality diagnostics.
 
-    ratio_per_frequency: np.ndarray   #: (n_frequencies,) complex
-    ratio: complex                    #: the frequency-averaged value actually applied
-    relative_scatter: float           #: std/|mean| across frequency -- should be small
-    phase_scatter_rad: float          #: std of arg across frequency
+    ``ratio_per_frequency`` is what the source measured; what is divided out of the sample is
+    ``applied_ratio``, the calibration model (``calibration_models``) fitted to it. Without a
+    model the applied ratio is the constant ``ratio`` at every frequency (the original design).
+    """
+
+    ratio_per_frequency: np.ndarray   #: (n_frequencies,) complex, as measured by the source
+    ratio: complex                    #: the summary value: the model at its reference frequency
+    relative_scatter: float           #: std/|mean| of the measurement -- should be small
+    phase_scatter_rad: float          #: std of its arg across frequency
     reference_name: str
     emitter_offset_rad: float = 0.0   #: emitter angular zero vs the plane of incidence
     #: |standard error| of the applied ratio. It is ONE number for the whole run, so its error
     #: is fully correlated across frequency: a systematic of the run, reported as a flag and
     #: deliberately not folded into the per-frequency noise bars.
     standard_error: float = 0.0
+    #: (n_frequencies,) Var(C) per frequency from the source's noise model, if it has one.
+    ratio_variance_per_frequency: np.ndarray | None = None
+    #: (n_frequencies,) complex: the model curve divided out. None means the constant ``ratio``.
+    applied_per_frequency: np.ndarray | None = None
+    model_name: str = "constant"
+    model_parameters: dict = field(default_factory=dict)
+    model_standard_errors: dict = field(default_factory=dict)
+    #: Scatter of the measurement ABOUT THE MODEL (None until a model is applied): what the model
+    #: leaves unexplained. For the constant model it equals relative/phase_scatter.
+    residual_relative_scatter: float | None = None
+    residual_phase_scatter_rad: float | None = None
 
     @property
     def emitter_offset_deg(self):
         return float(np.rad2deg(self.emitter_offset_rad))
+
+    @property
+    def applied_ratio(self):
+        """(n_frequencies,) complex: the C(f) that is divided out of the sample."""
+        if self.applied_per_frequency is not None:
+            return self.applied_per_frequency
+        return np.full(np.shape(self.ratio_per_frequency), self.ratio, dtype=complex)
+
+    @property
+    def model_description(self):
+        """One line: the model and its fitted parameters with their standard errors."""
+        units = {"delay_fs": " fs", "slope_percent_per_thz": " %/THz", "phase_deg": " deg"}
+        parts = []
+        for name in ("magnitude", "phase_deg", "delay_fs", "slope_percent_per_thz"):
+            if name not in self.model_parameters:
+                continue
+            value = self.model_parameters[name]
+            error = self.model_standard_errors.get(name)
+            parts.append(f"{name.split('_')[0]} {value:+.4g}"
+                         + ("" if error is None else f" +/- {error:.2g}") + units.get(name, ""))
+        reference = self.model_parameters.get("reference_frequency_thz")
+        if reference is not None:
+            parts.append(f"at {reference:.2f} THz")
+        return f"{self.model_name}: " + ", ".join(parts)
 
     @property
     def is_flat(self):
@@ -108,13 +150,17 @@ class ChannelCalibration:
         astigmatism, a mis-set crystal, polarisation-dependent optics -- so flatness is a
         genuine diagnostic rather than a formality.
         """
-        return self.relative_scatter < 0.05 and self.phase_scatter_rad < 0.1
+        relative = (self.relative_scatter if self.residual_relative_scatter is None
+                    else self.residual_relative_scatter)
+        phase = (self.phase_scatter_rad if self.residual_phase_scatter_rad is None
+                 else self.residual_phase_scatter_rad)
+        return relative < 0.05 and phase < 0.1
 
 
 def channel_ratio_from_reference(reference_channel_ratio, reference_index,
                                  incidence_angle_rad, index_incident=1.0,
                                  reference_name="gold", frequency_mask=None,
-                                 emitter_offset_rad=0.0):
+                                 emitter_offset_rad=0.0, reference_channel_ratio_variance=None):
     """d_p/d_s from a reference sample of known index.
 
     Parameters
@@ -125,6 +171,8 @@ def channel_ratio_from_reference(reference_channel_ratio, reference_index,
         Known index of the reference. For gold, rho is -1 to about 0.1% at any angle.
     frequency_mask : (n_frequencies,) bool, optional
         Restrict the average to a trusted band.
+    reference_channel_ratio_variance : (n_frequencies,) float, optional
+        Var(P/Q) of the reference fit; carried as Var(C) to weight the calibration model.
     """
     reference_channel_ratio = np.asarray(reference_channel_ratio, dtype=complex)
     expected = ellipsometric_ratio(reference_index, incidence_angle_rad, index_incident)
@@ -153,13 +201,46 @@ def channel_ratio_from_reference(reference_channel_ratio, reference_index,
         reference_name=reference_name,
         emitter_offset_rad=float(emitter_offset_rad),
         standard_error=float(np.std(selected) / np.sqrt(selected.size)),
+        ratio_variance_per_frequency=(
+            None if reference_channel_ratio_variance is None
+            else np.asarray(reference_channel_ratio_variance, dtype=float)
+            * np.abs(_offset_derivative(reference_channel_ratio, tangent) / expected) ** 2),
+    )
+
+
+def _offset_derivative(measured, tangent):
+    """d(deoffset)/d(measured) of the Moebius undo in channel_ratio_from_reference."""
+    return (1.0 + tangent**2) / (1.0 + measured * tangent) ** 2
+
+
+def apply_calibration_model(calibration, model_name, frequencies_hz, band):
+    """The calibration with the registered model ``model_name`` fitted to its measured C(f).
+
+    The source's own diagnostics (``relative_scatter``, ``phase_scatter_rad``) are kept as the
+    flatness of the raw measurement; the scatter about the model is added beside them.
+    """
+    fit = fit_calibration_model(model_name, frequencies_hz, calibration.ratio_per_frequency,
+                                band, calibration.ratio_variance_per_frequency)
+    band = np.asarray(band, dtype=bool)
+    residual = calibration.ratio_per_frequency[band] / fit.applied_per_frequency[band]
+    return replace(
+        calibration,
+        ratio=fit.value_at_reference,
+        applied_per_frequency=fit.applied_per_frequency,
+        standard_error=fit.standard_error,
+        model_name=model_name,
+        model_parameters=dict(fit.parameters),
+        model_standard_errors=dict(fit.standard_errors),
+        residual_relative_scatter=float(np.std(np.abs(residual))),
+        residual_phase_scatter_rad=float(np.std(np.unwrap(np.angle(residual)))),
     )
 
 
 def ellipsometric_ratio_from_channels(channel_ratio, calibration):
     """Undo the instrument: (P/Q) -> rho, including any known emitter angular offset."""
     if isinstance(calibration, ChannelCalibration):
-        return _recover_ratio(channel_ratio, calibration.ratio, calibration.emitter_offset_rad)
+        return _recover_ratio(channel_ratio, calibration.applied_ratio,
+                              calibration.emitter_offset_rad)
     return _recover_ratio(channel_ratio, calibration, 0.0)
 
 

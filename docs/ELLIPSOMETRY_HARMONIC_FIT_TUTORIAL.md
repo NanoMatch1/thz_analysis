@@ -296,25 +296,48 @@ This is the figure that tells you whether to trust the fit. Four rows, per serie
 
 C = d_p/d_s is the instrument. It is derived from every series whose material is known: the gold
 reference (P/Q ÷ ρ_gold) and, when the sample is a known material (`validation.expect`), the
-sample itself (P/Q ÷ ρ_sample). **They must agree** — C is a property of the detector, not of the
-sample. Left: |C|; middle: arg C, with each one's straight-line delay and offset in the legend;
-the dashed line is the value actually divided out. Right: the ratio of the two Cs, which should
-be 1 at 0°.
+sample itself (P/Q ÷ ρ_sample). **They must agree** — C is a property of the instrument, not of
+the sample. Top row: |C| and arg C per material, with each one's straight-line delay and offset
+in the legend, and the dashed curve actually divided out; right, the ratio of the two Cs, which
+should be 1 at 0°. Bottom row: each material divided by the applied curve — what the
+calibration model leaves in |ρ| and in Δ — and the fitted model parameters.
+
+**The calibration model** (`calibration.model`, registry `core/calibration_models.py`) decides
+what is divided out:
+
+| model | applied C(f) | when |
+|---|---|---|
+| `constant` (default) | the band mean — the original crystal-symmetry design | backward-compatible baseline |
+| `constant_plus_delay` | C0·exp(−i2π(f−f0)τ), fitted to complex C(f) | a p/s arrival delay in the instrument |
+| `constant_plus_delay_and_slope` | C0·[1+s(f−f0)]·exp(−i2π(f−f0)τ) | plus a linear \|C\| trend |
+| `per_frequency` | the measured C(f), bin by bin | comparison only: carries the reference's quirks onto the sample |
+
+τ > 0 means p arrives later than s; f0 is the weighted band centre, so C0 is the value there.
+The fitted τ is the instrument delay *as seen through the schedule and drift model* — on a C ≈ −1
+schedule the drift fit absorbs a few tenths of a fs of it — which is fine because gold and the
+sample share the schedule, and that part cancels in ρ.
+
+![channel calibration, delay model](figures/ellipsometry_tutorial/calibration__channel_calibration_delay_model.png)
 
 **What to look for**
 
 * **A slope in arg C is a p/s delay in the instrument** — p and s detected with different
-  timing. Any slope that the gold sees and the sample does not (or vice versa) is an error in
-  the result. Here: gold +4.0 fs, HR-Si +7.9 fs, a 3.9 fs disagreement (right panel). At 45° that
-  is k ≈ 0.2–0.6 across the band on Si (F46) — the systematic that limits this dataset.
-* **The applied C is one constant** (the band mean), as originally designed: by crystal symmetry
-  d_p/d_s should be frequency-independent. The measured slope says it is not, so dividing by one
-  constant leaves the slope (±1.5° across the band here) in ρ. A per-frequency or
-  constant-plus-delay calibration is the obvious next option; it does not by itself fix the
-  gold/HR-Si disagreement (checked: k 0.36→0.83 instead of 0.19→0.94).
-* **|C| rising with frequency on one material only** (here HR-Si, +3%/THz) is a
-  frequency-dependent coupling difference between the two samples — the leading suspect is the
-  gold mirror's 20 mm aperture clipping the beam's edge at 45° (F46).
+  timing. Here gold has +3.85 ± 0.06 fs; with the delay model gold's own phase residual drops
+  from 0.92° to 0.09° rms (bottom-middle, orange on zero), so "constant + delay" describes the
+  instrument as gold sees it, essentially completely. The |C| slope term is small on gold
+  (+0.27 %/THz).
+* **Any residual the gold does not share is an error in the result.** HR-Si (green) sits 2.5–5.5°
+  and 0.5–8 % off the applied curve. That is the gold/HR-Si disagreement of F46, and it is **not
+  a pure delay**: the phase residual is steep below 2 THz and flat above, and |C| grows faster
+  than linearly. No model fitted to gold can remove it; it is a reference-transfer problem
+  (leading suspects: aperture clipping on the 20 mm gold mirror, a polarization gradient across
+  the emitter spot that the two apertures sample differently).
+* **What the model changes in n, k**: on HR-Si the k slope shrinks (k 0.13→1.20 becomes
+  0.33→1.00) but k is still far from 0; on doped Si the low-frequency k moves from about 0.22 to
+  0.40. The models agree with each other far better than any of them agrees with HR-Si truth,
+  which is the point: the remaining error is the reference, not how C is modelled.
+
+![n, k per calibration model](figures/ellipsometry_tutorial/calibration_models_nk.png)
 
 ### 6 — Result
 

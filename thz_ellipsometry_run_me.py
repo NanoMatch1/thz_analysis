@@ -133,6 +133,12 @@ config: dict = {
         "channel": "gold_reference",
         "reference_material": "gold",
         "stored_channel_ratio": None,
+        # Registered model fitted to the source's C(f) (thz_ellipsometry.core.calibration_models):
+        #   'constant'                       one band-mean constant (the original design)
+        #   'constant_plus_delay'            plus a p/s arrival delay (linear phase)
+        #   'constant_plus_delay_and_slope'  plus a linear |C| slope
+        #   'per_frequency'                  the reference's C(f) bin by bin (carries its quirks)
+        "model": "constant",
         # 'mechanical' (the angle above is used) or 'fit_from_reference' (fitted on the
         # angle-reference files, plan sec. 5.2). For the silicon VALIDATION keep it mechanical:
         # fitting it on HR-Si consumes HR-Si as a calibrator, so it can no longer validate.
@@ -229,7 +235,8 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
                             background_relative=0.05, out_of_plane_tilt_deg=0.0,
                             magnet_calibration=None, probe_azimuth_deg=None,
                             second_probe_azimuth_deg=None, crystal_001_from_p_deg=90.0,
-                            angle_reference=False, drift_within_acquisition=False):
+                            angle_reference=False, drift_within_acquisition=False,
+                            channel_delay_fs=0.0):
     """Write a synthetic sample + gold reference measurement, in the real .acc format.
 
     This is how the whole driver gets exercised without beam time: the files go through the
@@ -238,6 +245,7 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
     over their own elapsed time, and a non-magnetic background. With
     ``second_probe_azimuth_deg`` the sample is also written at a second probe setting (for the
     probe-rotation calibration); with ``angle_reference`` an HR-Si angle reference is added.
+    ``channel_delay_fs`` plants a p/s arrival delay in the instrument (every series sees it).
     """
     probe_deg = (config["detection"]["probe_azimuth_deg"] if probe_azimuth_deg is None
                  else probe_azimuth_deg)
@@ -257,7 +265,8 @@ def build_simulated_dataset(directory, sample_name, *, incidence_angle_deg,
                   relative_noise=relative_noise, drift_span_s=drift_span_fs * 1e-15,
                   amplitude_drift=amplitude_drift,
                   background_relative=background_relative,
-                  drift_within_acquisition=drift_within_acquisition)
+                  drift_within_acquisition=drift_within_acquisition,
+                  channel_delay_s=channel_delay_fs * 1e-15)
     write_accumulation_files(directory, index_sample_function=SIMULATED_SAMPLES[sample_name],
                              sample_name=sample_name, probe_azimuth_deg=probe_deg,
                              out_of_plane_tilt_rad=np.deg2rad(out_of_plane_tilt_deg), seed=0,

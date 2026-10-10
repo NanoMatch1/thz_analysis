@@ -3,7 +3,9 @@
 This is how the pipeline gets debugged without beam time, and how every failure mode gets a
 known answer. Every error channel the analysis is supposed to survive is injectable here:
 measurement noise, timing drift over real elapsed time, a non-magnetic background, sample tilt,
-beam divergence, an unknown emitter angle offset and the crystal orientation.
+beam divergence, an unknown emitter angle offset, the crystal orientation and a p/s arrival delay
+in the instrument (``channel_delay_s``: the p channel later than s, which the constant
+calibration model cannot follow -- see ``calibration_models``).
 
 Two levels are provided. ``synthesize_spectra`` produces the frequency-domain arrays the
 harmonic fitter consumes, for fast unit tests. ``synthesize_acquisitions`` produces real-valued
@@ -147,8 +149,11 @@ def _tilt_factors(acquisition_count, elapsed_seconds, frequencies_hz, tilt_drift
 
 
 def _channels(index_sample, frequencies_hz, incidence_angle_rad, index_incident, detection,
-              out_of_plane_tilt_rad, angular_spread_rad):
-    """P and Q per frequency, before the emitted spectrum: d^T J projected on p and s."""
+              out_of_plane_tilt_rad, angular_spread_rad, channel_delay_s=0.0):
+    """P and Q per frequency, before the emitted spectrum: d^T J projected on p and s.
+
+    ``channel_delay_s`` delays the p channel relative to s (numpy FFT: later is exp(-i w t)).
+    """
     channel_p = np.zeros(frequencies_hz.size, dtype=complex)
     channel_s = np.zeros(frequencies_hz.size, dtype=complex)
     for position in range(frequencies_hz.size):
@@ -156,6 +161,8 @@ def _channels(index_sample, frequencies_hz, incidence_angle_rad, index_incident,
                               out_of_plane_tilt_rad, index_incident, angular_spread_rad)
         projected = detection @ jones                      # (2,) row vector d^T J
         channel_p[position], channel_s[position] = projected
+    if channel_delay_s:
+        channel_p = channel_p * np.exp(-2j * np.pi * frequencies_hz * channel_delay_s)
     return channel_p, channel_s
 
 
@@ -167,7 +174,8 @@ def synthesize_spectra(index_sample, frequencies_hz, *, emitter_angles_rad=None,
                        elapsed_seconds=None, background_relative=0.0, amplitude_drift=0.0,
                        tilt_drift_per_thz=0.0, tilt_profile=None,
                        out_of_plane_tilt_rad=0.0, angular_spread_rad=0.0,
-                       emitter_angle_offset_rad=0.0, label="synthetic", seed=0):
+                       emitter_angle_offset_rad=0.0, channel_delay_s=0.0, label="synthetic",
+                       seed=0):
     """Build a polarisation series in the frequency domain with every error channel injectable.
 
     ``emitter_angle_offset_rad`` models a magnet that is repeatable but not accurate: the true
@@ -193,7 +201,7 @@ def synthesize_spectra(index_sample, frequencies_hz, *, emitter_angles_rad=None,
 
     channel_p, channel_s = _channels(index_sample, frequencies_hz, incidence_angle_rad,
                                      index_incident, detection, out_of_plane_tilt_rad,
-                                     angular_spread_rad)
+                                     angular_spread_rad, channel_delay_s)
     true_angles = emitter_angles_rad + emitter_angle_offset_rad
     spectra = measured_amplitude(true_angles, channel_p * spectrum, channel_s * spectrum,
                                  frequencies_hz, delays)
@@ -266,7 +274,7 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
                             tilt_drift_per_thz=0.0, tilt_profile=None,
                             background_relative=0.0, background_delay_ps=0.4,
                             background_width_ps=0.3, out_of_plane_tilt_rad=0.0, seed=0,
-                            drift_within_acquisition=False):
+                            drift_within_acquisition=False, channel_delay_s=0.0):
     """Repeat-scan time traces for each acquisition of a polarisation series.
 
     The default pulse width puts the spectral peak near 1.4 THz with usable content to beyond
@@ -303,7 +311,8 @@ def synthesize_acquisitions(index_sample_function, *, polarization_angles_rad,
                               dtype=complex)
     index_sample = np.broadcast_to(index_sample, frequencies_hz.shape)
     channel_p, channel_s = _channels(index_sample, frequencies_hz, incidence_angle_rad,
-                                     index_incident, detection, out_of_plane_tilt_rad, 0.0)
+                                     index_incident, detection, out_of_plane_tilt_rad, 0.0,
+                                     channel_delay_s)
 
     delays = _drift_delays(acquisition_count, elapsed_seconds, drift_span_s)
     scan_delays = np.repeat(delays[:, None], scans_per_acquisition, axis=1)
